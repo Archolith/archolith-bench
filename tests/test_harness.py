@@ -231,10 +231,17 @@ def test_assert_not_production_guards():
     was permitted. Only loopback passes now.
     """
     from archolith_bench.harness import assert_not_production
-    assert_not_production("http://localhost:7999")  # ok
-    assert_not_production("http://localhost:9800/v1")  # proxy port alone is not production.
+    assert_not_production("http://localhost:8098")  # the throwaway menhir port
     assert_not_production("http://127.0.0.1:8098")  # ok
     for bad in (
+        # Loopback is necessary but not sufficient: the port must also be an
+        # allow-listed throwaway. localhost:8090 is the REAL menhir, and an
+        # 8098 -> 8090 typo would otherwise ingest into and reset it.
+        "http://localhost:8090",
+        "http://127.0.0.1:8090",
+        # Unlisted loopback ports fail closed rather than being assumed safe.
+        "http://localhost:7999",
+        "http://localhost:9800/v1",
         "https://menhir.example.com",
         "http://prod-neo4j:7687",
         "https://staging.menhir.example.com",

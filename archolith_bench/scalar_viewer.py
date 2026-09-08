@@ -381,6 +381,13 @@ class ScalarTaskReader:
     ) -> None:
         injected_driver = driver is not None
         if driver is None:
+            # Guard at construction, not at the call site. This path was
+            # reachable via --scalar-neo4j-uri with no check at all: the target
+            # allow-list only covered the call sites someone had grepped for.
+            # An injected driver is the caller's own (tests, or a driver already
+            # built behind ScalarBoltReader, which guards separately).
+            from archolith_bench.harness.scalar_bolt import assert_not_prod
+            assert_not_prod(neo4j_uri)
             try:
                 from neo4j import GraphDatabase
             except ImportError as exc:  # pragma: no cover - depends on optional install

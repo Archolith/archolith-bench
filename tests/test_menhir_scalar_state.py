@@ -263,10 +263,43 @@ def test_assert_not_prod_refuses_prod(uri):
 
 @pytest.mark.parametrize(
     "uri",
-    ["bolt://localhost:7688", "bolt://127.0.0.1:7688", "bolt://localhost:7690"],
+    ["bolt://localhost:7688", "bolt://127.0.0.1:7688"],
 )
 def test_assert_not_prod_allows_loopback_throwaway(uri):
     assert_not_prod(uri)  # does not raise
+
+
+@pytest.mark.parametrize(
+    "uri",
+    [
+        "bolt://localhost",            # no port: the driver dials 7687 anyway
+        "neo4j://localhost",
+        "bolt://localhost:7687/neo4j",  # path suffix defeated the old .endswith
+        "bolt://localhost:07687",       # leading zero, same port
+        "bolt://[::1]",                 # IPv6 loopback, implicit 7687
+        "bolt://localhost:7690",        # loopback but an unlisted port
+    ],
+)
+def test_assert_not_prod_refuses_by_effective_port(uri):
+    """The check must resolve the port a driver will dial, not read the string.
+
+    `.endswith(":7687")` passed every URI above -- including the plainest form,
+    `bolt://localhost`, which the neo4j driver connects to on 7687.
+    """
+    with pytest.raises(ProdBoltRefused):
+        assert_not_prod(uri)
+
+
+def test_unlisted_port_can_be_opted_in(monkeypatch):
+    monkeypatch.setenv("ARCHOLITH_BENCH_ALLOW_PORTS", "7690")
+    assert_not_prod("bolt://localhost:7690")  # does not raise
+
+
+def test_opt_in_cannot_unlock_a_reserved_real_port(monkeypatch):
+    """7687 and 8090 are real services; no opt-in may reach them."""
+    monkeypatch.setenv("ARCHOLITH_BENCH_ALLOW_PORTS", "7687")
+    with pytest.raises(ProdBoltRefused):
+        assert_not_prod("bolt://localhost:7687")
 
 
 @pytest.mark.parametrize(

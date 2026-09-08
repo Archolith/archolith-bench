@@ -7,6 +7,7 @@ and generating BENCHMARKS.md aggregations.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 
@@ -284,7 +285,12 @@ def _group_by_artifact(issues: list) -> dict[str, list[str]]:
     for issue in issues:
         name = Path(issue.path).name
         if issue.code == "missing_field":
-            field_name = issue.message.rsplit("field ", 1)[-1].split(" ")[0].strip("'\"")
+            # Take the quoted name. Positional parsing on "field " broke for
+            # Markdown artifacts, whose message reads "...missing required key
+            # 'x'" -- every one of them rendered as the literal
+            # "archolith-evidence".
+            match = re.search(r"['\"]([^'\"]+)['\"]", issue.message)
+            field_name = match.group(1) if match else issue.message
             missing_fields.setdefault(name, []).append(field_name)
         else:
             grouped.setdefault(name, []).append(issue.message)

@@ -839,7 +839,12 @@ def build_evidence_manifest(evidence_paths: list[Path]) -> str:
     for row in rows:
         lines.append("| " + " | ".join(row[c] for c in MANIFEST_COLUMNS) + " |")
 
-    promotable = [r for r in rows if r["Status"] == "ok" and r["Public copy"] == "true"]
+    # Case-insensitive: a JSON artifact's public_copy_allowed is a bool, which
+    # str() renders as "True", so an exact "true" match never counted one.
+    promotable = [
+        r for r in rows
+        if r["Status"] == "ok" and r["Public copy"].strip().lower() == "true"
+    ]
     lines += [
         "",
         f"{len(rows)} artifact(s) indexed; {len(promotable)} currently quotable as public copy.",

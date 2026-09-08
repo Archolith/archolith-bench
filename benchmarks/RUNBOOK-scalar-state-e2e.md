@@ -41,10 +41,14 @@ same ones -- either stop that container or publish elsewhere:
 
 ```bash
 BENCH_NEO4J_BOLT_PORT=7699 BENCH_NEO4J_HTTP_PORT=7476   docker compose -f docker-compose.throwaway-neo4j.yml -p benchverify up -d
+export ARCHOLITH_BENCH_ALLOW_PORTS=7699   # the guard allow-lists ports too
 ```
 
-The port override does not weaken the safety rule above: the 7687 refusal is enforced
-client-side on the bolt URI by `ScalarBoltReader`, so it applies whatever port you publish on.
+The port override does not weaken the safety rule above, and the guard is now stricter than
+a port check: `assert_allowed_target` resolves the host **and the port a driver will actually
+dial** (an omitted port is not "no port" -- the neo4j driver uses 7687), then requires both to
+be allow-listed. 7687 and 8090 are reserved as real services and no opt-in can reach them, so
+publishing a throwaway on a non-default port needs `ARCHOLITH_BENCH_ALLOW_PORTS`.
 
 Verified 2026-09-08 on Docker 25.0.3 / Compose v2.24.6 with `neo4j:5.26-community`: healthy in
 about 20s, bolt serving queries through the `neo4j` driver, and `down -v` leaving no residual

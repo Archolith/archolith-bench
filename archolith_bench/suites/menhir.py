@@ -45,7 +45,13 @@ def run_bootstrap_hygiene(
     if menhir_url is None:
         return BootstrapHygieneRunner(fixture).run()
 
+    from ..harness.memory_ab import assert_not_production
     from ..harness.menhir_client import HttpMenhirClient
+
+    # Live probe against a real instance would read the operator's memories.
+    # Guarded here because the check belongs at every client construction, not
+    # only at the CLI call sites.
+    assert_not_production(menhir_url)
 
     print(f"bootstrap-hygiene live target: {menhir_url}")
     with HttpMenhirClient(menhir_url, api_key=api_key) as client:
