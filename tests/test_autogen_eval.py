@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from archolith_bench.r1.autogen_eval import (
     CorpusNode,
-    EvalSetResult,
     build_eval_set,
     build_paraphrase_prompt,
     looks_like_leak,

@@ -533,7 +533,7 @@ class StubPhaseDClient:
     # ---- view-reader role ----
     def read_scalar_views(self, namespace: str) -> list[dict[str, Any]]:
         return [
-            {"subject_uuid": f"stub-self", "ss_attribute": attr, "ss_kind": kind,
+            {"subject_uuid": "stub-self", "ss_attribute": attr, "ss_kind": kind,
              "ss_value": val, "ss_display": val, "view_value": 0.0}
             for attr, (kind, val) in self._VIEWS.items()
         ]
