@@ -83,6 +83,17 @@ jobs:
         with:
           repository: Archolith/menhir
           path: .menhir-src
+          # PINNED. These tests measure bench's expectations against menhir's real
+          # API, so an unpinned default branch lets a menhir commit turn this repo
+          # red with no bench change -- which is exactly what happened on the first
+          # run here (menhir 4ecf5e8a made counts fail-closed and the noisy-slice
+          # expectations went stale).
+          #
+          # To bump: move this ref forward, run the suite against the new commit,
+          # and land any expectation changes in the SAME commit as the bump, so the
+          # diff shows which menhir change moved which number.
+          # Pinned 2026-09-08 to menhir main @ 2026-09-07; suite green at 1016 passed.
+          ref: f145640f9bafc3063388e64b67b4b208742aaa46
 
       # The bench loaders import menhir's pure-domain and service modules by path.
       # Those modules need three of menhir's runtime deps at import time; the other
