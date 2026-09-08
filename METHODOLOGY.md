@@ -2,10 +2,12 @@
 
 How archolith-bench measures things, and what its numbers do and do not mean.
 
-> **DRAFT — not maintainer-reviewed.** Written 2026-09-08 against commit `2f9185e` by reading
-> `suites/proxy.py`, `core/metrics.py`, and `core/public_claims.py`. The formulas and the
-> cost-model bias direction are transcribed from source. The surrounding framing is inferred
-> and may not match intent. Verify before treating this as authoritative or public-facing.
+> **DRAFT — not maintainer-reviewed.** Written 2026-09-08 by reading `suites/proxy.py`,
+> `core/metrics.py`, and `core/public_claims.py`; the "Evidence labels" section corrected
+> 2026-09-08 against commit `45c376d`, where its description of validator coverage and CI
+> enforcement had gone stale. The formulas and the cost-model bias direction are transcribed
+> from source. The surrounding framing is inferred and may not match intent. Verify before
+> treating this as authoritative or public-facing.
 
 ## What this suite measures
 
@@ -120,18 +122,28 @@ Not every number in this repo is a claim. Four categories, and only one of them 
 
 `HEADLINE-NUMBERS.md` is the single source of truth for anything public. A number used in the
 README, on archolith.dev, or in external material must appear in its active table in the same
-commit. Two validators exist for this, but neither is wired to CI, and their coverage is
-narrower than it first appears:
+commit. Two validators back this, and they are enforced differently:
 
-- `core/evidence_policy.py` validates the `HEADLINE-NUMBERS.md` active table and cross-checks
-  evidence artifacts against it — but only `.json` artifacts. `benchmarks/` holds 11 files,
-  10 of them Markdown, so the artifact half of this validator inspects exactly one file.
-- `core/public_claims.py`, runnable via `scripts/check_public_claims.py` (exits 1 on
-  failure), scans `README.md`, `BENCHMARKS.md`, and `docs/` for claim-shaped strings no
-  active headline supports. As of 2026-09-08 it does not pass.
+- `core/evidence_policy.py` validates the `HEADLINE-NUMBERS.md` active table and every evidence
+  artifact in `benchmarks/`, both `.json` and `.md`. Of the 12 files there, 8 are evidence and
+  are checked; the other 4 — `README.md`, the generated `evidence-manifest.md`, and the two
+  `RUNBOOK-*` files — are documentation, exempt by an explicit roster rather than by a naming
+  rule. Markdown artifacts must carry an `<!-- archolith-evidence -->` block; a missing or
+  incomplete one is an error, and the declared `commit` and `source_tracked` are checked
+  against git rather than taken at their word. Run it directly with
+  `python scripts/check_evidence_policy.py --evidence-dir benchmarks/`. It is **enforced in
+  CI**, not as its own workflow step but through `tests/test_evidence_policy.py`, which
+  validates the real `benchmarks/` directory inside the `python -m pytest tests/ -q` step. A
+  new unstamped artifact fails the build.
+- `core/public_claims.py`, runnable via `scripts/check_public_claims.py` (exits 1 on failure),
+  scans `README.md`, `BENCHMARKS.md`, `docs/`, `METHODOLOGY.md` and `corpora/CORPUS-CARDS.md`
+  for claim-shaped strings no active headline supports. This one is **not** wired to CI, and as
+  of 2026-09-08 it does not pass: 46 unapproved claims, most of them in the generated
+  `BENCHMARKS.md`. Keeping that file in scope was deliberate, which is why the gate stays red
+  whenever a run exists and cannot become a CI gate as it stands.
 
-Treat both as tooling that must be run deliberately, not as a gate that catches mistakes on
-its own.
+So the evidence-provenance half catches mistakes on its own; the public-claims half is tooling
+you must run deliberately.
 
 Raw `results/` and `logs/` are local runtime output and stay gitignored. Curated evidence is
 promoted into `benchmarks/` deliberately. A launch-facing document must never cite `results/`
