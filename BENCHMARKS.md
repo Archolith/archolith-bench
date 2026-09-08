@@ -3,6 +3,8 @@ Generated: 2026-07-07 04:07 UTC
 
 > **Launch-claim status:** this generated report may include historical, fixture, or local methodology runs. It is not a source of headline numbers by itself. Public claims must come from `HEADLINE-NUMBERS.md`, which currently has no active values until refreshed launch evidence exists.
 
+<!-- archolith-claim-scan: ignore-start -->
+
 ## Filter Suite (archolith-filter)
 Token-savings compression ratio measured on real tool-output corpora.
 | Category | Samples | Raw Tokens | Filtered | Savings |
@@ -72,3 +74,5 @@ Coverage matrix for external benchmark families that are relevant enough to anch
 
 ## Stack Suite (Four-Way Comparison)
 *Experimental and pending refreshed live-proxy run. Run `archolith-bench stack --all` to generate; do not use stack results as launch headlines until tracked evidence is added under `benchmarks/`.*
+
+<!-- archolith-claim-scan: ignore-end -->
