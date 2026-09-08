@@ -55,9 +55,14 @@ def test_isolated_comparison_reports_separate_paths(api):
     assert report["provenance"]["isolated_adapter_version"] == "research-adapter-isolated-v2"
     assert aggregate["cases_total"] == 30
     assert aggregate["baseline"]["slices"]["clean"]["correct"] == 15
-    assert aggregate["baseline"]["slices"]["noisy"]["correct"] == 12
+    # Both paths lost the same two noisy count cases (current-books-3-noisy,
+    # -3b-noisy) to menhir 4ecf5e8a's fail-closed `count_value_unresolved`
+    # rejection: baseline 12 -> 10, isolated 15 -> 13. The isolated adapter's
+    # advantage is unchanged (composition_gains still 3 on the noisy slice), so
+    # the comparison this test exists to make is unaffected.
+    assert aggregate["baseline"]["slices"]["noisy"]["correct"] == 10
     assert aggregate["isolated"]["slices"]["clean"]["correct"] == 15
-    assert aggregate["isolated"]["slices"]["noisy"]["correct"] == 15
+    assert aggregate["isolated"]["slices"]["noisy"]["correct"] == 13
     assert aggregate["composition_gains"] == {"clean": 0, "noisy": 3, "total": 3}
     assert aggregate["identity_mismatches"] == {
         "total": 3,

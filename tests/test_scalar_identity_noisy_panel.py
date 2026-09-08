@@ -41,7 +41,14 @@ def test_noisy_panel_reports_clean_noisy_slices_and_pairs(api):
     assert aggregate["slices"]["clean"]["correct"] == 15
     assert aggregate["slices"]["clean"]["composed"] == 15
     assert aggregate["slices"]["noisy"]["composed"] == 2
-    assert aggregate["slices"]["noisy"]["correct"] == 12
+    # 12 -> 10 as of menhir 4ecf5e8a ("canonicalize typed scalar identity",
+    # 2026-09-06), which made counts source-authoritative and integer-only with
+    # fail-closed behavior on ambiguous source constraints. Two noisy count cases
+    # (current-books-3-noisy, -3b-noisy) now reject at parse with
+    # `count_value_unresolved` instead of being admitted. This is a deliberate
+    # accuracy-for-safety trade in menhir, not a bench regression: the clean slice
+    # is unaffected at 15/15.
+    assert aggregate["slices"]["noisy"]["correct"] == 10
     assert aggregate["false_current_state_errors"] == 0
     assert aggregate["coverage"]["perturbations_total"] == 15
     assert aggregate["coverage"]["paired_perturbations"] == 15
