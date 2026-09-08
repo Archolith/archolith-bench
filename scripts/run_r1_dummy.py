@@ -1,4 +1,4 @@
-"""Live R1 ladder against the DUMMY graph (prod clone, bolt 7687) in READ MODE.
+"""Live R1 ladder against the DUMMY graph (a clone of the live graph) in READ MODE.
 
 This is the run that finally graduates (or fails) R1 on a NON-saturating corpus. Unlike
 `run_r1_live.py` (which seeds a throwaway 7688 and saturates on the demo fixture), this
@@ -15,12 +15,14 @@ the recommended `hybrid_alpha` to set in `retrieval_tuning.py`.
 
 =========================== SAFETY (read this) ===============================
 - READ MODE: every recall is a read. No add_episode, no seeding, no writes.
-- Hard-pinned to the DUMMY (bolt 7687). Refuses to run if NEO4J_URI is not the dummy. The
+- Hard-pinned to the DUMMY ($R1_DUMMY_BOLT, default 7690). Refuses to run otherwise. The
   dummy is a throwaway clone; prod is a different bolt host in menhir/.env and is never
   contacted by this script.
 =============================================================================
 
-Pre:  dummy up (clone of prod) on bolt 7687  — see scripts/_clone_to_dummy.py
+Pre:  dummy up (clone of the live graph) on $R1_DUMMY_BOLT. NOTE: the referenced
+      provisioning script was never committed, so the clone must be re-created by
+      hand; re-mine gold after moving it.
       gold mined:  python scripts/mine_r1_gold.py
 Run:  python scripts/run_r1_dummy.py [fixtures/r1_dummy_gold.json] [--k 5] [--candidate-k 50]
 """
@@ -35,11 +37,19 @@ import sys
 from pathlib import Path
 from time import perf_counter
 
+from archolith_bench.harness.scalar_bolt import assert_not_prod
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 MENHIR_FRONTIER_SRC = Path(r"C:\Users\thron\IdeaProjects\projects\archolith\menhir-frontier") / "src"
-DUMMY_URI = "bolt://localhost:7687"
+# The dummy is a full clone of the live graph. It used to sit on 7687 -- the
+# default Neo4j port -- where the target guard cannot tell it apart from a real
+# graph, so 7687 is reserved and the clone must be provisioned elsewhere.
+# R1_DUMMY_BOLT is read by mine_r1_gold.py too: both must name the SAME graph,
+# because gold is mined from it and scored against it by node uuid. Point them
+# at different graphs and the uuids silently fail to map.
+DUMMY_URI = os.environ.get("R1_DUMMY_BOLT", "bolt://localhost:7690")
 DUMMY_USER = "neo4j"
-DUMMY_PASSWORD = "menhirdummy123"
+DUMMY_PASSWORD = os.environ.get("R1_DUMMY_PW", "menhirdummy123")
 
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
@@ -71,7 +81,8 @@ def _bootstrap_env() -> None:
         if k.startswith("MENHIR_FRONTIER_"):
             del os.environ[k]
     if os.environ["NEO4J_URI"] != DUMMY_URI:  # defense in depth
-        sys.exit("refusing to run: NEO4J_URI is not the dummy (7687)")
+        sys.exit(f"refusing to run: NEO4J_URI is not the dummy ({DUMMY_URI})")
+    assert_not_prod(DUMMY_URI)
     if not os.environ.get("OPENAI_API_KEY"):
         sys.exit("OPENAI_API_KEY not found in archolith-bench/.env (needed for query embeddings)")
     sys.path.insert(0, str(MENHIR_FRONTIER_SRC))  # frontier src first (R0 trace + hybrid live here)
@@ -181,7 +192,8 @@ def _check_dummy() -> None:
         neo4j.close()
     except Exception as exc:  # noqa: BLE001
         print(f"error: dummy Neo4j not reachable at {DUMMY_URI}: {exc.__class__.__name__}: {exc}", file=sys.stderr)
-        print("  bring it up + clone:  python scripts/_clone_to_dummy.py", file=sys.stderr)
+        print(f"  bring up a clone on {DUMMY_URI} (R1_DUMMY_BOLT), then re-mine gold",
+              file=sys.stderr)
         sys.exit(2)
     if n < 1000:
         print(f"warning: dummy has only {n} Entity nodes — is the clone populated?", file=sys.stderr)

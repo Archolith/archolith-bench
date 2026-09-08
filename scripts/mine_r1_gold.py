@@ -1,4 +1,9 @@
-"""Mine an R1 gold answer set from the DUMMY graph (prod clone on bolt 7687).
+"""Mine an R1 gold answer set from the DUMMY graph (a clone of the live graph).
+
+Target: $R1_DUMMY_BOLT (default bolt://localhost:7690). Must be the SAME graph
+`run_r1_dummy.py` scores against -- gold is mined here and mapped back by node
+uuid. The clone cannot live on 7687: the guard cannot distinguish it there from
+a real graph, so that port is reserved.
 
 Why: the only R1 fixture (`fixtures/r1_demo.json`) saturates at recall=1.0, so the
 ladder can never graduate and `hybrid_alpha` stays unset. The dummy is a full clone of
@@ -60,8 +65,11 @@ import os
 import re
 from pathlib import Path
 
-DUMMY_URI = "bolt://localhost:7687"
-DUMMY_AUTH = ("neo4j", "menhirdummy123")
+# Shares R1_DUMMY_BOLT with run_r1_dummy.py by design: gold mined here is
+# scored against that same graph by node uuid, so the pair must never diverge.
+# See the note there on why the clone cannot live on 7687.
+DUMMY_URI = os.environ.get("R1_DUMMY_BOLT", "bolt://localhost:7690")
+DUMMY_AUTH = ("neo4j", os.environ.get("R1_DUMMY_PW", "menhirdummy123"))
 REPO_ROOT = Path(__file__).resolve().parent.parent
 BENCH_ENV = REPO_ROOT / ".env"
 
@@ -291,7 +299,7 @@ def mine(session, n_symbols: int, n_exact: int, n_scope: int, n_paraphrase: int 
     return {
         "name": "r1_dummy_gold",
         "description": (
-            "Auto-mined R1 gold answer set from the dummy (prod clone, bolt 7687). "
+            "Auto-mined R1 gold answer set from the dummy (clone of the live graph). "
             "Families: symbol_name_query, exact_error_string, wrong_repo_same_topic, "
             "paraphrased_debug_question (LLM, semantic-gap). stale/historical/buried NOT "
             "covered (see mine_r1_gold.py docstring)."
@@ -319,6 +327,9 @@ def main(argv: list[str] | None = None) -> int:
 
     from neo4j import GraphDatabase
 
+    from archolith_bench.harness.scalar_bolt import assert_not_prod
+
+    assert_not_prod(DUMMY_URI)
     driver = GraphDatabase.driver(DUMMY_URI, auth=DUMMY_AUTH)
     try:
         with driver.session() as session:
