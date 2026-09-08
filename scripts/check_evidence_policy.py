@@ -16,7 +16,11 @@ import json
 import sys
 from pathlib import Path
 
-from archolith_bench.core.evidence_policy import PolicyResult, validate_policy
+from archolith_bench.core.evidence_policy import (
+    PolicyResult,
+    build_evidence_manifest,
+    validate_policy,
+)
 
 
 def _resolve_headline() -> Path:
@@ -91,6 +95,8 @@ def main(argv: list[str] | None = None) -> None:
                         help="Directory of evidence JSON files to validate")
     parser.add_argument("--json", action="store_true",
                         help="Emit machine-readable JSON output")
+    parser.add_argument("--manifest", type=Path, default=None,
+                        help="Write a generated evidence manifest to this path")
 
     args = parser.parse_args(argv)
 
@@ -119,6 +125,14 @@ def main(argv: list[str] | None = None) -> None:
             sys.exit(2)
 
     result = validate_policy(headline_path, evidence_paths)
+
+    if args.manifest:
+        args.manifest.parent.mkdir(parents=True, exist_ok=True)
+        args.manifest.write_text(
+            build_evidence_manifest(evidence_paths), encoding="utf-8",
+        )
+        if not args.json:
+            print(f"Wrote manifest: {args.manifest}")
 
     if args.json:
         _print_json(result)

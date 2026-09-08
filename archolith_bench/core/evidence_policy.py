@@ -483,7 +483,10 @@ def _cross_check_evidence_against_headline(
 # ---------------------------------------------------------------------------
 
 # Files under benchmarks/ that are documentation, not evidence artifacts.
-MD_NON_EVIDENCE: tuple[str, ...] = ("README.md",)
+# evidence-manifest.md is the generated index of this directory: it describes
+# the evidence rather than being evidence, so it does not carry a block of its
+# own (and must not, or generating it would invalidate it).
+MD_NON_EVIDENCE: tuple[str, ...] = ("README.md", "evidence-manifest.md")
 MD_NON_EVIDENCE_PREFIXES: tuple[str, ...] = ("RUNBOOK-",)
 
 # Every Markdown evidence artifact must carry this block. It is an HTML comment
@@ -742,3 +745,104 @@ def validate_policy(
             "public_copy_rejected": public_copy_rejected,
         },
     )
+
+
+# ---------------------------------------------------------------------------
+# Evidence manifest
+# ---------------------------------------------------------------------------
+
+MANIFEST_COLUMNS = (
+    "Artifact", "Product", "Command", "Commit", "Run date", "Source tracked",
+    "Public copy", "Status",
+)
+
+
+def _manifest_row(path: Path) -> dict[str, str]:
+    """Build one manifest row from an artifact's own declared provenance."""
+    suffix = path.suffix.lower()
+    if suffix == ".md":
+        result = validate_markdown_evidence(path)
+        meta = parse_md_evidence_block(path.read_text(encoding="utf-8")) or {}
+    else:
+        result = validate_evidence_artifact(path)
+        try:
+            meta = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError, OSError):
+            meta = {}
+
+    def cell(key: str) -> str:
+        value = meta.get(key)
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return "-"
+        return str(value).strip().replace("|", "\\|")
+
+    if not result.ok:
+        status = "INVALID"
+    elif result.warnings:
+        status = "incomplete"
+    else:
+        status = "ok"
+
+    run_date = cell("run_date")
+    if run_date == "-":
+        run_date = cell("timestamp")
+
+    return {
+        "Artifact": path.name,
+        "Product": cell("product"),
+        "Command": f"`{cell('command')}`" if cell("command") != "-" else "-",
+        "Commit": cell("commit")[:12],
+        "Run date": run_date[:10],
+        "Source tracked": cell("source_tracked"),
+        "Public copy": cell("public_copy_allowed"),
+        "Status": status,
+    }
+
+
+def build_evidence_manifest(evidence_paths: list[Path]) -> str:
+    """Render a Markdown index of tracked evidence.
+
+    Generated from each artifact's own declared provenance, so it cannot drift
+    from the artifacts the way a hand-maintained manifest would. Regenerate it
+    rather than editing it.
+    """
+    rows: list[dict[str, str]] = []
+    for ep in sorted(evidence_paths, key=lambda p: p.name):
+        suffix = ep.suffix.lower()
+        if suffix not in (".md", ".json"):
+            continue
+        if suffix == ".md" and not is_markdown_evidence(ep):
+            continue
+        if not ep.exists():
+            continue
+        rows.append(_manifest_row(ep))
+
+    lines = [
+        "# Evidence Manifest",
+        "",
+        "Generated index of tracked benchmark evidence. **Do not edit by hand** --",
+        "regenerate with:",
+        "",
+        "```sh",
+        "python scripts/check_evidence_policy.py --evidence-dir benchmarks/ \\",
+        "    --manifest benchmarks/evidence-manifest.md",
+        "```",
+        "",
+        "Every column is read from the artifact's own provenance block, so this file",
+        "cannot drift from what the artifacts declare. `Status` is the validator's",
+        "verdict: `ok`, `incomplete` (valid block, unknown provenance -- not promotable",
+        "to a headline claim), or `INVALID` (fails the evidence policy).",
+        "",
+        "| " + " | ".join(MANIFEST_COLUMNS) + " |",
+        "|" + "|".join("---" for _ in MANIFEST_COLUMNS) + "|",
+    ]
+    for row in rows:
+        lines.append("| " + " | ".join(row[c] for c in MANIFEST_COLUMNS) + " |")
+
+    promotable = [r for r in rows if r["Status"] == "ok" and r["Public copy"] == "true"]
+    lines += [
+        "",
+        f"{len(rows)} artifact(s) indexed; {len(promotable)} currently quotable as public copy.",
+        "",
+    ]
+    return "\n".join(lines)

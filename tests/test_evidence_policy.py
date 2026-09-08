@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -15,6 +16,8 @@ from archolith_bench.core.evidence_policy import (
     _is_date_like,
     _is_placeholder,
     _parse_headline_table,
+    MANIFEST_COLUMNS,
+    build_evidence_manifest,
     is_markdown_evidence,
     validate_evidence_artifact,
     validate_headline_numbers,
@@ -481,6 +484,55 @@ class TestRepoEvidenceStaysCompliant:
             f"{offenders}. See benchmarks/README.md for the required keys."
         )
 
+
+# ===================================================================
+# Evidence manifest
+# ===================================================================
+
+class TestEvidenceManifest:
+    def test_manifest_indexes_declared_provenance(self, tmp_path):
+        (tmp_path / "a.md").write_text(COMPLETE_MD, encoding="utf-8")
+        out = build_evidence_manifest([tmp_path / "a.md"])
+        assert "| a.md |" in out
+        assert "archolith-filter" in out
+        assert "1aec8f3" in out
+        assert "1 artifact(s) indexed" in out
+
+    def test_manifest_skips_documentation(self, tmp_path):
+        (tmp_path / "README.md").write_text("# Docs\n", encoding="utf-8")
+        (tmp_path / "RUNBOOK-x.md").write_text("# Runbook\n", encoding="utf-8")
+        (tmp_path / "evidence-manifest.md").write_text("# Manifest\n", encoding="utf-8")
+        out = build_evidence_manifest(list(tmp_path.glob("*.md")))
+        assert "0 artifact(s) indexed" in out
+
+    def test_manifest_is_not_its_own_evidence(self):
+        """Regenerating the manifest must not make the directory invalid."""
+        assert not is_markdown_evidence(Path("benchmarks/evidence-manifest.md"))
+
+    def test_unknown_provenance_marked_incomplete(self, tmp_path):
+        body = COMPLETE_MD.replace("commit: 1aec8f3", "commit: unknown")
+        (tmp_path / "b.md").write_text(body, encoding="utf-8")
+        out = build_evidence_manifest([tmp_path / "b.md"])
+        assert "incomplete" in out
+        assert "0 currently quotable" in out
+
+    def test_invalid_artifact_marked_invalid(self, tmp_path):
+        (tmp_path / "c.md").write_text("# No Block\n", encoding="utf-8")
+        out = build_evidence_manifest([tmp_path / "c.md"])
+        assert "INVALID" in out
+
+    def test_pipes_in_values_do_not_break_the_table(self, tmp_path):
+        body = COMPLETE_MD.replace(
+            "command: archolith-bench filter",
+            "command: archolith-bench filter | tee out.txt")
+        (tmp_path / "d.md").write_text(body, encoding="utf-8")
+        out = build_evidence_manifest([tmp_path / "d.md"])
+        row = next(ln for ln in out.splitlines() if ln.startswith("| d.md |"))
+        # The escaped pipe still contains a "|" character, so count only the
+        # cell separators -- pipes not preceded by a backslash.
+        separators = len(re.findall(r"(?<!\\)\|", row))
+        assert separators == len(MANIFEST_COLUMNS) + 1
+        assert "\\|" in row
 
 # ===================================================================
 # Helpers
