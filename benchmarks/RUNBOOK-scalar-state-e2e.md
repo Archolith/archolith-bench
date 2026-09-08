@@ -21,6 +21,35 @@ consolidation interval; it ingests episodes, waits for a tick to materialize the
 - Activation is fresh-only: `activate_scalar_state()` refuses a store with legacy/unstamped nodes. The
   script below uses a FRESH ephemeral Neo4j (no named volume) so every run is a clean store.
 
+## Throwaway Neo4j via compose
+
+`docker-compose.throwaway-neo4j.yml` is the committed, repeatable version of the ephemeral
+Neo4j these runs need, so it does not have to be reconstructed by hand each time:
+
+```bash
+docker compose -f docker-compose.throwaway-neo4j.yml up -d
+# ... run the harness ...
+docker compose -f docker-compose.throwaway-neo4j.yml down -v
+```
+
+It publishes bolt on **7688** and the browser on **7475**, both bound to `127.0.0.1`, matching
+the harness default `--neo4j-uri bolt://localhost:7688`. Storage is `tmpfs` with no named
+volume, so `down -v` leaves nothing and a stale graph cannot survive into the next run.
+
+If those ports are already taken -- a hand-run throwaway such as `menhir-neo4j-test` uses the
+same ones -- either stop that container or publish elsewhere:
+
+```bash
+BENCH_NEO4J_BOLT_PORT=7699 BENCH_NEO4J_HTTP_PORT=7476   docker compose -f docker-compose.throwaway-neo4j.yml -p benchverify up -d
+```
+
+The port override does not weaken the safety rule above: the 7687 refusal is enforced
+client-side on the bolt URI by `ScalarBoltReader`, so it applies whatever port you publish on.
+
+Verified 2026-09-08 on Docker 25.0.3 / Compose v2.24.6 with `neo4j:5.26-community`: healthy in
+about 20s, bolt serving queries through the `neo4j` driver, and `down -v` leaving no residual
+container, network, or volume.
+
 ## The one command (recommended)
 
 `scripts/run_scalar_state_e2e.sh` automates the whole loop the same way the LongMemEval scripts do

@@ -1,0 +1,43 @@
+# Throwaway Neo4j for menhir memory benchmarks (LongMemEval Mode B,
+# menhir-scalar-state). Never point a benchmark at a real graph.
+#
+#   docker compose -f docker-compose.throwaway-neo4j.yml up -d
+#   docker compose -f docker-compose.throwaway-neo4j.yml down -v
+#
+# Port choice is a safety boundary, not a convenience. archolith_bench refuses
+# bolt URIs on 7687 (harness/scalar_bolt.py) because that is the production
+# Menhir port, so this container publishes bolt on 7688 and HTTP on 7475 and
+# cannot collide with, or be mistaken for, a real instance.
+#
+# Storage is intentionally anonymous: no named volume and no bind mount, so
+# `down -v` leaves nothing behind and a stale graph cannot silently survive
+# into the next run and contaminate its results.
+
+services:
+  neo4j-throwaway:
+    image: neo4j:5.26-community
+    container_name: archolith-bench-neo4j-throwaway
+    ports:
+      # Defaults match the harness (--neo4j-uri bolt://localhost:7688). Override
+      # only to run beside an existing throwaway; the 7687 refusal is enforced
+      # client-side on the bolt URI, so it holds whatever port you publish on.
+      - "127.0.0.1:${BENCH_NEO4J_BOLT_PORT:-7688}:7687"
+      - "127.0.0.1:${BENCH_NEO4J_HTTP_PORT:-7475}:7474"
+    environment:
+      # Matches the harness default (--neo4j-password). Throwaway only: this
+      # container is loopback-bound and holds nothing worth protecting.
+      NEO4J_AUTH: "neo4j/benchthrowaway"
+      NEO4J_server_memory_heap_initial__size: "512m"
+      NEO4J_server_memory_heap_max__size: "1G"
+      NEO4J_server_memory_pagecache_size: "512m"
+    healthcheck:
+      # cypher-shell proves bolt is actually serving queries; a listening port
+      # does not -- Neo4j accepts TCP well before it can answer.
+      test: ["CMD-SHELL", "cypher-shell -u neo4j -p benchthrowaway 'RETURN 1' || exit 1"]
+      interval: 5s
+      timeout: 10s
+      retries: 24
+      start_period: 20s
+    tmpfs:
+      - /data
+      - /logs
