@@ -26,12 +26,20 @@ jobs:
         run: python -m ruff check archolith_bench tests
 
   test:
-    name: tests (py${{ matrix.python-version }})
-    runs-on: ubuntu-latest
+    name: tests (${{ matrix.os }}, py${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-latest]
         python-version: ["3.11", "3.12"]
+        # The suite writes through the system temp dir; Windows is the platform
+        # where that has actually broken, so it needs a real leg rather than a
+        # docs note. One version is enough -- this leg guards path/temp
+        # handling, not version compatibility.
+        include:
+          - os: windows-latest
+            python-version: "3.12"
     steps:
       - uses: actions/checkout@v4
 
@@ -54,6 +62,15 @@ jobs:
 
       - name: Install archolith-bench (editable, dev extras)
         run: python -m pip install -e ".[dev]"
+
+      # Catches import-time breakage in a command group, which the unit suite
+      # does not exercise -- these are the documented entry points.
+      - name: CLI smoke
+        run: |
+          python -m archolith_bench --help
+          python -m archolith_bench proxy --list
+          python -m archolith_bench harness --list
+          python -m archolith_bench menhir list
 
       # The R3/R5 ladder benches import the menhir repo (private deps, not
       # installable in CI); tests/conftest.py skips them when menhir is absent.
