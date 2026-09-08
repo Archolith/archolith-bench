@@ -1,5 +1,16 @@
 # Audit Fixture Evidence - 2026-06-06
 
+<!-- archolith-evidence
+product: archolith-mcp-audit
+command: archolith-bench audit
+commit: unknown
+run_date: 2026-06-06
+source: results/audit_comparison.json
+source_tracked: false
+public_copy_allowed: false
+note: Fixture-only report-format evidence. Not launch-headline evidence.
+-->
+
 This is fixture-only report-format evidence for `archolith-bench audit`.
 It is not launch-headline evidence.
 

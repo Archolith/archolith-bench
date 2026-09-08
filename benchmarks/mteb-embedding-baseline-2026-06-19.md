@@ -1,5 +1,16 @@
 # MTEB embedding-model baseline — 2026-06-19
 
+<!-- archolith-evidence
+product: menhir
+command: python scripts/run_mteb_local.py
+commit: unknown
+run_date: 2026-06-19
+source: MTEB 2.15.5, SciFact retrieval dataset
+source_tracked: false
+public_copy_allowed: false
+note: Single-arm embedding baseline. The proxy is not in the embeddings path.
+-->
+
 **Type:** Single-arm embedding-model baseline (NOT a proxy A/B). MTEB measures embedding
 quality; the Archolith chat proxy is not in the embeddings path. This number describes the
 embedding model that menhir / fact-retrieval depends on, not the proxy.

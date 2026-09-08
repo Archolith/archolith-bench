@@ -1,5 +1,16 @@
 # Proxy Code Review Evidence - 2026-05-30
 
+<!-- archolith-evidence
+product: archolith-context
+command: archolith-bench proxy
+commit: unknown
+run_date: 2026-05-30
+source: results/benchmark_code_review_*.json
+source_tracked: false
+public_copy_allowed: false
+note: Retired 2026-07-07: historical, single-scenario, DeepSeek upstream.
+-->
+
 Historical `archolith-bench proxy` run for the `code_review` scenario using
 DeepSeek upstream.
 

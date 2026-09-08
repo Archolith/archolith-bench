@@ -31,10 +31,20 @@ def _resolve_headline() -> Path:
     return candidates[0]
 
 
-def _detect_evidence_files(directory: Path) -> list[Path]:
+def _detect_evidence_files(directory: Path, *, include_markdown: bool = False) -> list[Path]:
+    """Discover evidence artifacts in *directory*.
+
+    Markdown counts as evidence only inside a directory that holds evidence.
+    Scanning the repo root for ``*.md`` would sweep in README, BENCHMARKS,
+    METHODOLOGY and HEADLINE-NUMBERS itself, so callers opt in per directory.
+    validate_policy still screens out README/RUNBOOK inside those directories.
+    """
     if not directory.is_dir():
         return []
-    return sorted(directory.glob("*.json"))
+    paths = list(directory.glob("*.json"))
+    if include_markdown:
+        paths.extend(directory.glob("*.md"))
+    return sorted(paths, key=lambda p: p.name)
 
 
 def _print_human(result: PolicyResult) -> None:
@@ -90,10 +100,12 @@ def main(argv: list[str] | None = None) -> None:
     if args.evidence:
         evidence_paths.extend(args.evidence)
     if args.evidence_dir:
-        evidence_paths.extend(_detect_evidence_files(args.evidence_dir))
+        # An explicitly named directory is an evidence directory by definition.
+        evidence_paths.extend(_detect_evidence_files(args.evidence_dir, include_markdown=True))
     if not args.evidence and not args.evidence_dir:
         evidence_paths.extend(_detect_evidence_files(Path.cwd()))
-        evidence_paths.extend(_detect_evidence_files(headline_path.parent / "benchmarks"))
+        evidence_paths.extend(_detect_evidence_files(
+            headline_path.parent / "benchmarks", include_markdown=True))
         evidence_paths.extend(_detect_evidence_files(headline_path.parent / "results"))
 
     # Check all input files exist before validating.

@@ -1,5 +1,16 @@
 # Industry-Trusted Benchmark Coverage
 
+<!-- archolith-evidence
+product: archolith-bench
+command: archolith-bench industry --launch-only
+commit: unknown
+run_date: unknown
+source: archolith_bench/core/industry.py
+source_tracked: true
+public_copy_allowed: false
+note: Generated coverage matrix, not a measurement. Candidate rows are gates, not results.
+-->
+
 This matrix maps each Archolith product to external benchmark families that are trusted enough to anchor launch claims. `implemented-local` means archolith-bench has a local analogue or reporting path today. `candidate-before-launch` means the benchmark is relevant but must not be claimed until the listed gate has a tracked evidence artifact.
 
 | Product | Suite | Benchmark | Status | Launch gate |

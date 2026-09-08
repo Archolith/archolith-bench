@@ -479,8 +479,205 @@ def _cross_check_evidence_against_headline(
 
 
 # ---------------------------------------------------------------------------
+# Markdown evidence
+# ---------------------------------------------------------------------------
+
+# Files under benchmarks/ that are documentation, not evidence artifacts.
+MD_NON_EVIDENCE: tuple[str, ...] = ("README.md",)
+MD_NON_EVIDENCE_PREFIXES: tuple[str, ...] = ("RUNBOOK-",)
+
+# Every Markdown evidence artifact must carry this block. It is an HTML comment
+# so it does not render, and it is required rather than optional: evidence whose
+# provenance cannot be read mechanically is evidence nobody can audit.
+#
+#   <!-- archolith-evidence
+#   product: filter
+#   command: archolith-bench filter
+#   commit: 1aec8f3
+#   run_date: 2026-05-30
+#   source: results/filter_results.json
+#   source_tracked: false
+#   public_copy_allowed: false
+#   -->
+#
+# `commit` and `run_date` accept the literal `unknown` for artifacts predating
+# this convention, which keeps historical files honest instead of forcing a
+# fabricated value. `unknown` is still disqualifying for public copy.
+MD_EVIDENCE_BLOCK_RE = re.compile(
+    r"<!--\s*archolith-evidence\s*\n(?P<body>.*?)-->", re.DOTALL
+)
+
+MD_REQUIRED_EVIDENCE_KEYS: tuple[str, ...] = (
+    "product",
+    "command",
+    "commit",
+    "run_date",
+    "source",
+    "source_tracked",
+    "public_copy_allowed",
+)
+
+_MD_KV_RE = re.compile(r"^(?P<key>[a-z][a-z0-9_]*)\s*:\s*(?P<value>.*)$")
+_TRUE_VALUES = {"true", "yes"}
+_FALSE_VALUES = {"false", "no"}
+
+
+def is_markdown_evidence(path: Path) -> bool:
+    """Whether a .md file under benchmarks/ is an evidence artifact."""
+    name = path.name
+    if name in MD_NON_EVIDENCE:
+        return False
+    return not any(name.startswith(p) for p in MD_NON_EVIDENCE_PREFIXES)
+
+
+def parse_md_evidence_block(text: str) -> dict[str, str] | None:
+    """Parse the ``archolith-evidence`` block, or None when absent."""
+    m = MD_EVIDENCE_BLOCK_RE.search(text)
+    if not m:
+        return None
+    meta: dict[str, str] = {}
+    for line in m.group("body").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        kv = _MD_KV_RE.match(stripped)
+        if kv:
+            meta.setdefault(kv.group("key"), kv.group("value").strip())
+    return meta
+
+
+def validate_markdown_evidence(artifact_path: Path) -> PolicyResult:
+    """Validate a Markdown evidence artifact against the required block.
+
+    A missing or incomplete block is an ERROR, so the convention is enforced on
+    every new artifact rather than merely encouraged. `unknown` provenance is
+    accepted for historical files but never for public copy.
+    """
+    result = PolicyResult(ok=True, summary={
+        "artifact_path": str(artifact_path),
+        "public_copy_allowed": False,
+        "format": "markdown",
+    })
+
+    if not artifact_path.exists():
+        result.ok = False
+        result.errors.append(_make_error(
+            "file_not_found", str(artifact_path), "Evidence file not found",
+        ))
+        return result
+
+    try:
+        text = artifact_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as e:
+        result.ok = False
+        result.errors.append(_make_error(
+            "unreadable_markdown", str(artifact_path), f"Unreadable: {e}",
+        ))
+        return result
+
+    meta = parse_md_evidence_block(text)
+    if meta is None:
+        result.ok = False
+        result.errors.append(_make_error(
+            "missing_evidence_block", str(artifact_path),
+            "Markdown evidence must open with an <!-- archolith-evidence ... --> "
+            "block declaring " + ", ".join(MD_REQUIRED_EVIDENCE_KEYS),
+        ))
+        return result
+
+    result.summary["metadata_keys"] = sorted(meta)
+
+    for key in MD_REQUIRED_EVIDENCE_KEYS:
+        if not meta.get(key, "").strip():
+            result.ok = False
+            result.errors.append(_make_error(
+                "missing_field", str(artifact_path),
+                f"archolith-evidence block is missing required key '{key}'",
+            ))
+
+    pc_raw = meta.get("public_copy_allowed", "").strip().lower()
+    if pc_raw and pc_raw not in _TRUE_VALUES | _FALSE_VALUES:
+        result.ok = False
+        result.errors.append(_make_error(
+            "invalid_field", str(artifact_path),
+            f"public_copy_allowed must be true or false, got {pc_raw!r}",
+        ))
+    pc_allowed = pc_raw in _TRUE_VALUES
+    result.summary["public_copy_allowed"] = pc_allowed
+
+    tracked_raw = meta.get("source_tracked", "").strip().lower()
+    if tracked_raw and tracked_raw not in _TRUE_VALUES | _FALSE_VALUES:
+        result.ok = False
+        result.errors.append(_make_error(
+            "invalid_field", str(artifact_path),
+            f"source_tracked must be true or false, got {tracked_raw!r}",
+        ))
+    source_tracked = tracked_raw in _TRUE_VALUES
+
+    commit = meta.get("commit", "").strip()
+    run_date = meta.get("run_date", "").strip()
+    commit_known = _is_commit_like(commit)
+    date_known = _is_date_like(run_date)
+
+    # A value that is neither valid nor the explicit `unknown` sentinel is a
+    # typo, not a disclosure -- always an error.
+    if commit and not commit_known and not _is_placeholder(commit):
+        result.ok = False
+        result.errors.append(_make_error(
+            "invalid_field", str(artifact_path),
+            f"commit must be a hex hash or 'unknown', got {commit!r}",
+        ))
+    if run_date and not date_known and not _is_placeholder(run_date):
+        result.ok = False
+        result.errors.append(_make_error(
+            "invalid_field", str(artifact_path),
+            f"run_date must be YYYY-MM-DD or 'unknown', got {run_date!r}",
+        ))
+
+    if pc_allowed:
+        if not commit_known:
+            result.ok = False
+            result.errors.append(_make_error(
+                "missing_provenance", str(artifact_path),
+                "public_copy_allowed=true requires a real commit, not 'unknown'",
+            ))
+        if not date_known:
+            result.ok = False
+            result.errors.append(_make_error(
+                "missing_provenance", str(artifact_path),
+                "public_copy_allowed=true requires a real run_date, not 'unknown'",
+            ))
+        if not source_tracked:
+            result.ok = False
+            result.errors.append(_make_error(
+                "untracked_public_source", str(artifact_path),
+                "public_copy_allowed=true but source_tracked=false: a public claim "
+                "cannot rest on data that is not in the repository",
+            ))
+    else:
+        missing = [
+            label for label, known in (("commit", commit_known), ("run_date", date_known))
+            if not known
+        ]
+        if missing:
+            result.warnings.append(_make_warning(
+                "incomplete_provenance", str(artifact_path),
+                "provenance is incomplete (" + ", ".join(missing)
+                + "); this artifact cannot be promoted to a headline claim as written",
+            ))
+        if not source_tracked:
+            result.warnings.append(_make_warning(
+                "untracked_raw_source", str(artifact_path),
+                "source_tracked=false: the underlying data is not in the repository",
+            ))
+
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Aggregate validator
 # ---------------------------------------------------------------------------
+
 
 def validate_policy(
     headline_path: Path,
@@ -500,21 +697,34 @@ def validate_policy(
         headline_rows = _parse_headline_table(headline_path.read_text(encoding="utf-8"))
 
     for ep in evidence_paths:
-        if not ep.suffix.lower() == ".json":
+        suffix = ep.suffix.lower()
+        if suffix == ".json":
+            art_result = validate_evidence_artifact(ep)
+        elif suffix == ".md":
+            # README/RUNBOOK files live alongside evidence but are documentation.
+            if not is_markdown_evidence(ep):
+                continue
+            art_result = validate_markdown_evidence(ep)
+        else:
             continue
+
         evidence_checked += 1
-        art_result = validate_evidence_artifact(ep)
         all_errors.extend(art_result.errors)
         all_warnings.extend(art_result.warnings)
 
         if art_result.summary.get("public_copy_allowed"):
             public_copy_allowed += 1
-            # Cross-check
+            # Cross-check against the headline table. The checker reads dict
+            # fields, so Markdown supplies its evidence block rather than
+            # being parsed as JSON.
             try:
-                data = json.loads(ep.read_text(encoding="utf-8"))
+                if suffix == ".md":
+                    data = parse_md_evidence_block(ep.read_text(encoding="utf-8")) or {}
+                else:
+                    data = json.loads(ep.read_text(encoding="utf-8"))
                 cross_issues = _cross_check_evidence_against_headline(data, headline_rows, ep)
                 all_warnings.extend(cross_issues)
-            except (json.JSONDecodeError, UnicodeDecodeError):
+            except (json.JSONDecodeError, UnicodeDecodeError, OSError):
                 pass
         else:
             public_copy_rejected += 1

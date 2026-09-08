@@ -7,16 +7,35 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from archolith_bench.core.evidence_policy import (
     _contains_rejected_term,
     _is_commit_like,
     _is_date_like,
     _is_placeholder,
     _parse_headline_table,
+    is_markdown_evidence,
     validate_evidence_artifact,
     validate_headline_numbers,
+    validate_markdown_evidence,
     validate_policy,
 )
+
+COMPLETE_MD = """# Example Evidence
+
+<!-- archolith-evidence
+product: archolith-filter
+command: archolith-bench filter
+commit: 1aec8f3
+run_date: 2026-05-30
+source: results/filter_results.json
+source_tracked: true
+public_copy_allowed: false
+-->
+
+Body text.
+"""
 
 FIXTURES = Path(__file__).resolve().parent.parent / "fixtures" / "evidence_policy"
 
@@ -374,6 +393,93 @@ class TestCli:
         )
         data = json.loads(result.stdout)
         assert data["summary"]["evidence_files_checked"] == 2
+
+
+# ===================================================================
+# Markdown evidence convention
+# ===================================================================
+
+class TestMarkdownEvidence:
+    """The archolith-evidence block is mandatory on Markdown evidence."""
+
+    def _write(self, tmp_path, name, body):
+        p = tmp_path / name
+        p.write_text(body, encoding="utf-8")
+        return p
+
+    def test_missing_block_is_an_error(self, tmp_path):
+        p = self._write(tmp_path, "e.md", "# Some Evidence\n\nNo block here.\n")
+        r = validate_markdown_evidence(p)
+        assert not r.ok
+        assert any(e.code == "missing_evidence_block" for e in r.errors)
+
+    def test_complete_block_passes(self, tmp_path):
+        p = self._write(tmp_path, "e.md", COMPLETE_MD)
+        r = validate_markdown_evidence(p)
+        assert r.ok, [e.message for e in r.errors]
+        assert r.summary["public_copy_allowed"] is False
+
+    def test_missing_required_key_is_an_error(self, tmp_path):
+        body = COMPLETE_MD.replace("source_tracked: true\n", "")
+        p = self._write(tmp_path, "e.md", body)
+        r = validate_markdown_evidence(p)
+        assert not r.ok
+        assert any("source_tracked" in e.message for e in r.errors)
+
+    def test_unknown_provenance_warns_but_passes(self, tmp_path):
+        body = COMPLETE_MD.replace("commit: 1aec8f3", "commit: unknown")
+        p = self._write(tmp_path, "e.md", body)
+        r = validate_markdown_evidence(p)
+        assert r.ok
+        assert any(w.code == "incomplete_provenance" for w in r.warnings)
+
+    def test_public_copy_rejects_unknown_commit(self, tmp_path):
+        body = COMPLETE_MD.replace("commit: 1aec8f3", "commit: unknown").replace(
+            "public_copy_allowed: false", "public_copy_allowed: true")
+        p = self._write(tmp_path, "e.md", body)
+        r = validate_markdown_evidence(p)
+        assert not r.ok
+        assert any(e.code == "missing_provenance" for e in r.errors)
+
+    def test_public_copy_rejects_untracked_source(self, tmp_path):
+        body = COMPLETE_MD.replace("source_tracked: true", "source_tracked: false").replace(
+            "public_copy_allowed: false", "public_copy_allowed: true")
+        p = self._write(tmp_path, "e.md", body)
+        r = validate_markdown_evidence(p)
+        assert not r.ok
+        assert any(e.code == "untracked_public_source" for e in r.errors)
+
+    def test_malformed_commit_is_an_error_not_a_disclosure(self, tmp_path):
+        body = COMPLETE_MD.replace("commit: 1aec8f3", "commit: not-a-hash")
+        p = self._write(tmp_path, "e.md", body)
+        r = validate_markdown_evidence(p)
+        assert not r.ok
+        assert any(e.code == "invalid_field" for e in r.errors)
+
+    def test_readme_and_runbook_are_not_evidence(self):
+        assert not is_markdown_evidence(Path("benchmarks/README.md"))
+        assert not is_markdown_evidence(Path("benchmarks/RUNBOOK-anything.md"))
+        assert is_markdown_evidence(Path("benchmarks/filter-2026-05-30.md"))
+
+
+class TestRepoEvidenceStaysCompliant:
+    """Guards the convention against new unstamped artifacts landing in benchmarks/."""
+
+    def test_every_tracked_markdown_artifact_has_a_valid_block(self):
+        bench = Path(__file__).resolve().parent.parent / "benchmarks"
+        if not bench.is_dir():
+            pytest.skip("benchmarks/ not present")
+        offenders = []
+        for md in sorted(bench.glob("*.md")):
+            if not is_markdown_evidence(md):
+                continue
+            r = validate_markdown_evidence(md)
+            if not r.ok:
+                offenders.append((md.name, [e.code for e in r.errors]))
+        assert not offenders, (
+            "Markdown evidence missing a valid archolith-evidence block: "
+            f"{offenders}. See benchmarks/README.md for the required keys."
+        )
 
 
 # ===================================================================

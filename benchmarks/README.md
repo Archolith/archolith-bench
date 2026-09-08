@@ -11,6 +11,55 @@ Use this directory for:
 - methodology notes and formulas
 - links back to the source result artifact names
 
+## Required: the `archolith-evidence` block
+
+Every evidence artifact in this directory -- `.md` or `.json` -- must declare its
+provenance mechanically. For Markdown, that means an HTML comment immediately after the
+title. It does not render, and it is **enforced**: `scripts/check_evidence_policy.py` exits
+non-zero without it, and `tests/test_evidence_policy.py::TestRepoEvidenceStaysCompliant`
+fails the suite if a new artifact lands here unstamped.
+
+```markdown
+# LongMemEval Menhir M1 Gate Benchmark
+
+<!-- archolith-evidence
+product: menhir
+command: archolith-bench menhir longmemeval
+commit: cf13f8cb48c2bd308aeda171ca6af1f4404e2bc9
+run_date: 2026-07-15
+source: run m1-full-500-recalibrated-2026-07-15
+source_tracked: false
+public_copy_allowed: false
+-->
+```
+
+| Key | Meaning |
+|-----|---------|
+| `product` | Which product the number describes (`archolith-context`, `archolith-filter`, `menhir`, ...) |
+| `command` | The exact command that produced it |
+| `commit` | Hex hash of the code under measurement, or `unknown` |
+| `run_date` | `YYYY-MM-DD`, or `unknown` |
+| `source` | Where the raw output lives |
+| `source_tracked` | `true` only if that raw output is in the repository |
+| `public_copy_allowed` | `true` only if this may be quoted publicly |
+| `note` | Optional one-line caveat |
+
+`unknown` is deliberate. Artifacts predating this convention keep it rather than carrying a
+fabricated hash or date -- an honest gap is auditable, an invented value is not. It comes at
+a price: `unknown` provenance is disqualifying for public copy.
+
+Setting `public_copy_allowed: true` requires a real `commit`, a real `run_date`, and
+`source_tracked: true`. A public claim cannot rest on data that is not in the repository.
+Anything short of that is an error, not a warning.
+
+`README.md` and `RUNBOOK-*.md` are documentation, not evidence, and are exempt.
+
+Check your artifact before committing it:
+
+```sh
+python scripts/check_evidence_policy.py --evidence-dir benchmarks/
+```
+
 Do not use fixture-only or sample-only results as launch headlines. If a result
 comes from fixtures, label it as format evidence only.
 

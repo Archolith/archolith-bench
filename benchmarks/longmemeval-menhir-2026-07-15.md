@@ -1,5 +1,16 @@
 # LongMemEval Menhir M1 Gate Benchmark
 
+<!-- archolith-evidence
+product: menhir
+command: archolith-bench menhir longmemeval
+commit: cf13f8cb48c2bd308aeda171ca6af1f4404e2bc9
+run_date: 2026-07-15
+source: run m1-full-500-recalibrated-2026-07-15
+source_tracked: false
+public_copy_allowed: false
+note: Menhir side was dirty=True at 4da227d1; raw run output not in repo.
+-->
+
 Tracked evidence artifact for the `menhir` / LongMemEval (persistent menhir memory) row in
 `benchmarks/industry-trusted-benchmark-coverage.md`. Full n=500 oracle-corpus run (first time this
 gate has been run at full corpus scale; previous runs used a stratified n=90 sample).

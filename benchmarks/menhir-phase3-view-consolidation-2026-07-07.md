@@ -1,5 +1,16 @@
 # Menhir Phase 3 View Consolidation — 2026-07-07
 
+<!-- archolith-evidence
+product: menhir
+command: archolith-bench harness menhir-phase3
+commit: unknown
+run_date: 2026-07-07
+source: offline scenario suite (fixtures)
+source_tracked: true
+public_copy_allowed: false
+note: Consumer-pipeline validation, not a proxy A/B and not a model score.
+-->
+
 **Type:** Consumer-pipeline validation (NOT a proxy A/B, NOT a model score). Validates the
 selective-capture *consumer* end to end against a throwaway menhir:
 
