@@ -44,6 +44,9 @@ SCHEME_DEFAULT_PORTS: dict[str, int] = {
 DEFAULT_ALLOWED_PORTS: frozenset[int] = frozenset({
     7688,  # throwaway Neo4j bolt (docker-compose.throwaway-neo4j.yml)
     8098,  # throwaway menhir HTTP
+    7689,  # throwaway Neo4j bolt used by the LongMemEval scripts
+    7690,  # throwaway Neo4j bolt used by the provenance inspectors
+    8102,  # throwaway menhir HTTP used by the LongMemEval ingest path
 })
 
 # Real services. Refused on every host, and no opt-in can lift them -- the

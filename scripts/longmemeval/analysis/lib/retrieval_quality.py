@@ -42,6 +42,13 @@ BOLT = os.getenv("LME_BOLT", "bolt://localhost:7689")
 if not BOLT.startswith("bolt://"):
     BOLT = f"bolt://localhost:{BOLT}"
 PW = os.getenv("LME_NEO4J_PW", "lmedata123")
+
+_BENCH_ROOT = Path(__file__).resolve().parents[4]
+if str(_BENCH_ROOT) not in sys.path:
+    sys.path.insert(0, str(_BENCH_ROOT))
+from archolith_bench.harness.scalar_bolt import assert_not_prod  # noqa: E402
+from archolith_bench.harness.memory_ab import assert_not_production  # noqa: E402
+
 N = int(os.getenv("LME_N", "30"))
 CAP = int(os.getenv("LME_TOPK", "20"))
 KS = (5, 10, 20)
@@ -179,6 +186,10 @@ def mrr_at_k(ranks: list[int | None], k: int = 10) -> float:
 async def main():
     if not MENHIR_URL or not KEY:
         raise SystemExit("MENHIR_URL and OPENAI_API_KEY must be set; run via `lme.sh ir-gate`.")
+    # Enforced here, not at import: this module is imported by offline tests,
+    # which never reach a live target.
+    assert_not_production(MENHIR_URL)
+    assert_not_prod(BOLT)
     cached = glob.glob(os.path.expanduser(
         "~/.cache/huggingface/hub/datasets--xiaowu0162--longmemeval/snapshots/*/longmemeval_oracle"))
     if not cached:

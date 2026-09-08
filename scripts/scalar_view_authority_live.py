@@ -32,7 +32,9 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
+from archolith_bench.harness.memory_ab import assert_not_production
 from archolith_bench.harness.menhir_client import HttpMenhirClient
+from archolith_bench.harness.scalar_bolt import assert_not_prod
 
 
 @dataclass(frozen=True)
@@ -149,6 +151,11 @@ def main() -> None:
     ap.add_argument("--no-ingest", action="store_true", help="graph already seeded; only recall")
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
+
+    # Both targets are written to (reset + seed), so both are guarded at
+    # the point the arguments resolve, before any client is constructed.
+    assert_not_production(args.menhir_url)
+    assert_not_prod(args.neo4j_uri)
 
     ns = args.namespace or f"va-{int(time.time())}"
     client = HttpMenhirClient(args.menhir_url)

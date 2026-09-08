@@ -14,8 +14,10 @@ Two phases (so we serve each flag value once):
 Env: MODE, BRIEF_TAG, MENHIR_URL, BRIEF_OUT_DIR, BRIEF_PER_TYPE, BRIEF_TYPES,
      OPENAI_API_KEY, ANSWER_MODEL, JUDGE_MODEL.
 """
-import glob, json, os, collections
+import glob, json, os, sys, collections
 import httpx
+
+_HERE = os.path.dirname(__file__)
 
 MODE = os.getenv("MODE", "collect")
 TAG = os.getenv("BRIEF_TAG", "off")
@@ -27,6 +29,15 @@ ANSWER_MODEL = os.getenv("ANSWER_MODEL", "gpt-4o")
 JUDGE_MODEL = os.getenv("JUDGE_MODEL", "gpt-4o-mini")
 OUT = os.getenv("BRIEF_OUT_DIR", os.path.expanduser("~/lme-brief-ab"))
 os.makedirs(OUT, exist_ok=True)
+
+
+def _assert_target_allowed(url: str) -> None:
+    _bench = os.path.abspath(os.path.join(_HERE, "..", "..", ".."))
+    if _bench not in sys.path:
+        sys.path.insert(0, _bench)
+    from archolith_bench.harness.memory_ab import assert_not_production
+
+    assert_not_production(url)
 
 
 def _items():
@@ -45,6 +56,10 @@ def _items():
 
 
 def collect():
+    # Guarded in collect(), the only path that contacts a live instance;
+    # MODE=score reads committed files and needs no target.
+    _assert_target_allowed(MENHIR_URL)
+
     rows = []
     with httpx.Client(timeout=120) as c:
         for it in _items():

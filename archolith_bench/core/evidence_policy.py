@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 from dataclasses import dataclass, field
+from datetime import date
 from pathlib import Path
 from typing import Any, Literal
 
@@ -105,6 +107,95 @@ def _contains_rejected_term(s: str) -> bool:
         if term in lower:
             return True
     return False
+
+
+# ---------------------------------------------------------------------------
+# Provenance verification
+# ---------------------------------------------------------------------------
+#
+# Well-formed is not the same as true. `commit: deadbeef` matches the hex
+# regex, `source_tracked: true` is just a word the author typed, and neither
+# was ever checked against the repository -- so a fabricated block validated
+# clean. These helpers ask git instead of trusting the assertion.
+#
+# Each returns True (verified), False (verified false) or None (could not
+# check: no git, no repo, timeout). None is never treated as success; callers
+# fail closed on it for public copy.
+
+POLICY_REPO_ROOT = Path(__file__).resolve().parents[2]
+
+_GIT_TIMEOUT_S = 10
+
+
+def _git(args: list[str], repo_root: Path) -> tuple[int, str] | None:
+    """Run a git command in *repo_root*. None when git cannot be run at all."""
+    try:
+        proc = subprocess.run(
+            ["git", *args],
+            cwd=str(repo_root),
+            capture_output=True,
+            text=True,
+            timeout=_GIT_TIMEOUT_S,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return proc.returncode, proc.stdout.strip()
+
+
+def commit_exists(commit: str, repo_root: Path = POLICY_REPO_ROOT) -> bool | None:
+    """Whether *commit* is an object that exists in this repository.
+
+    The `^{commit}` suffix forces the object to actually be a commit, so a
+    hash that happens to name a blob or tree is not accepted as provenance.
+    """
+    value = (commit or "").strip()
+    if not value:
+        return False
+    out = _git(["cat-file", "-e", f"{value}^{{commit}}"], repo_root)
+    if out is None:
+        return None
+    return out[0] == 0
+
+
+def source_is_tracked(source: str, repo_root: Path = POLICY_REPO_ROOT) -> bool | None:
+    """Whether *source* names a path tracked by git.
+
+    `source` is deliberately free-form -- existing artifacts carry run names
+    and prose ("offline scenario suite (fixtures)") as well as paths. Prose is
+    not a tracked path, so it verifies False rather than raising: asserting
+    source_tracked=true over an unresolvable source is the thing being caught.
+    """
+    value = (source or "").strip()
+    if not value:
+        return False
+    out = _git(["ls-files", "--error-unmatch", "--", value], repo_root)
+    if out is None:
+        return None
+    return out[0] == 0
+
+
+def _add_provenance_issue(
+    result: PolicyResult,
+    pc_allowed: bool,
+    code: str,
+    path: Path,
+    message: str,
+) -> None:
+    """Record a failed provenance check at the severity public copy warrants."""
+    if pc_allowed:
+        result.ok = False
+        result.errors.append(_make_error(code, str(path), message))
+    else:
+        result.warnings.append(_make_warning(code, str(path), message))
+
+
+def _is_future_date(run_date: str, today: date | None = None) -> bool:
+    """Whether *run_date* is after today. A run cannot have happened later."""
+    try:
+        parsed = date.fromisoformat(run_date.strip())
+    except ValueError:
+        return False
+    return parsed > (today or date.today())
 
 
 # ---------------------------------------------------------------------------
@@ -549,12 +640,21 @@ def parse_md_evidence_block(text: str) -> dict[str, str] | None:
     return meta
 
 
-def validate_markdown_evidence(artifact_path: Path) -> PolicyResult:
+def validate_markdown_evidence(
+    artifact_path: Path,
+    *,
+    repo_root: Path = POLICY_REPO_ROOT,
+) -> PolicyResult:
     """Validate a Markdown evidence artifact against the required block.
 
     A missing or incomplete block is an ERROR, so the convention is enforced on
     every new artifact rather than merely encouraged. `unknown` provenance is
     accepted for historical files but never for public copy.
+
+    Declared provenance is checked against git, not taken at its word. The
+    checks are errors when public_copy_allowed=true and warnings otherwise:
+    an unverifiable claim is disqualifying for public copy, but historical
+    internal artifacts predate the convention and are reported, not broken.
     """
     result = PolicyResult(ok=True, summary={
         "artifact_path": str(artifact_path),
@@ -637,6 +737,15 @@ def validate_markdown_evidence(artifact_path: Path) -> PolicyResult:
             f"run_date must be YYYY-MM-DD or 'unknown', got {run_date!r}",
         ))
 
+    # A run cannot have happened in the future. This is a fabricated or
+    # mistyped value regardless of who may quote it, so it is always an error.
+    if date_known and _is_future_date(run_date):
+        result.ok = False
+        result.errors.append(_make_error(
+            "future_run_date", str(artifact_path),
+            f"run_date {run_date} is in the future; a run cannot postdate today",
+        ))
+
     if pc_allowed:
         if not commit_known:
             result.ok = False
@@ -657,7 +766,40 @@ def validate_markdown_evidence(artifact_path: Path) -> PolicyResult:
                 "public_copy_allowed=true but source_tracked=false: a public claim "
                 "cannot rest on data that is not in the repository",
             ))
-    else:
+
+    # Verify the declarations rather than trusting them. `verified is None`
+    # means git could not answer; for public copy that is a refusal, because
+    # an unverifiable claim is exactly what this gate exists to stop.
+    source = meta.get("source", "").strip()
+
+    if commit_known:
+        verified = commit_exists(commit, repo_root)
+        if verified is False:
+            _add_provenance_issue(
+                result, pc_allowed, "unverifiable_commit", artifact_path,
+                f"commit {commit} does not exist in this repository",
+            )
+        elif verified is None:
+            _add_provenance_issue(
+                result, pc_allowed, "unverified_commit", artifact_path,
+                f"commit {commit} could not be checked (git unavailable)",
+            )
+
+    if source_tracked:
+        verified = source_is_tracked(source, repo_root)
+        if verified is False:
+            _add_provenance_issue(
+                result, pc_allowed, "untracked_source", artifact_path,
+                f"source_tracked=true but {source!r} is not a git-tracked path",
+            )
+        elif verified is None:
+            _add_provenance_issue(
+                result, pc_allowed, "unverified_source", artifact_path,
+                f"source_tracked=true but {source!r} could not be checked "
+                "(git unavailable)",
+            )
+
+    if not pc_allowed:
         missing = [
             label for label, known in (("commit", commit_known), ("run_date", date_known))
             if not known

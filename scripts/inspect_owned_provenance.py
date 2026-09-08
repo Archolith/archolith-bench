@@ -7,13 +7,20 @@ typed-assertion episode_uuid, and the assertion subject_uuid vs the current View
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 
 from neo4j import GraphDatabase
+
+_BENCH_ROOT = Path(__file__).resolve().parents[1]
+if str(_BENCH_ROOT) not in sys.path:
+    sys.path.insert(0, str(_BENCH_ROOT))
+from archolith_bench.harness.scalar_bolt import assert_not_prod  # noqa: E402
 
 URI = sys.argv[1] if len(sys.argv) > 1 else "bolt://localhost:7690"
 NS = sys.argv[2]
 PW = sys.argv[3] if len(sys.argv) > 3 else "scalarthrowaway"
 
+assert_not_prod(URI)
 drv = GraphDatabase.driver(URI, auth=("neo4j", PW))
 
 

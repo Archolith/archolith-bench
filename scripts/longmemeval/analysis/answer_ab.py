@@ -34,6 +34,15 @@ OUT = os.getenv("AB_OUT", os.path.expanduser("~/lme-answer-ab"))
 os.makedirs(OUT, exist_ok=True)
 
 
+def _assert_target_allowed(url: str) -> None:
+    _bench = os.path.abspath(os.path.join(_HERE, "..", "..", ".."))
+    if _bench not in sys.path:
+        sys.path.insert(0, _bench)
+    from archolith_bench.harness.memory_ab import assert_not_production
+
+    assert_not_production(url)
+
+
 def _is_count_answer(answer: str) -> bool:
     s = str(answer).strip().lower().rstrip(".").replace("$", "").replace(",", "").replace(" ", "")
     s = re.sub(r"[km]$", "", s)
@@ -45,6 +54,10 @@ def _counting_slice():
 
 
 def collect():
+    # Guarded in collect(), the only path that contacts a live instance;
+    # MODE=score reads committed files and needs no target.
+    _assert_target_allowed(MENHIR_URL)
+
     rows = []
     with httpx.Client(timeout=120) as c:
         for it in _counting_slice():

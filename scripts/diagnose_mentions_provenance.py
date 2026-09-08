@@ -30,6 +30,7 @@ import uuid
 from neo4j import GraphDatabase
 
 from archolith_bench.harness import HttpMenhirClient
+from archolith_bench.harness.memory_ab import assert_not_production
 from archolith_bench.harness.scalar_bolt import assert_not_prod
 
 STATEMENTS = [
@@ -93,6 +94,7 @@ def main() -> None:
     args = ap.parse_args()
 
     assert_not_prod(args.neo4j_uri)
+    assert_not_production(args.menhir_url)
     ns = f"mentions-diag-{uuid.uuid4().hex[:10]}"
     print(f"== MENTIONS provenance diagnostic ==\n  menhir={args.menhir_url}  bolt={args.neo4j_uri}  ns={ns}\n")
 

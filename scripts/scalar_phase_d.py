@@ -15,7 +15,9 @@ import json
 import sys
 import time
 
+from archolith_bench.harness.memory_ab import assert_not_production
 from archolith_bench.harness.menhir_client import HttpMenhirClient
+from archolith_bench.harness.scalar_bolt import assert_not_prod
 from archolith_bench.harness.scalar_phase_d import (
     PhaseDBoltReader,
     phase_d_cases,
@@ -44,6 +46,11 @@ def main() -> None:
                          "before scoring, so a slot that materializes late is never read as absent")
     ap.add_argument("--out", default=None, help="write the full JSON result here")
     args = ap.parse_args()
+
+    # Both targets are written to (reset + seed), so both are guarded at
+    # the point the arguments resolve, before any client is constructed.
+    assert_not_production(args.menhir_url)
+    assert_not_prod(args.neo4j_uri)
 
     ns = args.namespace or f"pd-{int(time.time())}"
     cases = phase_d_cases()

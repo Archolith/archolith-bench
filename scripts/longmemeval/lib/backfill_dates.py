@@ -16,11 +16,19 @@ Writes a revert snapshot (uuid -> old valid_at) before mutating. DRY_RUN=1 to pr
 
 Env: LME_BOLT (bolt uri), LME_NEO4J_PW, LME_NS_PREFIX, LME_REVERT_SNAPSHOT, DRY_RUN.
 """
-import glob, json, os
+import glob, json, os, sys
 from datetime import datetime, timezone
 from neo4j import GraphDatabase
 
+_BENCH_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+if _BENCH_ROOT not in sys.path:
+    sys.path.insert(0, _BENCH_ROOT)
+from archolith_bench.harness.scalar_bolt import assert_not_prod  # noqa: E402
+
 BOLT = os.getenv("LME_BOLT", "bolt://localhost:7689")
+if not BOLT.startswith("bolt://"):
+    BOLT = f"bolt://localhost:{BOLT}"
+assert_not_prod(BOLT)
 if not BOLT.startswith("bolt://"):
     BOLT = f"bolt://localhost:{BOLT}"
 PW = os.getenv("LME_NEO4J_PW", "lmedata123")

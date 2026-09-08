@@ -277,7 +277,7 @@ def test_assert_not_prod_allows_loopback_throwaway(uri):
         "bolt://localhost:7687/neo4j",  # path suffix defeated the old .endswith
         "bolt://localhost:07687",       # leading zero, same port
         "bolt://[::1]",                 # IPv6 loopback, implicit 7687
-        "bolt://localhost:7690",        # loopback but an unlisted port
+        "bolt://localhost:7799",        # loopback but an unlisted port
     ],
 )
 def test_assert_not_prod_refuses_by_effective_port(uri):
@@ -291,8 +291,8 @@ def test_assert_not_prod_refuses_by_effective_port(uri):
 
 
 def test_unlisted_port_can_be_opted_in(monkeypatch):
-    monkeypatch.setenv("ARCHOLITH_BENCH_ALLOW_PORTS", "7690")
-    assert_not_prod("bolt://localhost:7690")  # does not raise
+    monkeypatch.setenv("ARCHOLITH_BENCH_ALLOW_PORTS", "7799")
+    assert_not_prod("bolt://localhost:7799")  # does not raise
 
 
 def test_opt_in_cannot_unlock_a_reserved_real_port(monkeypatch):

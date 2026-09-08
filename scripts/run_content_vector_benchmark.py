@@ -174,6 +174,9 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
     from menhir.services.recall_service import RecallService
     from menhir.services.scoring_service import ScoringService
 
+    from archolith_bench.harness.scalar_bolt import assert_not_prod
+
+    assert_not_prod(CLONE_URI)
     driver = GraphDatabase.driver(CLONE_URI, auth=("neo4j", CLONE_PASSWORD))
     corpus = Neo4jCorpusReader(driver)
     generator_model = args.generator_model

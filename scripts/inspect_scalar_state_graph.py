@@ -21,8 +21,15 @@ per-episode body dump, which is unreadable past a couple hundred episodes.
 from __future__ import annotations
 
 import argparse
+import sys
+from pathlib import Path
 
 from neo4j import GraphDatabase
+
+_BENCH_ROOT = Path(__file__).resolve().parents[1]
+if str(_BENCH_ROOT) not in sys.path:
+    sys.path.insert(0, str(_BENCH_ROOT))
+from archolith_bench.harness.scalar_bolt import assert_not_prod  # noqa: E402
 
 
 def _parse_args() -> argparse.Namespace:
@@ -38,6 +45,7 @@ def _parse_args() -> argparse.Namespace:
 def main() -> None:
     args = _parse_args()
     URI, PW = args.uri, args.password
+    assert_not_prod(URI)
     driver = GraphDatabase.driver(URI, auth=("neo4j", PW))
     with driver.session(database="neo4j") as s:
         # discover the namespace(s)

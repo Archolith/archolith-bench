@@ -32,8 +32,13 @@ Modes:  MODE=floor  (Neo4j + dataset)   |   MODE=delivered (+ MENHIR_URL)   |   
 Env: LME_BOLT, LME_NEO4J_PW, LME_NS_PREFIX, LME_ENTROPY_PER_TYPE, LME_ENTROPY_K, MENHIR_URL,
      LME_ENTROPY_OUT (rows json), LME_ENTROPY_TYPES (comma; default all 6).
 """
-import os, re, json, glob, statistics, collections
+import os, re, json, glob, statistics, collections, sys
 from neo4j import GraphDatabase
+
+_BENCH_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+if _BENCH_ROOT not in sys.path:
+    sys.path.insert(0, _BENCH_ROOT)
+from archolith_bench.harness.scalar_bolt import assert_not_prod  # noqa: E402
 
 try:
     import tiktoken; _ENC = tiktoken.get_encoding("cl100k_base")
@@ -45,6 +50,7 @@ MODE = os.getenv("MODE", "floor")
 BOLT = os.getenv("LME_BOLT", "bolt://localhost:7689")
 if not BOLT.startswith("bolt://"):
     BOLT = f"bolt://localhost:{BOLT}"
+assert_not_prod(BOLT)
 PW = os.getenv("LME_NEO4J_PW", "lmedata123")
 PREFIX = os.getenv("LME_NS_PREFIX", "lme-")
 PER = int(os.getenv("LME_ENTROPY_PER_TYPE", "15"))

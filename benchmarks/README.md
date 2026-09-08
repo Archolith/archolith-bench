@@ -52,6 +52,12 @@ Setting `public_copy_allowed: true` requires a real `commit`, a real `run_date`,
 `source_tracked: true`. A public claim cannot rest on data that is not in the repository.
 Anything short of that is an error, not a warning.
 
+"Real" is checked, not taken at your word. The validator asks git whether the `commit`
+exists and whether `source` names a tracked path, and rejects a `run_date` in the future.
+When a declaration fails verification it is an error for `public_copy_allowed: true` and a
+warning otherwise -- artifacts predating this convention are reported, not broken. If git
+cannot answer at all, that counts as unverified: still disqualifying for public copy.
+
 `README.md` and `RUNBOOK-*.md` are documentation, not evidence, and are exempt.
 
 Check your artifact before committing it:

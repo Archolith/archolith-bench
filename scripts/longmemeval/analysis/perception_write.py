@@ -36,7 +36,15 @@ from menhir.services.perception import Episode, perceive_and_fold  # noqa: E402
 import entropy  # noqa: E402  (dataset loader — same slice as the sweeps)
 import perception_tune as pt  # noqa: E402  (key loading, LLM/embed seams, slice filter, 429 stop)
 
+_BENCH_ROOT = os.path.abspath(os.path.join(_HERE, "..", "..", ".."))
+if _BENCH_ROOT not in sys.path:
+    sys.path.insert(0, _BENCH_ROOT)
+from archolith_bench.harness.scalar_bolt import assert_not_prod  # noqa: E402
+
 BOLT = os.getenv("LME_BOLT", "bolt://localhost:7689")
+if not BOLT.startswith("bolt://"):
+    BOLT = f"bolt://localhost:{BOLT}"
+assert_not_prod(BOLT)
 PW = os.getenv("LME_NEO4J_PW", "lmedata123")
 MODEL = os.getenv("PC_MODEL", "gpt-4o-mini")
 TEMP = float(os.getenv("PC_TEMP", "0.7"))

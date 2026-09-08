@@ -25,6 +25,20 @@ from archolith_bench.core.evidence_policy import (
     validate_policy,
 )
 
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _head_commit() -> str:
+    """HEAD of this repo -- a commit that provably exists, for honest-path tests."""
+    out = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=str(REPO_ROOT), capture_output=True, text=True, timeout=10,
+    )
+    if out.returncode != 0:
+        pytest.skip("git unavailable")
+    return out.stdout.strip()
+
+
 COMPLETE_MD = """# Example Evidence
 
 <!-- archolith-evidence
@@ -463,6 +477,92 @@ class TestMarkdownEvidence:
         assert not is_markdown_evidence(Path("benchmarks/README.md"))
         assert not is_markdown_evidence(Path("benchmarks/RUNBOOK-anything.md"))
         assert is_markdown_evidence(Path("benchmarks/filter-2026-05-30.md"))
+
+
+class TestProvenanceIsVerifiedNotDeclared:
+    """Provenance must be checked against git, not taken at its word.
+
+    Before this, a block reading `commit: deadbeef`, `run_date: 2099-12-31`,
+    `source: does-not-exist.json`, `source_tracked: true` and
+    `public_copy_allowed: true` validated clean with zero warnings -- the
+    validator only checked that the values were well-formed. That is precisely
+    the input this gate exists to stop reaching public copy.
+    """
+
+    FABRICATED = """# Totally Real Results
+
+<!-- archolith-evidence
+product: menhir
+command: archolith-bench menhir r1
+commit: deadbeef
+run_date: 2099-12-31
+source: benchmarks/this-file-does-not-exist.json
+source_tracked: true
+public_copy_allowed: true
+-->
+
+Menhir improves recall by 99%.
+"""
+
+    def _write(self, tmp_path, body, name="e.md"):
+        p = tmp_path / name
+        p.write_text(body, encoding="utf-8")
+        return p
+
+    def test_fabricated_public_block_is_rejected(self, tmp_path):
+        p = self._write(tmp_path, self.FABRICATED)
+        r = validate_markdown_evidence(p, repo_root=REPO_ROOT)
+        assert not r.ok
+        codes = {e.code for e in r.errors}
+        assert "future_run_date" in codes
+        assert "unverifiable_commit" in codes
+        assert "untracked_source" in codes
+
+    def test_nonexistent_commit_is_rejected_for_public_copy(self, tmp_path):
+        body = self.FABRICATED.replace("run_date: 2099-12-31", "run_date: 2026-01-02")
+        body = body.replace(
+            "source: benchmarks/this-file-does-not-exist.json",
+            "source: archolith_bench/core/evidence_policy.py")
+        p = self._write(tmp_path, body)
+        r = validate_markdown_evidence(p, repo_root=REPO_ROOT)
+        assert not r.ok
+        assert any(e.code == "unverifiable_commit" for e in r.errors)
+
+    def test_source_tracked_lie_is_rejected_for_public_copy(self, tmp_path):
+        body = self.FABRICATED.replace("run_date: 2099-12-31", "run_date: 2026-01-02")
+        body = body.replace("commit: deadbeef", f"commit: {_head_commit()}")
+        p = self._write(tmp_path, body)
+        r = validate_markdown_evidence(p, repo_root=REPO_ROOT)
+        assert not r.ok
+        assert any(e.code == "untracked_source" for e in r.errors)
+
+    def test_honest_public_block_still_passes(self, tmp_path):
+        body = self.FABRICATED.replace("run_date: 2099-12-31", "run_date: 2026-01-02")
+        body = body.replace("commit: deadbeef", f"commit: {_head_commit()}")
+        body = body.replace(
+            "source: benchmarks/this-file-does-not-exist.json",
+            "source: archolith_bench/core/evidence_policy.py")
+        p = self._write(tmp_path, body)
+        r = validate_markdown_evidence(p, repo_root=REPO_ROOT)
+        assert r.ok, [e.message for e in r.errors]
+
+    def test_failed_verification_is_only_a_warning_when_not_public(self, tmp_path):
+        """Historical internal artifacts predate the convention: report, do not break."""
+        body = self.FABRICATED.replace("run_date: 2099-12-31", "run_date: 2026-01-02")
+        body = body.replace("public_copy_allowed: true", "public_copy_allowed: false")
+        p = self._write(tmp_path, body)
+        r = validate_markdown_evidence(p, repo_root=REPO_ROOT)
+        assert r.ok, [e.message for e in r.errors]
+        codes = {w.code for w in r.warnings}
+        assert "unverifiable_commit" in codes
+        assert "untracked_source" in codes
+
+    def test_future_run_date_is_an_error_even_when_not_public(self, tmp_path):
+        body = self.FABRICATED.replace("public_copy_allowed: true", "public_copy_allowed: false")
+        p = self._write(tmp_path, body)
+        r = validate_markdown_evidence(p, repo_root=REPO_ROOT)
+        assert not r.ok
+        assert any(e.code == "future_run_date" for e in r.errors)
 
 
 class TestRepoEvidenceStaysCompliant:

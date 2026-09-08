@@ -1028,6 +1028,11 @@ def main(argv: list[str] | None = None) -> int:
         done_ids = {m["question_id"] for m in manifest}
         print(f"RESUME: {len(done_ids)} items already ingested (skipping them)", flush=True)
 
+    # This path resets namespaces and ingests. Guarded at construction so a
+    # mistyped --menhir-url cannot write into a real instance.
+    from archolith_bench.harness.memory_ab import assert_not_production
+
+    assert_not_production(args.menhir_url)
     client = HttpMenhirClient(args.menhir_url)
     admin = httpx.Client(timeout=120.0)
     t_all = time.time()
