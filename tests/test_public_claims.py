@@ -201,6 +201,68 @@ class TestScanPublicClaims:
         assert any("75%" in t for t in unapproved_texts)
         assert any("80%" in t for t in unapproved_texts)
 
+    def _headline_none(self, tmp_path):
+        hl = tmp_path / "HEADLINE-NUMBERS.md"
+        hl.write_text(
+            "## Active Headline Numbers\n| Product | Claim |\n"
+            "|---------|-------|\n| _none_ | _none_ |\n"
+        )
+        return hl
+
+    def test_ignore_next_line_before_ignore_start_does_not_swallow_it(self, tmp_path):
+        """F14: the block marker was consumed, leaving the whole block scanned."""
+        hl = self._headline_none(tmp_path)
+        readme = tmp_path / "README.md"
+        readme.write_text(
+            "<!-- archolith-claim-scan: ignore-next-line -->\n"
+            "<!-- archolith-claim-scan: ignore-start -->\n"
+            "This block has a 95% claim.\n"
+            "<!-- archolith-claim-scan: ignore-end -->\n"
+            "Unapproved 85% claim.\n"
+        )
+        result = scan_public_claims(hl, [readme])
+        texts = [c.text for c in result.unapproved_claims]
+        assert not any("95%" in t for t in texts), texts
+        assert any("85%" in t for t in texts), texts
+
+    def test_consecutive_ignore_next_line_pragmas_chain(self, tmp_path):
+        """F14: two in a row used to cancel each other and expose the claim."""
+        hl = self._headline_none(tmp_path)
+        readme = tmp_path / "README.md"
+        readme.write_text(
+            "<!-- archolith-claim-scan: ignore-next-line -->\n"
+            "<!-- archolith-claim-scan: ignore-next-line -->\n"
+            "This line has a 95% claim.\n"
+        )
+        result = scan_public_claims(hl, [readme])
+        assert not any("95%" in c.text for c in result.unapproved_claims)
+
+    def test_pragma_on_the_claim_line_is_recorded_not_vanished(self, tmp_path):
+        """F15: it suppressed the claim from BOTH lists, so nothing audited it."""
+        hl = self._headline_none(tmp_path)
+        readme = tmp_path / "README.md"
+        readme.write_text(
+            "A 95% claim. <!-- archolith-claim-scan: ignore-next-line -->\n"
+        )
+        result = scan_public_claims(hl, [readme])
+        assert not any("95%" in c.text for c in result.unapproved_claims)
+        assert any("95%" in c.text for c in result.ignored_claims), \
+            "a suppression with no audit record is invisible"
+
+    def test_pragma_then_blank_line_records_no_phantom_entry(self, tmp_path):
+        """F14: a blank covered line logged an ignored claim with empty text."""
+        hl = self._headline_none(tmp_path)
+        readme = tmp_path / "README.md"
+        readme.write_text(
+            "<!-- archolith-claim-scan: ignore-next-line -->\n"
+            "\n"
+            "Unapproved 85% claim.\n"
+        )
+        result = scan_public_claims(hl, [readme])
+        assert not any(c.text.strip() == "" for c in result.ignored_claims)
+        # The pragma covers exactly one line, so the real claim still reports.
+        assert any("85%" in c.text for c in result.unapproved_claims)
+
     def test_ignore_start_end_suppresses_block(self, tmp_path):
         hl = tmp_path / "HEADLINE-NUMBERS.md"
         hl.write_text("## Active Headline Numbers\n| Product | Claim |\n|---------|-------|\n| _none_ | _none_ |\n")

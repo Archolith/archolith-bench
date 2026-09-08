@@ -53,6 +53,13 @@ DEFAULT_SCAN_PATHS: tuple[str, ...] = (
     "README.md",
     "BENCHMARKS.md",
     "docs/",
+    # Public-facing prose that carries figures and already writes ignore-*
+    # pragmas. Outside the scan those pragmas were decorative: they suppressed
+    # nothing, because nothing looked.
+    "METHODOLOGY.md",
+    # The card file only. `corpora/` itself is raw benchmark INPUT -- captured
+    # pytest output and diffs, full of percentages that are data, not claims.
+    "corpora/CORPUS-CARDS.md",
 )
 
 DEFAULT_EXCLUDES: tuple[str, ...] = (
@@ -151,38 +158,43 @@ def scan_file_for_claims(path: Path) -> list[DetectedClaim]:
     for i, line in enumerate(lines):
         stripped = line.strip()
 
-        # Set by the previous line's ignore-next-line pragma. Must be consumed
-        # before any detection below, and cleared even when the line is blank
-        # or holds no claim, so the pragma covers exactly one line.
-        if skip_this_line:
-            skip_this_line = False
-            detected.append(DetectedClaim(
-                path=str(path), line=i + 1,
-                text=stripped,
-                reason="ignored (archolith-claim-scan: ignore-next-line)",
-            ))
-            continue
+        # Consumed here, but it does not short-circuit the pragma handling
+        # below: an ignore-next-line sitting immediately above an ignore-start
+        # used to swallow the block marker, leaving the whole block scanned.
+        covered_by_previous = skip_this_line
+        skip_this_line = False
 
-        if _IGNORE_START_RE.search(stripped):
+        is_start = bool(_IGNORE_START_RE.search(stripped))
+        is_end = bool(_IGNORE_END_RE.search(stripped))
+        is_next = bool(_IGNORE_NEXT_LINE_RE.search(stripped))
+
+        was_in_block = ignore_block
+        if is_start:
             ignore_block = True
-            continue
-        if _IGNORE_END_RE.search(stripped):
+        if is_end:
             ignore_block = False
-            continue
-
-        if ignore_block:
-            continue
-
-        if _IGNORE_NEXT_LINE_RE.search(stripped):
+        if is_next:
+            # Re-armed even on a line the previous pragma covered, so
+            # consecutive ignore-next-line pragmas chain instead of cancelling.
             skip_this_line = True
-            continue
 
-        claims = _detect_claims_in_line(line)
-        for claim_text in claims:
+        if covered_by_previous:
+            reason = "ignored (archolith-claim-scan: ignore-next-line)"
+        elif is_start or is_end or is_next:
+            # A pragma sharing a line with a claim used to drop that claim from
+            # BOTH lists, making the suppression invisible. Suppressions have to
+            # stay auditable, so it is recorded rather than discarded.
+            reason = "ignored (archolith-claim-scan: pragma on claim line)"
+        elif was_in_block:
+            reason = "ignored (archolith-claim-scan: ignore-start/ignore-end block)"
+        else:
+            reason = ""
+
+        for claim_text in _detect_claims_in_line(line):
             detected.append(DetectedClaim(
                 path=str(path), line=i + 1,
                 text=claim_text,
-                reason="potential benchmark/statistic claim",
+                reason=reason or "potential benchmark/statistic claim",
             ))
 
     ignored = [c for c in detected if c.reason.startswith("ignored")]
