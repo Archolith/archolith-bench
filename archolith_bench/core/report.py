@@ -264,9 +264,102 @@ def write_benchmarks_md(results_dir: Path, out_path: Path) -> None:
         "until tracked evidence is added under `benchmarks/`.*\n"
     )
 
+    # ---- Evidence status ----
+    lines.extend(_evidence_status_section(out_path.parent))
+
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as f:
         f.writelines(lines)
+
+
+def _group_by_artifact(issues: list) -> dict[str, list[str]]:
+    """Collapse issues to one line per artifact.
+
+    A file missing every schema field otherwise emits a bullet per field, which
+    buries the artifacts that have a single real problem.
+    """
+    grouped: dict[str, list[str]] = {}
+    missing_fields: dict[str, list[str]] = {}
+
+    for issue in issues:
+        name = Path(issue.path).name
+        if issue.code == "missing_field":
+            field_name = issue.message.rsplit("field ", 1)[-1].split(" ")[0].strip("'\"")
+            missing_fields.setdefault(name, []).append(field_name)
+        else:
+            grouped.setdefault(name, []).append(issue.message)
+
+    for name, fields in missing_fields.items():
+        grouped.setdefault(name, []).insert(
+            0, f"missing {len(fields)} required field(s): {', '.join(fields)}"
+        )
+    return dict(sorted(grouped.items()))
+
+
+def _evidence_status_section(repo_root: Path) -> list[str]:
+    """Render the evidence policy's findings.
+
+    Deliberately renders rather than recomputes: staleness and eligibility are
+    decided by ``core.evidence_policy`` so this report and
+    ``scripts/check_evidence_policy.py`` can never disagree about which
+    artifacts are quotable.
+    """
+    from archolith_bench.core.evidence_policy import (
+        is_markdown_evidence,
+        validate_policy,
+    )
+
+    headline = repo_root / "HEADLINE-NUMBERS.md"
+    bench_dir = repo_root / "benchmarks"
+    lines = ["\n## Evidence Status\n"]
+
+    if not headline.exists() or not bench_dir.is_dir():
+        lines.append(
+            "*Evidence policy not evaluated: `HEADLINE-NUMBERS.md` or `benchmarks/` "
+            "not found relative to this report.*\n"
+        )
+        return lines
+
+    paths = [
+        p for p in sorted(bench_dir.glob("*"))
+        if p.suffix.lower() == ".json"
+        or (p.suffix.lower() == ".md" and is_markdown_evidence(p))
+    ]
+    result = validate_policy(headline, paths)
+    summary = result.summary
+
+    verdict = "PASS" if result.ok else "FAIL"
+    lines.append(
+        f"\nEvidence policy: **{verdict}** - "
+        f"{summary.get('evidence_files_checked', 0)} artifact(s) checked, "
+        f"{summary.get('public_copy_allowed', 0)} cleared for public copy, "
+        f"{summary.get('headline_active_claims', 0)} active headline claim(s).\n"
+    )
+
+    if result.errors:
+        lines.append("\n**Errors - these artifacts fail the evidence policy:**\n\n")
+        for name, msgs in _group_by_artifact(result.errors).items():
+            lines.append(f"- `{name}`: {'; '.join(msgs)}\n")
+
+    stale = [w for w in result.warnings if w.code in
+             ("incomplete_provenance", "untracked_raw_source", "missing_field")]
+    if stale:
+        lines.append(
+            "\n**Stale or incomplete evidence** - valid, but not promotable to a "
+            "headline claim as written:\n\n"
+        )
+        for name, msgs in _group_by_artifact(stale).items():
+            lines.append(f"- `{name}`: {'; '.join(msgs)}\n")
+
+    if not result.errors and not stale:
+        lines.append("\nAll tracked evidence carries complete provenance.\n")
+
+    lines.append(
+        "\n*Regenerate the artifact index with "
+        "`python scripts/check_evidence_policy.py --evidence-dir benchmarks/ "
+        "--manifest benchmarks/evidence-manifest.md`.*\n"
+    )
+    return lines
 
 
 def _load_json(path: Path) -> dict:
