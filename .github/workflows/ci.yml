@@ -84,6 +84,15 @@ jobs:
           repository: Archolith/menhir
           path: .menhir-src
 
+      # The bench loaders import menhir's pure-domain and service modules by path.
+      # Those modules need three of menhir's runtime deps at import time; the other
+      # twelve (graphiti-core, neo4j, fastmcp, ...) are never reached, so this
+      # installs the three rather than the whole dependency set. If a future menhir
+      # change adds an import to these modules, the suite fails loudly with a
+      # ModuleNotFoundError naming the missing package -- add it here.
+      - name: Install menhir import-time deps (subset)
+        run: python -m pip install openai httpx pydantic
+
       # The R3/R5 ladder benches import menhir as a MODULE at import time; that
       # still requires menhir on sys.path, which this checkout deliberately does
       # not do, so tests/conftest.py continues to skip them. This runs the offline
