@@ -6,7 +6,7 @@ command: archolith-bench harness menhir-phase3
 commit: unknown
 run_date: 2026-07-07
 source: offline scenario suite (fixtures)
-source_tracked: true
+source_tracked: false
 public_copy_allowed: false
 note: Consumer-pipeline validation, not a proxy A/B and not a model score.
 -->

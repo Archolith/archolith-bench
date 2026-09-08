@@ -95,7 +95,7 @@ class TestEvidenceStatusSection:
         root = self._repo(tmp_path, {
             "good.md": COMPLETE_MD,
             "README.md": "# Docs\n",
-            "RUNBOOK-x.md": "# Runbook\n",
+            "RUNBOOK-scalar-state-e2e.md": "# Runbook\n",
         })
         out = "".join(_evidence_status_section(root))
         assert "1 artifact(s) checked" in out

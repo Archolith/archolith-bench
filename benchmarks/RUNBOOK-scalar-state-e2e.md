@@ -17,7 +17,10 @@ consolidation interval; it ingests episodes, waits for a tick to materialize the
 ## Safety rules (non-negotiable)
 
 - **Never touch the real menhir on `:8090`** or the real (prod) menhir Neo4j on **bolt `:7687`**. Use a
-  throwaway only. The harness `ScalarBoltReader` refuses any bolt URI on port 7687 or the known prod host.
+  throwaway only. Every bolt and menhir target is checked at client construction against an
+  allow-list: loopback hosts only, on an allow-listed port, with 7687 and 8090 reserved so no
+  opt-in can reach them. The port is the one a driver would actually dial, so `bolt://localhost`
+  (no port written) is refused as 7687.
 - Activation is fresh-only: `activate_scalar_state()` refuses a store with legacy/unstamped nodes. The
   script below uses a FRESH ephemeral Neo4j (no named volume) so every run is a clean store.
 

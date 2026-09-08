@@ -544,10 +544,14 @@ def _cross_check_evidence_against_headline(
         if row_product != product:
             continue
 
+        # Each candidate must be non-empty to count. Markdown blocks carry no
+        # `title`, and `"" in row_source` is always True -- which made this
+        # check pass on every row that merely shared a product, so a public
+        # artifact was never actually tied to a specific headline claim.
         source_match = (
-            title in row_source
-            or command in row_source
-            or path_str in row_source
+            bool(title) and title in row_source
+            or bool(command) and command in row_source
+            or bool(path_str) and path_str in row_source
         )
         if not source_match:
             # Also check if claim text overlaps with title
@@ -577,8 +581,16 @@ def _cross_check_evidence_against_headline(
 # evidence-manifest.md is the generated index of this directory: it describes
 # the evidence rather than being evidence, so it does not carry a block of its
 # own (and must not, or generating it would invalidate it).
-MD_NON_EVIDENCE: tuple[str, ...] = ("README.md", "evidence-manifest.md")
-MD_NON_EVIDENCE_PREFIXES: tuple[str, ...] = ("RUNBOOK-",)
+# Documentation, not evidence. This is an explicit roster, not a naming rule:
+# a `RUNBOOK-` prefix used to exempt a file from the entire policy, so renaming
+# an artifact was enough to bypass it. Adding a genuinely new document here is a
+# visible, reviewable edit; naming a file cleverly no longer is.
+MD_NON_EVIDENCE: frozenset[str] = frozenset({
+    "README.md",
+    "evidence-manifest.md",
+    "RUNBOOK-phase3-live-characterization.md",
+    "RUNBOOK-scalar-state-e2e.md",
+})
 
 # Every Markdown evidence artifact must carry this block. It is an HTML comment
 # so it does not render, and it is required rather than optional: evidence whose
@@ -617,16 +629,39 @@ _FALSE_VALUES = {"false", "no"}
 
 
 def is_markdown_evidence(path: Path) -> bool:
-    """Whether a .md file under benchmarks/ is an evidence artifact."""
-    name = path.name
-    if name in MD_NON_EVIDENCE:
-        return False
-    return not any(name.startswith(p) for p in MD_NON_EVIDENCE_PREFIXES)
+    """Whether a .md file under benchmarks/ is an evidence artifact.
+
+    Exemption is by explicit roster. Anything else in the directory is evidence
+    and must carry the block, so a new file cannot opt itself out by its name.
+    """
+    return path.name not in MD_NON_EVIDENCE
+
+
+_FENCE_RE = re.compile(r"^[ \t]*(?:```|~~~).*?^[ \t]*(?:```|~~~)[ \t]*$", re.DOTALL | re.MULTILINE)
+
+
+def strip_code_fences(text: str) -> str:
+    """Blank out fenced code blocks, preserving line count.
+
+    A documentation page that *shows* an example block must not be read as
+    carrying one. Newlines are kept so any offset reported against the result
+    still lines up with the original file.
+    """
+    return _FENCE_RE.sub(lambda m: re.sub(r"[^\n]", "", m.group(0)), text)
+
+
+def count_md_evidence_blocks(text: str) -> int:
+    """How many real (non-fenced) evidence blocks the document carries."""
+    return len(MD_EVIDENCE_BLOCK_RE.findall(strip_code_fences(text)))
 
 
 def parse_md_evidence_block(text: str) -> dict[str, str] | None:
-    """Parse the ``archolith-evidence`` block, or None when absent."""
-    m = MD_EVIDENCE_BLOCK_RE.search(text)
+    """Parse the ``archolith-evidence`` block, or None when absent.
+
+    Blocks inside fenced code samples are ignored: they are documentation of
+    the format, not a declaration about the file that contains them.
+    """
+    m = MD_EVIDENCE_BLOCK_RE.search(strip_code_fences(text))
     if not m:
         return None
     meta: dict[str, str] = {}
@@ -689,6 +724,17 @@ def validate_markdown_evidence(
         return result
 
     result.summary["metadata_keys"] = sorted(meta)
+
+    # Two blocks means two conflicting provenance claims and no way to tell
+    # which one describes the numbers. Silently taking the first is how a
+    # stale block outlives a corrected one.
+    block_count = count_md_evidence_blocks(text)
+    if block_count > 1:
+        result.ok = False
+        result.errors.append(_make_error(
+            "ambiguous_evidence_block", str(artifact_path),
+            f"{block_count} archolith-evidence blocks found; exactly one is allowed",
+        ))
 
     for key in MD_REQUIRED_EVIDENCE_KEYS:
         if not meta.get(key, "").strip():
@@ -913,10 +959,19 @@ def _manifest_row(path: Path) -> dict[str, str]:
             meta = {}
 
     def cell(key: str) -> str:
+        """One table cell, safe to inline in a Markdown row.
+
+        JSON string values are arbitrary: a newline splits the row and corrupts
+        every row below it, and a backtick closes the code span the Command
+        column opens. Markdown values cannot contain newlines (the key/value
+        regex is line-anchored), but JSON ones can.
+        """
         value = meta.get(key)
         if value is None or (isinstance(value, str) and not value.strip()):
             return "-"
-        return str(value).strip().replace("|", "\\|")
+        text = str(value).strip()
+        text = text.replace("\r\n", " ").replace("\r", " ").replace("\n", " ")
+        return text.replace("|", "\\|").replace("`", "'")
 
     if not result.ok:
         status = "INVALID"

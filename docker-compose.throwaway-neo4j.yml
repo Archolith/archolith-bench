@@ -18,9 +18,9 @@ services:
     image: neo4j:5.26-community
     container_name: archolith-bench-neo4j-throwaway
     ports:
-      # Defaults match the harness (--neo4j-uri bolt://localhost:7688). Override
-      # only to run beside an existing throwaway; the 7687 refusal is enforced
-      # client-side on the bolt URI, so it holds whatever port you publish on.
+      # Defaults match the harness (--neo4j-uri bolt://localhost:7688). Ports are
+      # allow-listed client-side, so publishing on an unlisted port needs
+      # ARCHOLITH_BENCH_ALLOW_PORTS=<port>. 7687 is reserved and cannot be opted in.
       - "127.0.0.1:${BENCH_NEO4J_BOLT_PORT:-7688}:7687"
       - "127.0.0.1:${BENCH_NEO4J_HTTP_PORT:-7475}:7474"
     environment:

@@ -22,8 +22,12 @@ import os
 from urllib.parse import urlsplit
 
 # Loopback only. A throwaway reachable from another machine is not a throwaway.
+# 0.0.0.0 is deliberately absent: it is the wildcard/unspecified address, not a
+# loopback destination. Connecting to it happens to reach localhost on Windows
+# and Linux, but that is platform behaviour, and the IPv6 wildcard `::` was
+# never listed anyway -- so the set now means what its name says.
 LOOPBACK_HOSTS: frozenset[str] = frozenset({
-    "localhost", "127.0.0.1", "::1", "0.0.0.0",
+    "localhost", "127.0.0.1", "::1",
 })
 
 ALLOW_HOSTS_ENV = "ARCHOLITH_BENCH_ALLOW_HOSTS"
@@ -147,9 +151,12 @@ def assert_allowed_target(uri: str, *, what: str = "target") -> None:
             f"Use an explicit URL such as http://localhost:8098."
         )
 
-    lowered = (uri or "").lower()
+    # Matched against the HOST, not the whole URI. Against the whole string a
+    # benign path like /api/production-notes or a database named `prod` was
+    # refused, and these are name markers about the host in the first place.
+    # Production itself is stopped by the host allow-list below, not here.
     for marker in PROD_NAME_MARKERS:
-        if marker in lowered:
+        if marker in host:
             raise TargetRefused(
                 f"{what} {uri!r} contains the production marker {marker!r}; refusing "
                 f"even if the host is allow-listed."

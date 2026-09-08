@@ -18,7 +18,9 @@ from archolith_bench.core.evidence_policy import (
     _parse_headline_table,
     MANIFEST_COLUMNS,
     build_evidence_manifest,
+    count_md_evidence_blocks,
     is_markdown_evidence,
+    parse_md_evidence_block,
     validate_evidence_artifact,
     validate_headline_numbers,
     validate_markdown_evidence,
@@ -475,7 +477,7 @@ class TestMarkdownEvidence:
 
     def test_readme_and_runbook_are_not_evidence(self):
         assert not is_markdown_evidence(Path("benchmarks/README.md"))
-        assert not is_markdown_evidence(Path("benchmarks/RUNBOOK-anything.md"))
+        assert not is_markdown_evidence(Path("benchmarks/RUNBOOK-scalar-state-e2e.md"))
         assert is_markdown_evidence(Path("benchmarks/filter-2026-05-30.md"))
 
 
@@ -565,6 +567,96 @@ Menhir improves recall by 99%.
         assert any(e.code == "future_run_date" for e in r.errors)
 
 
+class TestPolicyCannotBeBypassed:
+    """Each of these was a live bypass or corruption found in review."""
+
+    FENCED_ONLY = (
+        "# How to stamp evidence\n"
+        "\n"
+        "```\n"
+        "<!-- archolith-evidence\n"
+        "product: example\n"
+        "commit: deadbeef\n"
+        "-->\n"
+        "```\n"
+    )
+
+    REAL_PLUS_SAMPLE = (
+        "<!-- archolith-evidence\n"
+        "product: real\n"
+        "-->\n"
+        "\n"
+        "```\n"
+        "<!-- archolith-evidence\n"
+        "product: sample\n"
+        "-->\n"
+        "```\n"
+    )
+
+    @staticmethod
+    def _block(product: str) -> str:
+        return (
+            "<!-- archolith-evidence\n"
+            f"product: {product}\n"
+            "command: c\n"
+            "commit: unknown\n"
+            "run_date: unknown\n"
+            "source: s\n"
+            "source_tracked: false\n"
+            "public_copy_allowed: false\n"
+            "-->\n"
+        )
+
+    def test_block_inside_a_code_fence_is_not_provenance(self):
+        """F4: a doc that SHOWS the format must not be read as declaring it."""
+        assert parse_md_evidence_block(self.FENCED_ONLY) is None
+        assert count_md_evidence_blocks(self.FENCED_ONLY) == 0
+
+    def test_real_block_still_parses_alongside_a_fenced_sample(self):
+        meta = parse_md_evidence_block(self.REAL_PLUS_SAMPLE)
+        assert meta is not None and meta["product"] == "real"
+        assert count_md_evidence_blocks(self.REAL_PLUS_SAMPLE) == 1
+
+    def test_two_blocks_are_ambiguous_not_first_wins(self, tmp_path):
+        """F4: silently taking the first is how a stale block outlives a fix."""
+        p = tmp_path / "e.md"
+        p.write_text(self._block("a") + "\n" + self._block("b"), encoding="utf-8")
+        r = validate_markdown_evidence(p, repo_root=REPO_ROOT)
+        assert not r.ok
+        assert any(e.code == "ambiguous_evidence_block" for e in r.errors)
+
+    def test_an_unlisted_runbook_name_does_not_exempt_itself(self):
+        """F5: exemption is a roster, so renaming cannot opt out of the policy."""
+        assert is_markdown_evidence(Path("benchmarks/RUNBOOK-my-new-evidence.md"))
+        assert not is_markdown_evidence(Path("benchmarks/RUNBOOK-scalar-state-e2e.md"))
+
+    def test_manifest_cell_survives_newlines_and_backticks(self, tmp_path):
+        """F13: a newline split the row and corrupted every row below it."""
+        art = {
+            "title": "t",
+            "command": "cmd `with` backtick",
+            "commit": "aaaaaaa",
+            "product": "line1\nline2",
+            "ability": "a",
+            "fixture_or_live_source": "s",
+            "model_provider": "m",
+            "environment_caveats": [],
+            "metric_rows": [],
+            "artifact": {},
+            "public_copy_allowed": False,
+        }
+        p = tmp_path / "hostile.json"
+        p.write_text(json.dumps(art), encoding="utf-8")
+        out = build_evidence_manifest([p])
+        rows = [ln for ln in out.splitlines() if ln.startswith("| hostile.json")]
+        assert len(rows) == 1, "row must not split across lines"
+        # The Command column is wrapped in a code span, so exactly two
+        # backticks are expected: its delimiters. A third would close the span
+        # early and spill raw text into the table.
+        assert rows[0].count("`") == 2, f"unbalanced code span: {rows[0]}"
+        assert "line1 line2" in rows[0], "the embedded newline must be flattened"
+
+
 class TestRepoEvidenceStaysCompliant:
     """Guards the convention against new unstamped artifacts landing in benchmarks/."""
 
@@ -600,7 +692,7 @@ class TestEvidenceManifest:
 
     def test_manifest_skips_documentation(self, tmp_path):
         (tmp_path / "README.md").write_text("# Docs\n", encoding="utf-8")
-        (tmp_path / "RUNBOOK-x.md").write_text("# Runbook\n", encoding="utf-8")
+        (tmp_path / "RUNBOOK-scalar-state-e2e.md").write_text("# Runbook\n", encoding="utf-8")
         (tmp_path / "evidence-manifest.md").write_text("# Manifest\n", encoding="utf-8")
         out = build_evidence_manifest(list(tmp_path.glob("*.md")))
         assert "0 artifact(s) indexed" in out

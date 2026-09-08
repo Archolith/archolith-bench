@@ -12,7 +12,10 @@ from ..core.evidence import EvidenceRecord, current_commit, publish_evidence
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 FIXTURES = REPO_ROOT / "fixtures"
-MENHIR_FRONTIER_SRC = REPO_ROOT.parent / "menhir-frontier" / "src"
+# The menhir package moved out of a separate menhir-frontier checkout; that
+# directory no longer exists, which silently made the r3 and r5 ladders
+# unrunnable (ModuleNotFoundError: No module named 'menhir').
+MENHIR_FRONTIER_SRC = REPO_ROOT.parent / "menhir" / "src"
 
 
 def ensure_menhir_frontier_path() -> None:
