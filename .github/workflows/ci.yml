@@ -4,6 +4,11 @@ on:
   push:
     branches: ["**"]
   pull_request:
+  # Weekly drift check against menhir main -- see the menhir-canary job. Scheduled
+  # runs only ever fire on the default branch, which is what we want here.
+  schedule:
+    - cron: "0 12 * * 1"
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -110,6 +115,60 @@ jobs:
       # bench mechanism suite (metrics, ranking ladders, fixture validators,
       # cost/token models) plus the audit/filter smoke test.
       - name: Run offline bench suite
+        env:
+          MENHIR_ROOT: ${{ github.workspace }}/.menhir-src
+        run: python -m pytest tests/ -q
+
+  # Drift canary: the same suite, but against menhir's CURRENT main instead of the
+  # pinned ref the `test` job uses. Its purpose is to answer one question on a
+  # schedule -- "has menhir moved in a way that invalidates a bench expectation?" --
+  # without letting that block anyone's push. The pinned job is the gate; this is
+  # the early warning.
+  #
+  # A failure here does NOT mean bench is broken. It means the pin is now behind a
+  # menhir change that moves a measured number, and bumping it (see the `ref:`
+  # comment in the test job) will require updating expectations in the same commit.
+  menhir-canary:
+    name: menhir drift canary (unpinned)
+    # Never on push or pull_request -- that is what pinning exists to prevent.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install sibling packages (git; public, not on PyPI)
+        run: |
+          python -m pip install "archolith-maintenance @ git+https://github.com/Archolith/archolith-maintenance.git"
+          python -m pip install "git+https://github.com/Archolith/archolith-filter.git"
+          python -m pip install "git+https://github.com/Archolith/archolith-mcp-audit.git"
+
+      - name: Install archolith-bench (editable, dev extras)
+        run: python -m pip install -e ".[dev]"
+
+      # Deliberately unpinned -- tracking menhir main is the entire point.
+      - name: Check out menhir (main, unpinned)
+        uses: actions/checkout@v4
+        with:
+          repository: Archolith/menhir
+          path: .menhir-src
+
+      - name: Install menhir import-time deps (subset)
+        run: python -m pip install openai httpx pydantic
+
+      # Names the commit under test, so a failure notification says which menhir
+      # revision moved the number rather than just "canary failed".
+      - name: Report menhir revision under test
+        run: |
+          cd .menhir-src
+          echo "menhir main @ $(git rev-parse HEAD)"
+          echo "  $(git log -1 --format='%ci  %s')"
+
+      - name: Run offline bench suite against menhir main
         env:
           MENHIR_ROOT: ${{ github.workspace }}/.menhir-src
         run: python -m pytest tests/ -q
