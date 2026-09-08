@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 from .arms import ARMS
+from .harness.presets import apply_preset, format_preset_list, get_preset
 from .core.api import API_KEY, DIRECT_URL, MODEL, PROXY_URL, check_proxy_health, send_chat
 from .core.display import print_cross_scenario_summary, print_four_way_table, print_summary
 from .core.metrics import PRICING_DEFAULTS, PricingModel
@@ -260,6 +261,11 @@ def main(argv: list[str] | None = None) -> None:
                            help="Benchmark id, e.g. longbench-v2 (omit with --list)")
     harness_p.add_argument("--list", action="store_true", dest="list_adapters",
                            help="List available harness adapters and exit")
+    harness_p.add_argument("--preset", default=None,
+                           help="Named smoke preset (see --list-presets). Sets benchmark id, "
+                                "subset, limit and arms; explicit flags still win.")
+    harness_p.add_argument("--list-presets", action="store_true", dest="list_presets",
+                           help="List available smoke presets and exit")
     harness_p.add_argument("--arms", default="direct,proxy_only,proxy_plus_filter",
                            help="Comma-separated experiment arms")
     harness_p.add_argument("--subset", default=None, help="Benchmark subset/domain filter")
@@ -485,6 +491,25 @@ def main(argv: list[str] | None = None) -> None:
     if not args.suite:
         parser.print_help()
         sys.exit(1)
+
+    # Presets are resolved here rather than in _run_harness because deciding
+    # whether a flag was passed explicitly needs the parser's defaults.
+    if args.suite == "harness":
+        if getattr(args, "list_presets", False):
+            print(format_preset_list())
+            return
+        if getattr(args, "preset", None):
+            try:
+                preset = get_preset(args.preset)
+            except KeyError as e:
+                print(f"ERROR: {e}", file=sys.stderr)
+                sys.exit(1)
+            applied = apply_preset(preset, args, harness_p)
+            print(f"Preset {preset.name}: {preset.description}")
+            if applied:
+                print(f"  set: {', '.join(applied)}")
+            if preset.requires:
+                print(f"  this preset still needs: {' '.join(preset.requires)}")
 
     if args.suite == "proxy":
         _run_proxy(args)
