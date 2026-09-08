@@ -146,9 +146,22 @@ def scan_file_for_claims(path: Path) -> list[DetectedClaim]:
     lines = text.splitlines()
     detected: list[DetectedClaim] = []
     ignore_block = False
+    skip_this_line = False
 
     for i, line in enumerate(lines):
         stripped = line.strip()
+
+        # Set by the previous line's ignore-next-line pragma. Must be consumed
+        # before any detection below, and cleared even when the line is blank
+        # or holds no claim, so the pragma covers exactly one line.
+        if skip_this_line:
+            skip_this_line = False
+            detected.append(DetectedClaim(
+                path=str(path), line=i + 1,
+                text=stripped,
+                reason="ignored (archolith-claim-scan: ignore-next-line)",
+            ))
+            continue
 
         if _IGNORE_START_RE.search(stripped):
             ignore_block = True
@@ -161,16 +174,7 @@ def scan_file_for_claims(path: Path) -> list[DetectedClaim]:
             continue
 
         if _IGNORE_NEXT_LINE_RE.search(stripped):
-            # Skip the next line by advancing the iterator
-            try:
-                next_line = lines[i + 1]
-                detected.append(DetectedClaim(
-                    path=str(path), line=i + 2,
-                    text=next_line.strip(),
-                    reason="ignored (archolith-claim-scan: ignore-next-line)",
-                ))
-            except IndexError:
-                pass
+            skip_this_line = True
             continue
 
         claims = _detect_claims_in_line(line)

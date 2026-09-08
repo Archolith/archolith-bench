@@ -187,13 +187,17 @@ class TestScanPublicClaims:
         readme.write_text(
             "This example says 75% but is not a public claim.\n"
             "<!-- archolith-claim-scan: ignore-next-line -->\n"
-            "This line has a 75% token savings claim.\n"
+            "This line has a 66% token savings claim.\n"
             "Unapproved 80% claim.\n"
         )
         result = scan_public_claims(hl, [readme])
-        # The 75% on the ignored line should not appear in unapproved
         unapproved_texts = [c.text for c in result.unapproved_claims]
-        # The first line also has 75% — that one is not ignored
+        # The pragma covers only the line after it: 66% is suppressed, while
+        # the 75% above it and the 80% below it are still reported. The
+        # percentages must stay distinct -- the earlier version of this test
+        # used 75% on both lines, so it passed whether or not the pragma
+        # suppressed anything.
+        assert not any("66%" in t for t in unapproved_texts)
         assert any("75%" in t for t in unapproved_texts)
         assert any("80%" in t for t in unapproved_texts)
 
