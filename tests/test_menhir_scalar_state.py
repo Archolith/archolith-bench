@@ -263,7 +263,39 @@ def test_assert_not_prod_refuses_prod(uri):
 
 @pytest.mark.parametrize(
     "uri",
-    ["bolt://localhost:7688", "bolt://192.168.86.33:7688", "neo4j://throwaway:7690"],
+    ["bolt://localhost:7688", "bolt://127.0.0.1:7688", "bolt://localhost:7690"],
 )
-def test_assert_not_prod_allows_throwaway(uri):
+def test_assert_not_prod_allows_loopback_throwaway(uri):
     assert_not_prod(uri)  # does not raise
+
+
+@pytest.mark.parametrize(
+    "uri",
+    [
+        "bolt://192.168.86.33:7688",   # remote LAN host, any port
+        "neo4j://throwaway:7690",      # named remote host
+        "neo4j+s://memory.ctharvey.me",  # the real production endpoint
+        "bolt://memory.ctharvey.me:7688",
+    ],
+)
+def test_assert_not_prod_refuses_non_loopback(uri):
+    """Policy change: the guard allow-lists loopback instead of deny-listing prod.
+
+    The deny-list failed open. When production moved to a host containing none
+    of its markers, the real instance was permitted -- `neo4j+s://memory.ctharvey.me`
+    passed. Any non-loopback host is now refused by default, whatever the port.
+    """
+    with pytest.raises(ProdBoltRefused):
+        assert_not_prod(uri)
+
+
+def test_non_loopback_can_be_opted_in_deliberately(monkeypatch):
+    monkeypatch.setenv("ARCHOLITH_BENCH_ALLOW_HOSTS", "192.168.86.40")
+    assert_not_prod("bolt://192.168.86.40:7688")  # does not raise
+
+
+def test_opt_in_cannot_defeat_the_prod_name_check(monkeypatch):
+    """Allow-listing a host must not override a production-looking name."""
+    monkeypatch.setenv("ARCHOLITH_BENCH_ALLOW_HOSTS", "prod-menhir.internal")
+    with pytest.raises(ProdBoltRefused):
+        assert_not_prod("bolt://prod-menhir.internal:7688")

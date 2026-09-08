@@ -20,35 +20,38 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-# Known PROD Menhir Neo4j endpoints that must NEVER be a throwaway target (handoff section 6).
-_PROD_BOLT_MARKERS = (
-    "192.168.86.33:7687",  # prod bolt -- the operator's real memories
-    "localhost:7687",
-    "127.0.0.1:7687",
-)
+from .targets import TargetRefused, assert_allowed_target
+
+# The default Neo4j bolt port. Refused even on loopback: a local instance on
+# 7687 is a real Menhir, not a throwaway, which publishes on 7688.
+PROD_BOLT_PORT = 7687
 
 
 class ProdBoltRefused(RuntimeError):
-    """Raised when a bolt URI looks like the real (prod) Menhir Neo4j."""
+    """Raised when a bolt URI is not an allow-listed throwaway Neo4j."""
 
 
 def assert_not_prod(uri: str) -> None:
-    """Refuse a bolt URI that resolves to a known prod Menhir Neo4j endpoint.
+    """Refuse a bolt URI that is not an allow-listed throwaway.
 
-    The scalar e2e harness runs destructive-adjacent, unscoped reads against a throwaway; a prod
-    target would leak the operator's real memories. Fail closed on the known prod host:port pairs
-    and on the default bolt port 7687 (prod), which the throwaway (7688) never uses.
+    Allow-list, not deny-list. This previously named three known-prod host:port
+    pairs (including a LAN IP that is no longer production) and refused the
+    suffix ":7687". Both halves failed open once production moved off-LAN: a
+    remote host on any other port was permitted outright.
+
+    Now the host must be loopback, or opted in via ARCHOLITH_BENCH_ALLOW_HOSTS,
+    and port 7687 is refused regardless of host. The scalar e2e harness runs
+    unscoped reads, so a wrong target leaks real memories.
     """
-    haystack = (uri or "").lower()
-    for marker in _PROD_BOLT_MARKERS:
-        if marker in haystack:
-            raise ProdBoltRefused(
-                f"bolt URI {uri!r} matches a prod Menhir Neo4j marker ({marker!r}); "
-                "the scalar-state harness runs only against a throwaway (bolt 7688). Refusing."
-            )
-    if haystack.rstrip("/").endswith(":7687"):
+    try:
+        assert_allowed_target(uri, what="bolt URI")
+    except TargetRefused as e:
+        raise ProdBoltRefused(str(e)) from e
+
+    if (uri or "").lower().rstrip("/").endswith(f":{PROD_BOLT_PORT}"):
         raise ProdBoltRefused(
-            f"bolt URI {uri!r} targets port 7687 (prod Menhir Neo4j); use the throwaway (7688). Refusing."
+            f"bolt URI {uri!r} targets port {PROD_BOLT_PORT} (the default Menhir Neo4j "
+            f"port); use the throwaway (7688). Refusing."
         )
 
 

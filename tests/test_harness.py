@@ -224,9 +224,16 @@ def test_longmemeval_answer_prompt_explains_authority_precedence():
 
 
 def test_assert_not_production_guards():
+    """Allow-list policy: loopback passes, everything else is refused.
+
+    Previously a deny-list of name markers, which failed open -- the real
+    production endpoint (https://memory.ctharvey.me) contains none of them and
+    was permitted. Only loopback passes now.
+    """
     from archolith_bench.harness import assert_not_production
     assert_not_production("http://localhost:7999")  # ok
     assert_not_production("http://localhost:9800/v1")  # proxy port alone is not production.
+    assert_not_production("http://127.0.0.1:8098")  # ok
     for bad in (
         "https://menhir.example.com",
         "http://prod-neo4j:7687",
@@ -234,6 +241,13 @@ def test_assert_not_production_guards():
         "https://preprod-memory.example.com",
         "https://preview-memory.example.com",
         "https://release-memory.example.com",
+        # The endpoint the old deny-list let through:
+        "https://memory.ctharvey.me",
+        "https://memory.ctharvey.me/mcp-http",
+        # Any other unrecognised host, which is the point of failing closed:
+        "http://147.93.132.141:8090",
+        "http://some-box.lan:8098",
+        "",
     ):
         try:
             assert_not_production(bad)

@@ -30,6 +30,7 @@ from ..core.api import API_KEY, MODEL, PROXY_URL, send_chat
 from ..core.metrics import PricingModel, compute_arm_cost
 from .base import ABResult, ArmResult, TaskResult, _compute_deltas, _pick_pricing, _usage_tokens
 from .menhir_client import HttpMenhirClient
+from .targets import PROD_NAME_MARKERS, TargetRefused, assert_allowed_target
 from .value_nodes import ValueGraph
 from .value_nodes_v2 import SupersededValueGraph
 
@@ -365,7 +366,9 @@ def _value_context_for_arm(
     return "\n".join(recalled)
 
 
-_PROD_MARKERS = ("prod", "production", "menhir.", "staging.", "preprod", "preview", "release")
+# Kept for reference and re-exported by targets.PROD_NAME_MARKERS. No longer
+# the primary check: name markers are a second layer over the allow-list.
+_PROD_MARKERS = PROD_NAME_MARKERS
 
 
 @runtime_checkable
@@ -404,13 +407,20 @@ class MemoryQAAdapter(Protocol):
 
 
 def assert_not_production(target: str) -> None:
-    """Refuse to run a write-heavy benchmark against anything that looks prod."""
-    low = (target or "").lower()
-    if any(m in low for m in _PROD_MARKERS):
-        raise SystemExit(
-            f"REFUSING: memory benchmark target {target!r} looks like production. "
-            "Point --menhir-url at a throwaway instance."
-        )
+    """Refuse a memory-benchmark target that is not an allow-listed throwaway.
+
+    Allow-list, not deny-list. The previous marker-based check failed open: when
+    production moved to a hostname containing none of `_PROD_MARKERS`, the real
+    instance was permitted. Only loopback passes now, plus hosts explicitly
+    opted in via ARCHOLITH_BENCH_ALLOW_HOSTS.
+
+    Still raises SystemExit so CLI callers keep exiting cleanly rather than
+    surfacing a traceback.
+    """
+    try:
+        assert_allowed_target(target, what="memory benchmark target")
+    except TargetRefused as e:
+        raise SystemExit(f"REFUSING: {e}") from e
 
 
 def _run_memory_arm(
