@@ -9,7 +9,12 @@ import sys
 from pathlib import Path
 
 from .arms import ARMS
-from .harness.presets import apply_preset, format_preset_list, get_preset
+from .harness.presets import (
+    PresetConflict,
+    apply_preset,
+    format_preset_list,
+    get_preset,
+)
 from .core.api import API_KEY, DIRECT_URL, MODEL, PROXY_URL, check_proxy_health, send_chat
 from .core.display import print_cross_scenario_summary, print_four_way_table, print_summary
 from .core.metrics import PRICING_DEFAULTS, PricingModel
@@ -504,7 +509,11 @@ def main(argv: list[str] | None = None) -> None:
             except KeyError as e:
                 print(f"ERROR: {e}", file=sys.stderr)
                 sys.exit(1)
-            applied = apply_preset(preset, args, harness_p)
+            try:
+                applied = apply_preset(preset, args, harness_p)
+            except PresetConflict as e:
+                print(f"ERROR: {e}", file=sys.stderr)
+                sys.exit(1)
             print(f"Preset {preset.name}: {preset.description}")
             if applied:
                 print(f"  set: {', '.join(applied)}")

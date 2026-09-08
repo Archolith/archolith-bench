@@ -9,6 +9,7 @@ import pytest
 from archolith_bench.harness import ADAPTERS
 from archolith_bench.harness.presets import (
     PRESETS,
+    PresetConflict,
     apply_preset,
     format_preset_list,
     get_preset,
@@ -121,7 +122,7 @@ class TestPresetSafety:
     def test_applying_the_memory_preset_leaves_reset_off(self):
         p = _parser()
         args = p.parse_args([])
-        apply_preset(get_preset("longmemeval-menhir-smoke"), args, p)
+        apply_preset(get_preset("longmemeval-menhir-smoke"), args, p, [])
         assert args.confirm_menhir_reset is False
         assert args.menhir_url is None
 
@@ -130,7 +131,7 @@ class TestPresetPrecedence:
     def test_preset_fills_unset_values(self):
         p = _parser()
         args = p.parse_args([])
-        applied = apply_preset(get_preset("swe-bench-smoke"), args, p)
+        applied = apply_preset(get_preset("swe-bench-smoke"), args, p, [])
         assert args.benchmark_id == "swe-bench"
         assert args.limit == 5
         assert args.subset == "lite"
@@ -139,26 +140,56 @@ class TestPresetPrecedence:
     def test_explicit_limit_beats_the_preset(self):
         p = _parser()
         args = p.parse_args(["--limit", "50"])
-        applied = apply_preset(get_preset("swe-bench-smoke"), args, p)
+        applied = apply_preset(get_preset("swe-bench-smoke"), args, p, ["--limit", "50"])
         assert args.limit == 50
         assert "limit" not in applied
 
     def test_explicit_arms_beat_the_preset(self):
         p = _parser()
         args = p.parse_args(["--arms", "direct"])
-        apply_preset(get_preset("longbench-v2-smoke"), args, p)
+        apply_preset(get_preset("longbench-v2-smoke"), args, p, ["--arms", "direct"])
         assert args.arms == "direct"
 
-    def test_explicit_benchmark_id_beats_the_preset(self):
+    def test_a_conflicting_benchmark_is_refused_not_merged(self):
+        """F9: merging ran longbench-v2 with SWE-bench's subset and limit.
+
+        The console printed the preset's description and the evidence record
+        carried the other benchmark id, so the two disagreed about what ran.
+        """
         p = _parser()
         args = p.parse_args(["longbench-v2"])
-        apply_preset(get_preset("swe-bench-smoke"), args, p)
-        assert args.benchmark_id == "longbench-v2"
+        with pytest.raises(PresetConflict):
+            apply_preset(get_preset("swe-bench-smoke"), args, p, ["longbench-v2"])
+
+    def test_explicit_arms_matching_the_default_still_win(self):
+        """F8: the default is the exact string a user copies out of --help.
+
+        Value equality could not tell "omitted" from "typed, and identical to
+        the default", so an operator who asked for three arms silently got two.
+        """
+        p = _parser()
+        preset = get_preset("longbench-v2-smoke")
+        # The exact value the preset wants to impose, typed explicitly. Under
+        # value-equality this was indistinguishable from not passing the flag.
+        tokens = ["--arms", preset.overrides["arms"]]
+        args = p.parse_args(tokens)
+        applied = apply_preset(preset, args, p, tokens)
+        assert args.arms == preset.overrides["arms"]
+        assert "arms" not in applied
+
+    def test_explicit_flag_equal_to_default_is_not_overridden(self):
+        p = _parser()
+        default_arms = p.get_default("arms")
+        tokens = ["--arms", default_arms]
+        args = p.parse_args(tokens)
+        applied = apply_preset(get_preset("swe-bench-smoke"), args, p, tokens)
+        assert args.arms == default_arms
+        assert "arms" not in applied
 
     def test_applied_list_reports_only_what_changed(self):
         p = _parser()
         args = p.parse_args(["--limit", "7", "--arms", "direct"])
-        applied = apply_preset(get_preset("longbench-v2-smoke"), args, p)
+        applied = apply_preset(get_preset("longbench-v2-smoke"), args, p, ["--limit", "7", "--arms", "direct"])
         assert "limit" not in applied
         assert "arms" not in applied
         assert "benchmark_id" in applied

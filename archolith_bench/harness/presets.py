@@ -16,6 +16,7 @@ at its parser default.
 
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass, field
 
 
@@ -89,25 +90,68 @@ def get_preset(name: str) -> HarnessPreset:
         ) from e
 
 
-def apply_preset(preset: HarnessPreset, args, parser) -> list[str]:
+class PresetConflict(ValueError):
+    """Raised when a preset and an explicit argument disagree."""
+
+
+def _explicit_dests(parser, argv: list[str]) -> set[str]:
+    """Which destinations the operator actually typed on the command line.
+
+    Value equality cannot answer this: `--arms direct,proxy_only` is both an
+    explicit choice and the parser default, and the default is the exact string
+    a user copies out of `--help`. Asking argv distinguishes "omitted" from
+    "passed, and happens to match the default".
+    """
+    opt_to_dest: dict[str, str] = {}
+    for action in parser._actions:
+        for opt in action.option_strings:
+            opt_to_dest[opt] = action.dest
+
+    seen: set[str] = set()
+    for token in argv:
+        if not token.startswith("-"):
+            continue
+        name = token.split("=", 1)[0]
+        dest = opt_to_dest.get(name)
+        if dest is not None:
+            seen.add(dest)
+    return seen
+
+
+def apply_preset(preset: HarnessPreset, args, parser, argv: list[str] | None = None) -> list[str]:
     """Apply *preset* to parsed *args* without clobbering explicit flags.
 
-    A value is filled only when it still equals the parser default, so
-    `--preset X --limit 50` runs 50 items. Returns the names of the options the
-    preset actually set, for reporting.
+    Explicit flags always win, decided by what appears in *argv* rather than by
+    comparing against the default. Returns the names of the options the preset
+    actually set, for reporting.
+
+    Raises PresetConflict when an explicit benchmark differs from the preset's:
+    merging them runs one benchmark with another's scale and subset while the
+    console prints the preset's description, so the terminal and the published
+    evidence record disagree about what ran.
     """
+    argv = list(sys.argv[1:] if argv is None else argv)
+    explicit = _explicit_dests(parser, argv)
     applied: list[str] = []
 
-    if getattr(args, "benchmark_id", None) in (None, ""):
+    current_benchmark = getattr(args, "benchmark_id", None)
+    if current_benchmark in (None, ""):
         args.benchmark_id = preset.benchmark_id
         applied.append("benchmark_id")
+    elif current_benchmark != preset.benchmark_id:
+        raise PresetConflict(
+            f"preset {preset.name!r} is for benchmark {preset.benchmark_id!r}, but "
+            f"{current_benchmark!r} was requested. Drop one: the preset's scale and "
+            f"subset are calibrated for its own benchmark."
+        )
 
     for key, value in preset.overrides.items():
         if not hasattr(args, key):
             continue
-        if getattr(args, key) == parser.get_default(key):
-            setattr(args, key, value)
-            applied.append(key)
+        if key in explicit:
+            continue
+        setattr(args, key, value)
+        applied.append(key)
 
     return applied
 
