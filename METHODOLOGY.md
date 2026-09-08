@@ -2,6 +2,11 @@
 
 How archolith-bench measures things, and what its numbers do and do not mean.
 
+> **DRAFT — not maintainer-reviewed.** Written 2026-09-08 against commit `2f9185e` by reading
+> `suites/proxy.py`, `core/metrics.py`, and `core/public_claims.py`. The formulas and the
+> cost-model bias direction are transcribed from source. The surrounding framing is inferred
+> and may not match intent. Verify before treating this as authoritative or public-facing.
+
 ## What this suite measures
 
 archolith-bench measures **middleware deltas**, not model quality. Every headline
