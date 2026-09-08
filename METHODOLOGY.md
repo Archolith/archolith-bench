@@ -120,9 +120,18 @@ Not every number in this repo is a claim. Four categories, and only one of them 
 
 `HEADLINE-NUMBERS.md` is the single source of truth for anything public. A number used in the
 README, on archolith.dev, or in external material must appear in its active table in the same
-commit. This is enforced mechanically, not by convention: `core/evidence_policy.py` validates
-the active table and cross-checks evidence artifacts against it, and `core/public_claims.py`
-scans docs for claim-shaped strings that no active headline supports.
+commit. Two validators exist for this, but neither is wired to CI, and their coverage is
+narrower than it first appears:
+
+- `core/evidence_policy.py` validates the `HEADLINE-NUMBERS.md` active table and cross-checks
+  evidence artifacts against it — but only `.json` artifacts. `benchmarks/` holds 11 files,
+  10 of them Markdown, so the artifact half of this validator inspects exactly one file.
+- `core/public_claims.py`, runnable via `scripts/check_public_claims.py` (exits 1 on
+  failure), scans `README.md`, `BENCHMARKS.md`, and `docs/` for claim-shaped strings no
+  active headline supports. As of 2026-09-08 it does not pass.
+
+Treat both as tooling that must be run deliberately, not as a gate that catches mistakes on
+its own.
 
 Raw `results/` and `logs/` are local runtime output and stay gitignored. Curated evidence is
 promoted into `benchmarks/` deliberately. A launch-facing document must never cite `results/`
