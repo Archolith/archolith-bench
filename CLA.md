@@ -50,7 +50,7 @@ discretion.
 ### 6. Outbound License
 
 Your Contribution will be distributed under the project's license
-(currently PolyForm Noncommercial 1.0.0) to third parties. However,
+(currently Apache-2.0) to third parties. However,
 the Licensor retains the right to use, sublicense, or distribute
 the Contribution under any other license, including commercial licenses.
 

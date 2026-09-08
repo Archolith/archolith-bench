@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "archolith-bench"
 version = "0.4.0"
 description = "Benchmark suite for the archolith token-reduction stack"
-license = "LicenseRef-PolyForm-Noncommercial-1.0.0"
+license = "Apache-2.0"
 authors = [{name = "Charles Harvey"}]
 readme = "README.md"
 requires-python = ">=3.11"
@@ -49,8 +49,8 @@ all = ["archolith-filter", "archolith-audit", "datasets>=2"]
 dev = ["pytest>=8", "ruff>=0.4"]
 
 [project.urls]
-Homepage = "https://github.com/ctharvey/archolith-bench"
-Issues = "https://github.com/ctharvey/archolith-bench/issues"
+Homepage = "https://github.com/Archolith/archolith-bench"
+Issues = "https://github.com/Archolith/archolith-bench/issues"
 
 [tool.setuptools.packages.find]
 where = ["."]

@@ -48,6 +48,6 @@ See `scenarios/code_review.json` for the schema.
 By submitting a pull request, you agree to the [CLA](CLA.md). In short:
 you keep your copyright, but you grant the project owner a broad license
 to use your contribution — including under commercial licenses. The project
-itself is distributed under the [PolyForm Noncommercial License 1.0.0](LICENSE).
+itself is distributed under the [Apache License 2.0](LICENSE).
 
 Every PR template includes a CLA checkbox. Please check it before submitting.

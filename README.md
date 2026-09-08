@@ -261,7 +261,7 @@ Resumable benchmark runs may create `.checkpoint_*.json` files in the working di
 
 ## License
 
-Source-available under the [PolyForm Noncommercial License 1.0.0](LICENSE).
+Licensed under the [Apache License 2.0](LICENSE).
 Free for non-commercial use; commercial use requires permission from the licensor.
 Contributions are subject to the [CLA](CLA.md).
 
