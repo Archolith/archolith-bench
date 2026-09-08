@@ -72,7 +72,8 @@ PRESETS: dict[str, HarnessPreset] = {
         benchmark_id="longmemeval-menhir",
         description="10 LongMemEval items through menhir memory (Mode B). Requires a "
                     "throwaway menhir; refuses production-looking targets.",
-        overrides={"limit": 10, "arms": "no_memory,single_recall"},
+        # Arm strings, not constant names: SINGLE_RECALL == "menhir_recall".
+        overrides={"limit": 10, "arms": "no_memory,menhir_recall"},
         requires=("--menhir-url", "--confirm-menhir-reset"),
     ),
 }

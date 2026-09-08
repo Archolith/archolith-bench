@@ -75,6 +75,34 @@ VALUE_RECALL_V4_ADVISORY = "menhir_value_recall_v4_advisory"
 VALUE_RECALL_V5_DERIVED = "menhir_value_recall_v5_derived"
 DEFAULT_MEMORY_ARMS = (NO_MEMORY, SINGLE_RECALL)  # v2/v3/v4/v5 arms intentionally excluded
 
+# Every arm the dispatcher actually understands. `_value_context_for_arm` ends in
+# a plain-recall fallback, so an unrecognised arm name does not fail -- it runs
+# single recall and labels the result with whatever string was passed, which then
+# reaches an evidence artifact as a measurement of an arm that never ran.
+# Validated up front so a typo is a loud error instead of quiet fiction.
+VALID_MEMORY_ARMS: frozenset[str] = frozenset({
+    NO_MEMORY,
+    SINGLE_RECALL,
+    AGENTIC_RECALL,
+    VALUE_RECALL,
+    VALUE_RECALL_V2_CURRENT,
+    VALUE_RECALL_V2_HISTORY,
+    VALUE_RECALL_V3_COARSE,
+    VALUE_RECALL_V3_AUTHORITATIVE,
+    VALUE_RECALL_V4_ADVISORY,
+    VALUE_RECALL_V5_DERIVED,
+})
+
+
+def assert_known_arms(arms: Sequence[str]) -> None:
+    """Reject arm names the dispatcher does not implement."""
+    unknown = [a for a in arms if a not in VALID_MEMORY_ARMS]
+    if unknown:
+        raise ValueError(
+            f"unknown memory arm(s): {', '.join(sorted(unknown))}. "
+            f"Valid arms: {', '.join(sorted(VALID_MEMORY_ARMS))}"
+        )
+
 _PLANNER_SYSTEM = (
     "You turn a user's question into focused memory-search queries. The memory system is a "
     "semantic graph that retrieves best from SHORT entity/keyword queries, not full sentences. "
@@ -535,6 +563,7 @@ def run_memory_ab(
     LLMJudgeScorer for LongMemEval-comparable accuracy). Defaults to `adapter.score`
     (the offline containment scorer). If it exposes `.close()`, it is closed on exit.
     """
+    assert_known_arms(arms)
     items = adapter.load_items(subset, limit, fixture_path)
     pricing = _pick_pricing(model, pricing)
     needs_client = any(a != NO_MEMORY for a in arms)

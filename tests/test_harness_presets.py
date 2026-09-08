@@ -58,6 +58,49 @@ class TestPresetRegistry:
             assert limit <= 25, f"{name} limit {limit} is too large for a smoke run"
 
 
+class TestPresetArms:
+    """Arm strings must be values the dispatcher knows, not constant names.
+
+    The original longmemeval-menhir-smoke preset passed "single_recall" -- the
+    NAME of the constant whose VALUE is "menhir_recall". Nothing rejected it:
+    _value_context_for_arm falls through to plain recall, so the run completed
+    and labelled its results with an arm that does not exist. Caught by running
+    a fixture through the harness, not by the suite.
+    """
+
+    def test_memory_preset_arms_are_real(self):
+        from archolith_bench.harness.memory_ab import VALID_MEMORY_ARMS
+        for name, preset in PRESETS.items():
+            arms = preset.overrides.get("arms")
+            if not arms or not preset.benchmark_id.endswith("-menhir"):
+                continue
+            for arm in (a.strip() for a in arms.split(",")):
+                assert arm in VALID_MEMORY_ARMS, (
+                    f"preset {name} uses unknown memory arm {arm!r}; "
+                    f"valid: {sorted(VALID_MEMORY_ARMS)}"
+                )
+
+    def test_no_preset_uses_a_constant_name_as_an_arm(self):
+        """A guard against repeating the exact mistake, for every arm constant."""
+        from archolith_bench.harness import memory_ab
+        offenders = []
+        for name, preset in PRESETS.items():
+            arms = preset.overrides.get("arms", "")
+            for arm in (a.strip() for a in arms.split(",") if a.strip()):
+                value_of_same_name = getattr(memory_ab, arm.upper(), None)
+                if isinstance(value_of_same_name, str) and value_of_same_name != arm:
+                    offenders.append((name, arm, value_of_same_name))
+        assert not offenders, (
+            "preset(s) use a constant NAME where the VALUE was meant: " + str(offenders)
+        )
+
+    def test_the_guard_would_catch_the_original_bug(self):
+        """Pin the guard itself: single_recall is a name, menhir_recall is the value."""
+        from archolith_bench.harness.memory_ab import SINGLE_RECALL, VALID_MEMORY_ARMS
+        assert SINGLE_RECALL == "menhir_recall"
+        assert "single_recall" not in VALID_MEMORY_ARMS
+
+
 class TestPresetSafety:
     def test_no_preset_enables_a_destructive_flag(self):
         """Presets set scale, never authorisation to mutate a graph."""
