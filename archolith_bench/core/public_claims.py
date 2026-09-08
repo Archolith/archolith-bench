@@ -104,7 +104,10 @@ _BENCHMARK_NAMES = (
 )
 
 _BENCH_RE = re.compile(
-    r"(?:" + "|".join(_BENCHMARK_NAMES) + r")\s*[-:;]?\s*\d+(?:\.\d+)?\s*%?"
+    # A hyphen tight against the number is a version suffix in the benchmark's
+    # own name (`cyberseceval-4`), not a score, so it requires trailing space
+    # to count. `name: 45%`, `name 45%` and `name - 45%` all still match.
+    r"(?:" + "|".join(_BENCHMARK_NAMES) + r")(?:\s*[:;]\s*|\s*-\s+|\s+)\d+(?:\.\d+)?\s*%?"
     r"|"
     r"\d+(?:\.\d+)?\s*%?\s+(?:on|in|for)\s+(?:" + "|".join(_BENCHMARK_NAMES) + r")",
     re.IGNORECASE,
