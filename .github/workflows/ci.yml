@@ -72,9 +72,24 @@ jobs:
           python -m archolith_bench harness --list
           python -m archolith_bench menhir list
 
-      # The R3/R5 ladder benches import the menhir repo (private deps, not
-      # installable in CI); tests/conftest.py skips them when menhir is absent.
-      # This runs the offline bench mechanism suite (metrics, ranking ladders,
-      # fixture validators, cost/token models) plus the audit/filter smoke test.
+      # tests/test_dependency_scalar_bridge_measurement.py resolves a menhir
+      # checkout (MENHIR_ROOT or an unambiguous sibling) and measures the
+      # dependency-scalar bridge against menhir's real API. menhir is public, so
+      # CI checks it out rather than skipping those three tests. Checked out to a
+      # dot-path so it cannot be picked up as an implicit sibling candidate --
+      # MENHIR_ROOT below is the only resolution input.
+      - name: Check out menhir (dependency-scalar bridge tests)
+        uses: actions/checkout@v4
+        with:
+          repository: Archolith/menhir
+          path: .menhir-src
+
+      # The R3/R5 ladder benches import menhir as a MODULE at import time; that
+      # still requires menhir on sys.path, which this checkout deliberately does
+      # not do, so tests/conftest.py continues to skip them. This runs the offline
+      # bench mechanism suite (metrics, ranking ladders, fixture validators,
+      # cost/token models) plus the audit/filter smoke test.
       - name: Run offline bench suite
+        env:
+          MENHIR_ROOT: ${{ github.workspace }}/.menhir-src
         run: python -m pytest tests/ -q

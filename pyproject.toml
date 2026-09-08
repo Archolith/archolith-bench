@@ -65,3 +65,13 @@ norecursedirs = ["experiments", "results", "logs", "build", "dist", "*.egg-info"
 
 [tool.ruff]
 exclude = ["experiments"]
+
+[tool.ruff.lint]
+# Declared explicitly rather than inherited from whatever the installed ruff
+# defaults to. Ruff 0.16 widened its default rule set (isort I, flake8-annotations
+# ANN, RUF100 and others), which turned a green CI red across 320 pre-existing
+# findings with no code change. Pinning the rule set here makes the gate depend on
+# this file, not on the linter version that happens to resolve.
+# These four are ruff's classic defaults; widening the set is a deliberate,
+# separate change with its own cleanup.
+select = ["E4", "E7", "E9", "F"]
