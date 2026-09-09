@@ -373,13 +373,24 @@ Three properties it holds, because it is evidence and not a convenience:
 - **A missing repo is an error, not a column of nulls** — an absent checkout would otherwise
   fingerprint as "every file deleted", which is wrong *and* stable across runs.
 
-Two deliberate non-properties:
+**Canonical resumes are gated on it.** Both wrappers compute the digest before writing their
+attempt record (`fingerprint --digest-only`), so `run_provenance.py begin` treats it as immutable
+identity alongside `menhir_commit`/`bench_commit`. A resume whose surface moved is refused with
+exit 2: resuming would build one graph from two code states, making its score unattributable.
+When the commits are identical the message says so explicitly, because that is the dirty-tree or
+untracked-edit case no SHA comparison can see, and it names the two commands that find it.
+`LME_NONCANONICAL=1` permits the drift and labels the run `noncanonical`.
+
+Three boundaries on that gate:
 
 - **Fingerprinting is non-fatal at launch.** A fingerprint is evidence about a run, not a
-  precondition for it; refusing to launch would trade a recorded gap for no run at all.
-- **It does not gate canonical runs on surface drift.** `run_provenance.py` already refuses
-  commit drift on a canonical resume; extending that to `surface_digest` would catch strictly
-  more, and is deliberately left as a follow-up rather than bundled in here.
+  precondition for it; refusing to launch would trade a recorded gap for no run at all. An empty
+  digest therefore reads as *absent*, never as a digest of `""` -- otherwise two runs that both
+  failed to fingerprint would look like they agreed on a code state.
+- **A baseline without a digest stays resumable.** Only keys the earlier record actually carried
+  are compared, so runs predating the fingerprint do not become unresumable.
+- **A resume that drops the digest is refused.** If the baseline had one, an attempt without one
+  cannot demonstrate it is running the same code.
 
 When editing the surface: bias **broad**. A path listed that turns out not to matter costs
 one extra line in a blame report; a path missing makes a real behavior change invisible.

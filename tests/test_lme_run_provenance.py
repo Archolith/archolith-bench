@@ -400,3 +400,89 @@ def test_cli_noncanonical_flag(tmp_path: Path) -> None:
     assert provenance.main(["begin", str(path), str(record), "--noncanonical"]) == 0
     document = provenance._read(path)
     assert document["noncanonical"] is True
+
+
+# ---------------------------------------------------------------------------
+# Surface-drift gate
+#
+# Commit immutability cannot see a dirty tree or an untracked edit: both leave the SHAs
+# identical while the executed code differs. The surface digest closes that, so these cases
+# are the ways a resume could still fuse two code states into one graph.
+# ---------------------------------------------------------------------------
+
+DIGEST_A = "a" * 64
+DIGEST_B = "b" * 64
+
+
+def test_canonical_resume_refuses_surface_drift(tmp_path: Path) -> None:
+    path = tmp_path / "p.json"
+    _begin(path, surface_digest=DIGEST_A)
+    with pytest.raises(provenance.ProvenanceMismatch, match="surface_digest changed"):
+        provenance.begin(path, _attempt(surface_digest=DIGEST_B))
+
+
+def test_drift_with_identical_commits_names_the_dirty_tree(tmp_path: Path) -> None:
+    """The actionable half: same SHAs means the change is uncommitted or untracked."""
+    path = tmp_path / "p.json"
+    _begin(path, surface_digest=DIGEST_A)
+    with pytest.raises(provenance.ProvenanceMismatch) as caught:
+        provenance.begin(path, _attempt(surface_digest=DIGEST_B))
+    assert "uncommitted or untracked edit" in str(caught.value)
+
+
+def test_matching_surface_digest_resumes(tmp_path: Path) -> None:
+    path = tmp_path / "p.json"
+    _begin(path, surface_digest=DIGEST_A)
+    document = provenance.begin(path, _attempt(surface_digest=DIGEST_A))
+    assert document["attempt_count"] == 2
+
+
+def test_resume_refuses_when_the_digest_disappears(tmp_path: Path) -> None:
+    """A resume that records no digest cannot demonstrate it is running the same code."""
+    path = tmp_path / "p.json"
+    _begin(path, surface_digest=DIGEST_A)
+    with pytest.raises(provenance.ProvenanceMismatch, match="recorded none"):
+        provenance.begin(path, _attempt(surface_digest=""))
+
+
+def test_a_baseline_without_a_digest_stays_resumable(tmp_path: Path) -> None:
+    """Runs predating the fingerprint must not become unresumable; only keys the earlier
+    record actually carried are compared."""
+    path = tmp_path / "p.json"
+    _begin(path, surface_digest="")
+    document = provenance.begin(path, _attempt(surface_digest=DIGEST_A))
+    assert document["attempt_count"] == 2
+
+
+def test_noncanonical_permits_surface_drift(tmp_path: Path) -> None:
+    path = tmp_path / "p.json"
+    _begin(path, surface_digest=DIGEST_A)
+    document = provenance.begin(
+        path, _attempt(surface_digest=DIGEST_B), noncanonical=True
+    )
+    assert document["noncanonical"] is True
+    assert document["attempt_count"] == 2
+
+
+def test_surface_digest_is_stored_in_identity(tmp_path: Path) -> None:
+    path = tmp_path / "p.json"
+    document = _begin(path, surface_digest=DIGEST_A)
+    assert document["identity"]["surface_digest"] == DIGEST_A
+
+
+def test_an_empty_digest_is_absent_not_a_digest_of_empty(tmp_path: Path) -> None:
+    """Fingerprinting is non-fatal at launch, so "" means could-not-compute. Storing it as a
+    value would make two such runs look like they agreed on a code state."""
+    path = tmp_path / "p.json"
+    document = _begin(path, surface_digest="")
+    assert "surface_digest" not in document["identity"]
+
+
+def test_commit_drift_is_reported_before_surface_drift(tmp_path: Path) -> None:
+    """When both moved, the commit message is the clearer diagnosis."""
+    path = tmp_path / "p.json"
+    _begin(path, surface_digest=DIGEST_A)
+    with pytest.raises(provenance.ProvenanceMismatch, match="code commits changed"):
+        provenance.begin(
+            path, _attempt(surface_digest=DIGEST_B, menhir_commit="f" * 40)
+        )

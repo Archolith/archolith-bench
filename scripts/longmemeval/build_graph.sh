@@ -76,6 +76,12 @@ GRAPH_ATTEMPT_RECORD="${LME_RESULTS_DIR}/.graph-attempt-${LME_NEO4J_NAME}.json"
 # already partly ingested; overwriting the record here would restate that graph's freshness,
 # dataset and settings as whatever this attempt happens to be configured with -- and
 # `lme.sh ir-gate` reads exactly this file to decide whether the data is fresh.
+#
+# Fingerprint the declared surface BEFORE writing the attempt record, so `begin` can treat the
+# digest as immutable identity for a canonical run and refuse a resume that would mix two code
+# states. Empty on failure, which `run_provenance.py` reads as "absent" rather than as a digest
+# of "" -- fingerprinting stays non-fatal, consistent with the attach call further down.
+GRAPH_SURFACE_DIGEST="$("${BENCH_PY}" "$(dirname "${BASH_SOURCE[0]}")/lib/bench_surface.py" fingerprint --digest-only 2>/dev/null || true)"
 cat > "${GRAPH_ATTEMPT_RECORD}" <<EOF
 {
   "container": "${LME_NEO4J_NAME}",
@@ -105,6 +111,7 @@ cat > "${GRAPH_ATTEMPT_RECORD}" <<EOF
   "turn_evidence_required": ${LME_REQUIRE_TURN_EVIDENCE},
   "menhir_commit": "$(git -C "${MENHIR_MAIN}" rev-parse HEAD 2>/dev/null || echo unknown)",
   "bench_commit": "$(git -C "${BENCH_DIR}" rev-parse HEAD 2>/dev/null || echo unknown)",
+  "surface_digest": "${GRAPH_SURFACE_DIGEST}",
   "started_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
   "build_started_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 }
@@ -112,7 +119,7 @@ EOF
 PROVENANCE_BEGIN_ARGS=("begin" "${GRAPH_PROVENANCE_PATH}" "${GRAPH_ATTEMPT_RECORD}")
 [ "${LME_NONCANONICAL}" = "1" ] && PROVENANCE_BEGIN_ARGS+=("--noncanonical")
 "${BENCH_PY}" "${GRAPH_PROVENANCE_TOOL}" "${PROVENANCE_BEGIN_ARGS[@]}" ||
-  die "graph provenance refused this attempt (identity or commit mismatch); see above"
+  die "graph provenance refused this attempt (identity, commit, or surface mismatch); see above"
 rm -f "${GRAPH_ATTEMPT_RECORD}"
 
 # Hash the declared benchmark-affecting surface into this graph's provenance. The

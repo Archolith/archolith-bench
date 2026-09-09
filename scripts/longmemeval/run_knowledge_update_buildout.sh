@@ -285,10 +285,16 @@ record_phase_end(){
 }
 
 # ---- record run provenance ----
+# Fingerprint the declared surface BEFORE writing the attempt record, so `begin` can treat the
+# digest as immutable identity for a canonical run and refuse a resume that would mix two code
+# states. Empty on failure, which `run_provenance.py` reads as "absent" rather than as a digest
+# of "" -- fingerprinting stays non-fatal, consistent with the attach call further down.
+SURFACE_DIGEST="$("${BENCH_PY}" "${SCRIPT_DIR}/lib/bench_surface.py" fingerprint --digest-only 2>/dev/null || true)"
 cat > "${ATTEMPT_RECORD}" <<EOF
 {
   "run_id": "${RUN_ID}",
   "arm": "${ARM}",
+  "surface_digest": "${SURFACE_DIGEST}",
   "started_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
   "resumed": $([ "${LME_KU_ALLOW_RESUME}" = "1" ] && echo true || echo false),
   "menhir_commit": "${MENHIR_COMMIT}",
@@ -339,7 +345,7 @@ PROVENANCE_BEGIN_ARGS=()
 [ "${LME_NONCANONICAL}" = "1" ] && PROVENANCE_BEGIN_ARGS+=("--noncanonical")
 "${BENCH_PY}" "${PROVENANCE_TOOL}" begin "${PROVENANCE_PATH}" "${ATTEMPT_RECORD}" \
   "${PROVENANCE_BEGIN_ARGS[@]}" ||
-  die "provenance refused this attempt; see the error above"
+  die "provenance refused this attempt (identity, commit, or surface mismatch); see above"
 rm -f "${ATTEMPT_RECORD}"
 log "provenance recorded: ${PROVENANCE_PATH}"
 

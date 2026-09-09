@@ -452,6 +452,10 @@ def _build_parser() -> argparse.ArgumentParser:
     fingerprint_parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
     fingerprint_parser.add_argument("--json", type=Path, default=None)
     fingerprint_parser.add_argument("--quiet", action="store_true")
+    fingerprint_parser.add_argument(
+        "--digest-only", action="store_true",
+        help="print just the surface_digest hex, for embedding in a provenance record",
+    )
 
     attach_parser = subparsers.add_parser("attach")
     attach_parser.add_argument("path", type=Path)
@@ -477,6 +481,15 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.verb == "fingerprint":
         snapshot = fingerprint(args.manifest)
+        if args.digest_only:
+            # Single bare token so a shell can capture it without parsing. Callers embed it
+            # in an attempt record, where `run_provenance.py begin` treats it as immutable
+            # identity for a canonical run.
+            print(snapshot["surface_digest"])
+            if args.json:
+                args.json.parent.mkdir(parents=True, exist_ok=True)
+                args.json.write_text(json.dumps(snapshot, indent=2), encoding="utf-8")
+            return 0
         if args.json:
             args.json.parent.mkdir(parents=True, exist_ok=True)
             args.json.write_text(json.dumps(snapshot, indent=2), encoding="utf-8")
