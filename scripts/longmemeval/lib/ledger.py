@@ -54,6 +54,12 @@ FIELDS = (
     "segmentation",
     "score",
     "score_raw",
+    # Which arm the `score` column quotes. A run carries up to six
+    # (no_memory / menhir_recall / menhir_value_recall / the v2-v3 variants), and the choice
+    # is a judgement, not something a reader can derive: value-arm-verify-20260717 records
+    # 0.679, its menhir_value_recall arm, while its menhir_recall arm scored 0.333. Declaring
+    # it is what lets `validate` check the recorded number against the run's own score.json.
+    "primary_arm",
     "status",
     "extract_model",
     "canonical",
@@ -282,6 +288,30 @@ def _read_provenance(path: Path) -> dict[str, Any] | None:
 SCORED_RESULT_FILES = ("results.json", "comparison.json")
 
 
+def describe_score(run_directory: Path) -> str | None:
+    """A short description of whatever score evidence a run directory holds, or None.
+
+    Prefers ``score.json`` (written by ``score_extract.py`` from the harness checkpoint),
+    which carries every arm. All arms are listed rather than reduced to one number, because
+    picking "the" score is the judgement the ledger's ``primary_arm`` column exists to
+    record -- a summary here that chose for the reader would be the same mistake.
+    """
+    score_path = run_directory / "score.json"
+    if score_path.exists():
+        try:
+            payload = json.loads(score_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return "score.json present but unreadable"
+        arms = payload.get("arms") or {}
+        if arms:
+            rendered = ", ".join(
+                f"{arm}={entry.get('score')}" for arm, entry in sorted(arms.items())
+            )
+            return f"{len(arms)} arm(s): {rendered}"
+    legacy = extract_score(run_directory)
+    return None if legacy is None else f"{legacy:g}"
+
+
 def extract_score(run_directory: Path) -> float | None:
     """Read a numeric score from a run directory, or None if none is recorded.
 
@@ -436,6 +466,66 @@ def validate(
                             f"provenance records run_id {recorded_id!r}",
                         )
 
+            # Cross-check the recorded score against the run's own per-arm evidence. This is
+            # what makes the ledger's number checkable rather than asserted -- a typo, a
+            # stale copy, or a number quoted from the wrong arm all show up here.
+            score_path = run_directory / "score.json"
+            if score_path.exists():
+                try:
+                    evidence = json.loads(score_path.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    report("FAIL", run_id, "score.json is unreadable")
+                    evidence = None
+                if isinstance(evidence, dict):
+                    arms = evidence.get("arms") or {}
+                    declared = (row.get("primary_arm") or "").strip()
+                    if score and not declared:
+                        report(
+                            "WARN", run_id,
+                            f"records a score but no primary_arm; score.json has "
+                            f"{len(arms)} arm(s) ({', '.join(sorted(arms))}) and the "
+                            "number cannot be checked against the right one",
+                        )
+                    elif declared and declared not in arms:
+                        report(
+                            "FAIL", run_id,
+                            f"primary_arm {declared!r} is not in score.json "
+                            f"(has: {', '.join(sorted(arms)) or 'none'})",
+                        )
+                    elif declared and score:
+                        measured = arms[declared].get("score")
+                        try:
+                            recorded_value = float(score)
+                        except ValueError:
+                            recorded_value = None
+                        if (
+                            isinstance(measured, (int, float))
+                            and recorded_value is not None
+                            and abs(float(measured) - recorded_value) > 0.0005
+                        ):
+                            report(
+                                "FAIL", run_id,
+                                f"records score {recorded_value} for arm {declared!r} but "
+                                f"score.json measured {measured}",
+                            )
+                        arm_n = arms[declared].get("n")
+                        if (
+                            isinstance(arm_n, int)
+                            and total_raw.isdigit()
+                            and arm_n != int(total_raw)
+                        ):
+                            report(
+                                "WARN", run_id,
+                                f"arm {declared!r} scored {arm_n} items but the row says "
+                                f"items_total={total_raw}",
+                            )
+            elif status == "scored":
+                report(
+                    "WARN", run_id,
+                    "no score.json; the recorded score cannot be checked against the run's "
+                    "own evidence (run score_extract.py on this directory)",
+                )
+
     # Disk -> rows. Checking only rows -> disk would miss the more dangerous direction: a
     # run that executed, wrote provenance, and never reached the ledger. That run's evidence
     # exists but is invisible to anyone reading the scoreboard, which is how a result gets
@@ -453,11 +543,11 @@ def validate(
             if not (candidate / "run_provenance.json").exists():
                 # No provenance: a survey or analysis output directory, not a run.
                 continue
-            score = extract_score(candidate)
-            if score is not None:
+            described = describe_score(candidate)
+            if described is not None:
                 report(
                     "WARN", candidate.name,
-                    f"a scored result ({score:g}) exists on disk with no ledger row; "
+                    f"a scored result exists on disk with no ledger row [{described}]; "
                     "decide whether it belongs in the scoreboard",
                 )
             else:

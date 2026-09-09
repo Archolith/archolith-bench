@@ -281,7 +281,11 @@ def test_an_orphan_with_a_readable_score_says_so(tmp_path: Path) -> None:
     (orphan / "run_provenance.json").write_text(json.dumps({}), encoding="utf-8")
     (orphan / "results.json").write_text(json.dumps({"score": 0.77}), encoding="utf-8")
     findings = _validate(tmp_path, [_row(run_id="run-a")], results=results)
-    assert any("a scored result (0.77)" in m for m in _messages(findings, "WARN"))
+    # A run with no score.json still falls back to the legacy results.json score.
+    assert any(
+        "a scored result exists" in m and "0.77" in m
+        for m in _messages(findings, "WARN")
+    )
 
 
 def test_a_directory_without_provenance_is_not_treated_as_a_run(tmp_path: Path) -> None:
@@ -453,3 +457,141 @@ def test_real_ledger_markdown_is_in_sync_with_the_csv() -> None:
     table = ledger.render_table(rows)
     text = ledger.DEFAULT_MARKDOWN.read_text(encoding="utf-8")
     assert table in text, "LEDGER.md is out of sync; run: ledger.py render"
+
+
+# ---------------------------------------------------------------------------
+# Score cross-check against the run's own per-arm evidence
+#
+# This is what makes the ledger's number checkable rather than asserted. Before it, a score
+# was read off a rendered markdown table and retyped, and nothing could catch a typo, a
+# stale copy, or a number quoted from the wrong arm.
+# ---------------------------------------------------------------------------
+
+def _run_with_score_json(results: Path, run_id: str, arms: dict) -> Path:
+    run = results / run_id
+    run.mkdir(parents=True, exist_ok=True)
+    (run / "run_provenance.json").write_text(
+        json.dumps({"run_id": run_id, "latest_attempt": {}}), encoding="utf-8"
+    )
+    (run / "score.json").write_text(
+        json.dumps({"run_id": run_id, "primary_arm": None, "arms": arms}), encoding="utf-8"
+    )
+    return run
+
+
+def test_score_disagreeing_with_the_evidence_fails(tmp_path: Path) -> None:
+    results = tmp_path / "results"
+    _run_with_score_json(results, "run-a", {"menhir_recall": {"n": 78, "score": 0.871795}})
+    findings = _validate(
+        tmp_path,
+        [_row(score="0.900", primary_arm="menhir_recall", has_results_dir="true")],
+        results=results,
+    )
+    assert any("score.json measured" in m for m in _messages(findings, "FAIL"))
+
+
+def test_score_matching_the_evidence_is_clean(tmp_path: Path) -> None:
+    results = tmp_path / "results"
+    _run_with_score_json(results, "run-a", {"menhir_recall": {"n": 78, "score": 0.871795}})
+    findings = _validate(
+        tmp_path,
+        [_row(score="0.872", primary_arm="menhir_recall", has_results_dir="true")],
+        results=results,
+    )
+    assert _messages(findings, "FAIL") == []
+
+
+def test_quoting_the_wrong_arm_fails(tmp_path: Path) -> None:
+    """value-arm-verify-20260717 records 0.679 (its value arm); its recall arm was 0.333."""
+    results = tmp_path / "results"
+    _run_with_score_json(results, "run-a", {
+        "menhir_recall": {"n": 78, "score": 0.333},
+        "menhir_value_recall": {"n": 78, "score": 0.679},
+    })
+    findings = _validate(
+        tmp_path,
+        [_row(score="0.679", primary_arm="menhir_recall", has_results_dir="true")],
+        results=results,
+    )
+    assert any("score.json measured 0.333" in m for m in _messages(findings, "FAIL"))
+
+
+def test_declaring_an_arm_that_does_not_exist_fails(tmp_path: Path) -> None:
+    results = tmp_path / "results"
+    _run_with_score_json(results, "run-a", {"menhir_recall": {"n": 78, "score": 0.9}})
+    findings = _validate(
+        tmp_path,
+        [_row(score="0.900", primary_arm="menhir_ghost", has_results_dir="true")],
+        results=results,
+    )
+    assert any("is not in score.json" in m for m in _messages(findings, "FAIL"))
+
+
+def test_score_without_a_declared_arm_warns(tmp_path: Path) -> None:
+    """With several arms present, an undeclared row's number cannot be checked at all."""
+    results = tmp_path / "results"
+    _run_with_score_json(results, "run-a", {
+        "menhir_recall": {"n": 78, "score": 0.9},
+        "no_memory": {"n": 78, "score": 0.1},
+    })
+    findings = _validate(
+        tmp_path,
+        [_row(score="0.900", primary_arm="", has_results_dir="true")],
+        results=results,
+    )
+    assert any("no primary_arm" in m for m in _messages(findings, "WARN"))
+
+
+def test_arm_item_count_disagreeing_with_the_row_warns(tmp_path: Path) -> None:
+    results = tmp_path / "results"
+    _run_with_score_json(results, "run-a", {"menhir_recall": {"n": 41, "score": 0.9}})
+    findings = _validate(
+        tmp_path,
+        [_row(score="0.900", primary_arm="menhir_recall", items_scored="78",
+              items_total="78", has_results_dir="true")],
+        results=results,
+    )
+    assert any("scored 41 items" in m for m in _messages(findings, "WARN"))
+
+
+def test_unreadable_score_json_fails(tmp_path: Path) -> None:
+    results = tmp_path / "results"
+    run = _run_with_score_json(results, "run-a", {"menhir_recall": {"n": 78, "score": 0.9}})
+    (run / "score.json").write_text("{broken", encoding="utf-8")
+    findings = _validate(
+        tmp_path, [_row(has_results_dir="true")], results=results
+    )
+    assert any("score.json is unreadable" in m for m in _messages(findings, "FAIL"))
+
+
+def test_scored_row_without_score_json_warns(tmp_path: Path) -> None:
+    results = tmp_path / "results"
+    run = results / "run-a"
+    run.mkdir(parents=True)
+    (run / "run_provenance.json").write_text(
+        json.dumps({"run_id": "run-a", "latest_attempt": {}}), encoding="utf-8"
+    )
+    findings = _validate(tmp_path, [_row(has_results_dir="true")], results=results)
+    assert any("no score.json" in m for m in _messages(findings, "WARN"))
+
+
+def test_describe_score_lists_every_arm_without_choosing(tmp_path: Path) -> None:
+    """A summary that picked one arm would make the same mistake primary_arm exists to avoid."""
+    run = tmp_path / "run"
+    run.mkdir()
+    (run / "score.json").write_text(
+        json.dumps({"arms": {
+            "menhir_recall": {"n": 78, "score": 0.923},
+            "no_memory": {"n": 78, "score": 0.064},
+        }}),
+        encoding="utf-8",
+    )
+    described = ledger.describe_score(run)
+    assert "menhir_recall=0.923" in described
+    assert "no_memory=0.064" in described
+
+
+def test_describe_score_returns_none_with_no_evidence(tmp_path: Path) -> None:
+    run = tmp_path / "run"
+    run.mkdir()
+    assert ledger.describe_score(run) is None

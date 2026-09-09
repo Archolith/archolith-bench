@@ -494,6 +494,25 @@ if [ -f "${RECALL_OUT}/results.md" ]; then
   cat "${RECALL_OUT}/results.md" >&2
 fi
 
+# Emit the score as machine-readable per-arm evidence alongside the rendered markdown.
+# results.md is the only score artifact this harness used to write, which is why every
+# LEDGER.md number was read by a human and retyped -- and why six runs with real scores
+# never reached the scoreboard. score.json is computed from the harness checkpoint (one line
+# per arm+task), so `ledger.py validate` can check the recorded number against the run's own
+# evidence instead of taking it on trust.
+#
+# Non-fatal and deliberately after the provenance/`complete` bookkeeping: this is a
+# derivation from artifacts already on disk, so it can be re-run later with
+# `score_extract.py <run-dir>` and must never be able to fail a run that already scored.
+SCORE_TOOL="${SCRIPT_DIR}/lib/score_extract.py"
+if [ -f "${SCORE_TOOL}" ]; then
+  if "${BENCH_PY}" "${SCORE_TOOL}" "${LME_RESULTS_DIR}" >&2; then
+    log "per-arm scores: ${LME_RESULTS_DIR}/score.json"
+  else
+    log "WARNING: score.json not written; add this run's ledger row by hand"
+  fi
+fi
+
 # Record completion
 record_phase_end recall-qa "$([ "${HARNESS_EXIT}" = "0" ] && echo completed || echo failed)" \
   "harness_exit=${HARNESS_EXIT}"

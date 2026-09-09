@@ -259,6 +259,37 @@ The columns refuse to launder messy reality into clean numbers:
   two rows claiming to be the current canonical evidence is an unresolved claim, not a
   formatting detail.
 
+### `score.json`: the number, checkable
+
+The buildout harness writes only `harness_recall/results.md` — rendered markdown. That is
+why every `LEDGER.md` score was read by a human and retyped, and why six runs with real
+scores never reached the scoreboard. `lib/score_extract.py` reads the authoritative source
+instead — `harness_recall/.checkpoint_*.jsonl`, one line per (arm, task) carrying
+`result.correct` — and writes per-arm `score.json` into the run directory. The buildout
+wrapper now calls it after the harness; run it by hand on any older directory:
+
+```bash
+python scripts/longmemeval/lib/score_extract.py results/lme-ku-buildout/<run>
+```
+
+It reproduces the hand-typed history exactly: 0.467, 0.346, 0.333 and 0.872 for the four
+runs whose ledger rows carry a score and whose checkpoint survives, including
+`68/78 recall vs 6/78 (0.077) no-memory` for the canonical run.
+
+**It never picks a primary arm.** A run carries up to six (`no_memory`, `menhir_recall`,
+`menhir_value_recall`, the v2/v3 variants), and which one a row quotes is a judgement:
+`value-arm-verify-20260717` records **0.679**, its `menhir_value_recall` arm, while its
+`menhir_recall` arm scored **0.333**. Auto-picking by name order publishes the wrong number.
+So the ledger has a `primary_arm` column, and `validate` cross-checks the recorded score
+against `score.json` for that arm — which catches a typo, a stale copy, and a number quoted
+from the wrong arm. Two further guards: a declared arm absent from `score.json` fails, and an
+arm whose item count disagrees with `items_total` warns.
+
+`score_extract.py` also refuses to turn absence into zero — a run with no checkpoint raises
+rather than reporting 0.0, because an aborted launch and a run that genuinely scored 0.0 are
+different facts. It de-duplicates by (arm, task) with last-wins, since `--resume` appends and
+a re-scored task would otherwise be counted twice.
+
 ### Severity model
 
 `FAIL` means the ledger asserts something false; `WARN` means it is incomplete. Only `FAIL`
