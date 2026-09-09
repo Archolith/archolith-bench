@@ -55,6 +55,7 @@ DEFAULT_ALLOWED_PORTS: frozenset[int] = frozenset({
     8118,  # throwaway menhir HTTP used by the brief A/B
     8120,  # throwaway menhir HTTP used by the answer A/B
     8150,  # throwaway menhir HTTP used by the packet-shape panel
+    8122,  # throwaway menhir HTTP used by run_date_smoke.sh (LME_PORT_BUILD)
 })
 
 # Real services. Refused on every host, and no opt-in can lift them -- the
