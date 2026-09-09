@@ -423,7 +423,20 @@ class HttpMenhirClient:
         if not content:
             return
         url = self._base_url.rstrip("/") + self._ingest_path
-        payload: dict = {"episode": f"{role}: {content}", "namespace": group_id}
+        # A GROUNDED claim must be byte-identical to the :TurnEvidence it cites. Menhir's admission
+        # gate tests exact equality (domain/truth/assertion_spans.claim_is_grounded) -- deliberately,
+        # since the older substring/token-overlap check granted apex tier to single-word
+        # contradictions of a multi-token claim. record_turn_evidence() posts the RAW text, so the
+        # "{role}: " decoration applied here made the claim differ from its own evidence by exactly
+        # six characters and every user-tier claim was denied and silently downgraded to
+        # agent_inference: 22 episodes matched 'user: ' + turn.text, 0 matched turn.text, and the
+        # graph carried zero ADMITTED_ON edges across every run to date.
+        #
+        # Scoped to the grounded path on purpose. The prefix still labels the speaker for turns that
+        # are NOT cited as evidence, so ungrounded episode text -- and therefore extraction input on
+        # every existing benchmark arm -- is unchanged and stays comparable.
+        episode_text = content if turn_evidence_uuid is not None else f"{role}: {content}"
+        payload: dict = {"episode": episode_text, "namespace": group_id}
         if source is not None:
             payload["source"] = source
         if diff is not None:
