@@ -114,6 +114,25 @@ PROVENANCE_BEGIN_ARGS=("begin" "${GRAPH_PROVENANCE_PATH}" "${GRAPH_ATTEMPT_RECOR
 "${BENCH_PY}" "${GRAPH_PROVENANCE_TOOL}" "${PROVENANCE_BEGIN_ARGS[@]}" ||
   die "graph provenance refused this attempt (identity or commit mismatch); see above"
 rm -f "${GRAPH_ATTEMPT_RECORD}"
+
+# Hash the declared benchmark-affecting surface into this graph's provenance. The
+# `menhir_untracked`/`bench_untracked` counts recorded below say how many untracked files
+# existed; they cannot say what was in them, and a dirty tree leaves the commit SHA
+# unchanged while the executed code differs. Every run_ku_*.sh wrapper reaches a graph
+# through this script, so attaching here is what makes those runs attributable at all.
+#
+# Non-fatal, for the same reason as in the buildout wrapper: a fingerprint is evidence about
+# a run, not a precondition for it, and refusing to launch would trade a recorded gap for no
+# run. `bench_surface.py blame` reports a run with no fingerprint as not-comparable rather
+# than guessing.
+GRAPH_SURFACE_TOOL="$(dirname "${BASH_SOURCE[0]}")/lib/bench_surface.py"
+if [ -f "${GRAPH_SURFACE_TOOL}" ]; then
+  "${BENCH_PY}" "${GRAPH_SURFACE_TOOL}" attach "${GRAPH_PROVENANCE_PATH}" ||
+    log "WARNING: surface fingerprint failed; this graph will not be attributable by file"
+else
+  log "WARNING: ${GRAPH_SURFACE_TOOL} missing; no surface fingerprint recorded"
+fi
+
 # A phase is only reproducible if it names the code that ran it and the data it ran on.
 # build_graph.sh can be invoked directly, so the fixture hash/count are recorded when the
 # caller exported them and omitted otherwise rather than guessed.
