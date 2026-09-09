@@ -343,6 +343,26 @@ PROVENANCE_BEGIN_ARGS=()
 rm -f "${ATTEMPT_RECORD}"
 log "provenance recorded: ${PROVENANCE_PATH}"
 
+# Hash the declared benchmark-affecting surface into this attempt's record. Commit SHAs
+# cannot do this job: a dirty tree or an untracked file leaves the SHA unchanged while the
+# executed code differs, which is how the assistant-turn gate in claim_segmenter.py ended
+# up attributed to a `chore: track untracked scripts` commit. Content hashes make a later
+# `bench_surface.py blame A B` name the files that actually differ.
+#
+# Non-fatal: a fingerprint is evidence about a run, not a precondition for it. Refusing to
+# launch here would trade a recorded gap for no run at all. The gap is recorded instead,
+# and `blame` reports a run with no fingerprint as not-comparable rather than guessing.
+SURFACE_TOOL="${SCRIPT_DIR}/lib/bench_surface.py"
+if [ -f "${SURFACE_TOOL}" ]; then
+  if "${BENCH_PY}" "${SURFACE_TOOL}" attach "${PROVENANCE_PATH}"; then
+    :
+  else
+    log "WARNING: surface fingerprint failed; this run will not be attributable by file"
+  fi
+else
+  log "WARNING: ${SURFACE_TOOL} missing; no surface fingerprint recorded"
+fi
+
 MENHIR_PID=""
 cleanup_all(){
   [ -n "${MENHIR_PID}" ] && kill "${MENHIR_PID}" 2>/dev/null || true

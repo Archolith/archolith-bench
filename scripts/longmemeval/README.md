@@ -220,6 +220,63 @@ Each phase entry records the state it inherited and the settings it truly ran un
 A phase is closed only on the success path, so a killed run leaves its phase `started`; the next
 attempt's `begin` marks it `interrupted`. That is a fact worth seeing, not an error.
 
+## Benchmark Surface Fingerprint (`bench-surface.yaml`)
+
+A commit SHA does not establish what code a run executed. Two runs can share a SHA and
+differ — a dirty tree, or an untracked file — and a file can change behavior in one commit
+while `git log` attributes it to another. The assistant-turn gate in `claim_segmenter.py` is
+the worked example: it was authored untracked, then swept into git by
+`f49ab59 chore(bench): track 12 previously-untracked LME scripts`, so a commit-range diff
+dates it wrongly and never names it.
+
+`bench-surface.yaml` declares the paths that can move a score, tagged by pipeline stage
+(`fixture` → `ingest` → `consolidate` → `recall` → `score` → `harness`).
+`lib/bench_surface.py` hashes them into each run's provenance, so comparing two runs yields
+file-level evidence instead of a commit-range guess.
+
+```bash
+# What is the surface right now?
+python scripts/longmemeval/lib/bench_surface.py fingerprint
+
+# Why do these two runs differ?
+python scripts/longmemeval/lib/bench_surface.py blame \
+  results/lme-ku-buildout/<run-a>/run_provenance.json \
+  results/lme-ku-buildout/<run-b>/run_provenance.json
+```
+
+`run_knowledge_update_buildout.sh` calls `attach` after `begin`, recording the fingerprint
+against the running attempt — per attempt, because separate attempts of one run may execute
+different code.
+
+Three properties it holds, because it is evidence and not a convenience:
+
+- **A declared-but-absent file is recorded, not skipped.** Deleting a surface file changes
+  the digest; a skipped path would leave it unchanged.
+- **The manifest hashes itself** (`manifest_sha256` feeds `surface_digest`). Narrowing the
+  surface is itself a change to what is tracked, so a shrunken declaration cannot go on
+  looking stable.
+- **A missing repo is an error, not a column of nulls** — an absent checkout would otherwise
+  fingerprint as "every file deleted", which is wrong *and* stable across runs.
+
+Two deliberate non-properties:
+
+- **Fingerprinting is non-fatal at launch.** A fingerprint is evidence about a run, not a
+  precondition for it; refusing to launch would trade a recorded gap for no run at all.
+- **It does not gate canonical runs on surface drift.** `run_provenance.py` already refuses
+  commit drift on a canonical resume; extending that to `surface_digest` would catch strictly
+  more, and is deliberately left as a follow-up rather than bundled in here.
+
+When editing the surface: bias **broad**. A path listed that turns out not to matter costs
+one extra line in a blame report; a path missing makes a real behavior change invisible.
+`tests/test_lme_bench_surface.py` fails if any checked-in glob matches nothing, which catches
+a renamed or deleted module silently shrinking coverage.
+
+**Historical runs predate this.** Of 51 run directories, 16 have no `run_provenance.json` at
+all, 18 of the remaining 35 record no dirty flag, 14 carry no `fixture_sha256`, and 5 ran with
+a dirty tree. `blame` reports a run with no fingerprint as not-comparable rather than guessing.
+Fingerprints are reconstructible via `git show` only for the runs that were clean *and* recorded
+a full SHA; the 5 dirty runs and the 16 with no provenance are permanently unattributable.
+
 ## Menhir Recall Lab integration
 
 Both `build_graph.sh` and `run_knowledge_update_buildout.sh` now export
