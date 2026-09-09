@@ -42,6 +42,7 @@ BENCH_ROOT = LME_DIR.parents[1]
 DEFAULT_RESULTS = BENCH_ROOT / "results" / "lme-ku-buildout"
 DEFAULT_CSV = DEFAULT_RESULTS / "ledger.csv"
 DEFAULT_MARKDOWN = DEFAULT_RESULTS / "LEDGER.md"
+DEFAULT_EXCLUDED = DEFAULT_RESULTS / "ledger-excluded.txt"
 
 BEGIN_MARKER = "<!-- BEGIN GENERATED SCOREBOARD -- edit ledger.csv, then run ledger.py render -->"
 END_MARKER = "<!-- END GENERATED SCOREBOARD -->"
@@ -110,6 +111,32 @@ def write_rows(rows: list[dict[str, str]], csv_path: Path = DEFAULT_CSV) -> None
         for row in rows:
             writer.writerow({field: row.get(field, "") for field in FIELDS})
 
+
+
+def read_exclusions(path: Path | None = None) -> dict[str, str]:
+    """Runs deliberately kept out of the scoreboard, as {run_id: reason}.
+
+    A reason is required. An entry without one is refused rather than defaulted, because
+    "excluded" with no stated ground is how a real result gets quietly hidden -- the exact
+    failure the orphan check exists to catch. Exclusions suppress the per-run orphan finding
+    only; the count is still reported, so they never become fully invisible.
+    """
+    target = DEFAULT_EXCLUDED if path is None else path
+    if not target.exists():
+        return {}
+    excluded: dict[str, str] = {}
+    for number, line in enumerate(target.read_text(encoding="utf-8").splitlines(), 1):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        run_id, _, reason = stripped.partition("  ")
+        if not reason.strip():
+            raise LedgerError(
+                f"{target.name}:{number}: {run_id!r} is excluded with no reason; "
+                "every exclusion must state why (separate run_id and reason with two spaces)"
+            )
+        excluded[run_id.strip()] = reason.strip()
+    return excluded
 
 # ---------------------------------------------------------------------------
 # One-time migration from the hand-typed markdown table
@@ -359,6 +386,7 @@ def validate(
     """
     rows = read_rows(csv_path)
     findings: list[dict[str, str]] = []
+    excluded = read_exclusions(results_dir / "ledger-excluded.txt")
 
     def report(level: str, run_id: str, message: str) -> None:
         findings.append({"level": level, "run_id": run_id, "message": message})
@@ -555,12 +583,18 @@ def validate(
     # diagnostics that may not belong in it. The distinction recorded is whether a score is
     # actually readable, because "a scored result is missing" needs following up and "an
     # aborted launch left provenance" does not.
+    excluded_seen: list[str] = []
     if evidence_present:
         for candidate in sorted(results_dir.iterdir()):
             if not candidate.is_dir() or candidate.name in seen:
                 continue
             if not (candidate / "run_provenance.json").exists():
                 # No provenance: a survey or analysis output directory, not a run.
+                continue
+            if candidate.name in excluded:
+                # Deliberately out of the scoreboard; see ledger-excluded.txt. Counted below
+                # so the decision stays visible rather than silently swallowing a result.
+                excluded_seen.append(candidate.name)
                 continue
             described = describe_score(candidate)
             if described is not None:
@@ -575,6 +609,36 @@ def validate(
                     "has provenance but no readable score and no ledger row "
                     "(aborted launch, build-only, or diagnostic run)",
                 )
+
+    # A run cannot be both excluded and recorded -- one of the two is wrong.
+    for run_id in sorted(set(excluded) & seen):
+        report(
+            "FAIL", run_id,
+            "is listed in ledger-excluded.txt but also has a ledger row; "
+            "remove it from one of the two",
+        )
+
+    if evidence_present:
+        if excluded_seen:
+            findings.append({
+                "level": "WARN", "run_id": "(ledger)",
+                "message": (
+                    f"{len(excluded_seen)} run(s) deliberately excluded from the scoreboard "
+                    "per ledger-excluded.txt; their scores remain in each run's score.json"
+                ),
+            })
+        # An exclusion naming a directory that is not there is stale bookkeeping, not a
+        # suppression that is doing any work.
+        stale = sorted(
+            run_id for run_id in excluded
+            if run_id not in seen and not (results_dir / run_id).is_dir()
+        )
+        for run_id in stale:
+            report(
+                "WARN", run_id,
+                "is listed in ledger-excluded.txt but no such run directory exists; "
+                "the exclusion is stale",
+            )
 
     if len(current_canonical) > 1:
         for run_id in current_canonical:

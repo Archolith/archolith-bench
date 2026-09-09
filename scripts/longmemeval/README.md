@@ -314,7 +314,23 @@ CI runs these as a named step (`Ledger and benchmark-surface reports`) on top of
 own gates, so a red build names the offending row or file instead of reporting "a test
 failed", and the WARN tier the tests ignore stays visible.
 
-**Current state of the real ledger: 0 FAIL, 38 WARN.** The warnings are honest debt, not
+### Deliberate exclusions (`ledger-excluded.txt`)
+
+Some run directories hold a real score but are not buildout results -- recall panels against an
+existing graph, rescores, single-item diagnostics. Listing them in
+`results/lme-ku-buildout/ledger-excluded.txt` as `<run_id>  <reason>` records that decision once
+so the orphan finding stops reappearing and getting re-litigated.
+
+Exclusion is kept honest by three guards, because "not in the scoreboard" must never become a
+way to hide a result:
+
+- **A reason is required.** An entry without one is refused outright.
+- **Excluded runs are still counted** in one summary WARN, so the decision stays visible and
+  their scores remain in each run's `score.json`.
+- **A run that is both excluded and recorded FAILs**, and an exclusion naming a directory that
+  no longer exists WARNs as stale.
+
+**Current state of the real ledger: 0 FAIL, 24 WARN** (15 runs excluded as of 2026-09-08). The warnings are honest debt, not
 noise: 24 rows cover 51 run directories, 9 directories hold a readable score with no row
 (small-sample packet-shape and rescore panels — decide whether they belong in a *buildout*
 scoreboard), and most pre-fingerprint runs cannot have their deltas attributed to files.

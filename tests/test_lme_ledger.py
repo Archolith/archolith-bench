@@ -641,3 +641,93 @@ def test_a_present_evidence_tree_still_catches_a_missing_run_dir(tmp_path: Path)
         tmp_path, [_row(run_id="run-a", has_results_dir="true")], results=results
     )
     assert any("claims a results directory" in m for m in _messages(findings, "FAIL"))
+
+
+# ---------------------------------------------------------------------------
+# Deliberate exclusions
+#
+# Some run directories hold a real score but are not buildout results -- recall panels,
+# rescores, diagnostics. Excluding them records that decision once so the orphan finding
+# stops reappearing. The risk is that exclusion becomes a way to hide a real result, so
+# every guard below exists to keep it honest.
+# ---------------------------------------------------------------------------
+
+def _excluded_file(results: Path, body: str) -> None:
+    results.mkdir(parents=True, exist_ok=True)
+    (results / "ledger-excluded.txt").write_text(body, encoding="utf-8")
+
+
+def _scored_orphan(results: Path, run_id: str, score: float = 0.9) -> None:
+    run = results / run_id
+    run.mkdir(parents=True, exist_ok=True)
+    (run / "run_provenance.json").write_text(json.dumps({"run_id": run_id}), encoding="utf-8")
+    (run / "score.json").write_text(
+        json.dumps({"arms": {"menhir_recall": {"n": 5, "score": score}}}), encoding="utf-8"
+    )
+
+
+def test_an_excluded_run_is_not_reported_as_an_orphan(tmp_path: Path) -> None:
+    results = tmp_path / "results"
+    _scored_orphan(results, "panel-run")
+    _excluded_file(results, "panel-run  packet-shape panel, n=5\n")
+    findings = _validate(tmp_path, [_row(run_id="run-a")], results=results)
+    assert not any("no ledger row" in m for m in _messages(findings, "WARN"))
+
+
+def test_excluded_runs_are_still_counted_so_they_stay_visible(tmp_path: Path) -> None:
+    """Suppression must not be silence: a reader still learns the decision was made."""
+    results = tmp_path / "results"
+    _scored_orphan(results, "panel-run")
+    _excluded_file(results, "panel-run  packet-shape panel, n=5\n")
+    findings = _validate(tmp_path, [_row(run_id="run-a")], results=results)
+    assert any("deliberately excluded" in m for m in _messages(findings, "WARN"))
+
+
+def test_an_exclusion_without_a_reason_is_refused(tmp_path: Path) -> None:
+    """"Excluded" with no stated ground is how a real result gets quietly hidden."""
+    results = tmp_path / "results"
+    _scored_orphan(results, "panel-run")
+    _excluded_file(results, "panel-run\n")
+    with pytest.raises(ledger.LedgerError, match="excluded with no reason"):
+        _validate(tmp_path, [_row(run_id="run-a")], results=results)
+
+
+def test_a_run_both_excluded_and_recorded_fails(tmp_path: Path) -> None:
+    results = tmp_path / "results"
+    _scored_orphan(results, "run-a")
+    _excluded_file(results, "run-a  claimed to be a panel\n")
+    findings = _validate(
+        tmp_path, [_row(run_id="run-a", has_results_dir="true")], results=results
+    )
+    assert any("also has a ledger row" in m for m in _messages(findings, "FAIL"))
+
+
+def test_a_stale_exclusion_warns(tmp_path: Path) -> None:
+    """An exclusion naming a directory that is gone is bookkeeping doing no work."""
+    results = tmp_path / "results"
+    _scored_orphan(results, "real-run")
+    _excluded_file(results, "real-run  a panel\nvanished-run  a panel that no longer exists\n")
+    findings = _validate(tmp_path, [_row(run_id="run-a")], results=results)
+    assert any("the exclusion is stale" in m for m in _messages(findings, "WARN"))
+
+
+def test_comments_and_blank_lines_are_ignored(tmp_path: Path) -> None:
+    results = tmp_path / "results"
+    _scored_orphan(results, "panel-run")
+    _excluded_file(results, "# a heading\n\n   \npanel-run  a panel\n# trailing note\n")
+    findings = _validate(tmp_path, [_row(run_id="run-a")], results=results)
+    assert _messages(findings, "FAIL") == []
+
+
+def test_no_exclusions_file_is_fine(tmp_path: Path) -> None:
+    results = tmp_path / "results"
+    _scored_orphan(results, "panel-run")
+    findings = _validate(tmp_path, [_row(run_id="run-a")], results=results)
+    assert any("no ledger row" in m for m in _messages(findings, "WARN"))
+
+
+def test_real_exclusions_file_parses_and_every_entry_has_a_reason() -> None:
+    """Guards the checked-in file itself, which is where a reasonless entry would land."""
+    excluded = ledger.read_exclusions()
+    assert excluded, "expected the checked-in ledger-excluded.txt to list runs"
+    assert all(reason.strip() for reason in excluded.values())
