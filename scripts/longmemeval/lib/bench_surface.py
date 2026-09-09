@@ -223,6 +223,34 @@ def _settings_of(document: dict[str, Any]) -> dict[str, Any]:
     return latest if isinstance(latest, dict) else {}
 
 
+def _provenance_facts(document: dict[str, Any]) -> dict[str, Any]:
+    """Commit and cleanliness facts for a run, from wherever the writing wrapper put them.
+
+    The two wrappers record these in different places: ``run_knowledge_update_buildout.sh``
+    puts ``menhir_dirty``/``bench_dirty`` in the attempt record, while ``build_graph.sh``
+    puts them only in the phase's ``effective_settings``. Reading just ``latest_attempt``
+    therefore reported "cleanliness unknown" for every graph build even though the flags
+    were recorded one level down -- which is worse than a missing warning, because it
+    withholds a dirty-tree warning that the record could support. Phase settings win on
+    conflict: they are read at phase start, so they describe the code that actually ran.
+    """
+    facts: dict[str, Any] = {}
+    latest = document.get("latest_attempt")
+    if isinstance(latest, dict):
+        facts.update(latest)
+    for phase in document.get("phases") or []:
+        settings = phase.get("effective_settings")
+        if isinstance(settings, dict):
+            facts.update(
+                {
+                    key: value
+                    for key, value in settings.items()
+                    if key.endswith(("_dirty", "_commit", "_untracked"))
+                }
+            )
+    return facts
+
+
 def _flatten_files(snapshot: dict[str, Any]) -> dict[str, tuple[str, str | None]]:
     """Map "repo:path" -> (stage, hash)."""
     flat: dict[str, tuple[str, str | None]] = {}
@@ -262,16 +290,21 @@ def blame(
     }
 
     for label, document in (("run_a", run_a), ("run_b", run_b)):
-        latest = document.get("latest_attempt") or {}
-        if latest.get("menhir_dirty") or latest.get("bench_dirty"):
+        facts = _provenance_facts(document)
+        name = document.get("run_id") or document.get("container") or "?"
+        dirty = [
+            key.removesuffix("_dirty")
+            for key in ("menhir_dirty", "bench_dirty")
+            if facts.get(key)
+        ]
+        if dirty:
             report["warnings"].append(
-                f"{label} ({document.get('run_id')}) ran with a DIRTY tree; "
+                f"{label} ({name}) ran with a DIRTY tree ({', '.join(dirty)}); "
                 "its commit SHA does not describe the code that executed"
             )
-        if latest.get("menhir_dirty") is None and "menhir_commit" in latest:
+        elif facts.get("menhir_dirty") is None and "menhir_commit" in facts:
             report["warnings"].append(
-                f"{label} ({document.get('run_id')}) recorded no dirty flag; "
-                "cleanliness is unknown"
+                f"{label} ({name}) recorded no dirty flag; cleanliness is unknown"
             )
 
     fa, fb = _latest_fingerprint(run_a), _latest_fingerprint(run_b)
@@ -330,7 +363,7 @@ def blame(
         # and is skipped for dirty runs where the SHA range is not trustworthy.
         repos = {**(fb.get("repos") or {}), **(fa.get("repos") or {})}
         commits: dict[str, list[str]] = {}
-        la, lb = run_a.get("latest_attempt") or {}, run_b.get("latest_attempt") or {}
+        la, lb = _provenance_facts(run_a), _provenance_facts(run_b)
         for repo_name, root in repos.items():
             sha_a = la.get(f"{repo_name}_commit")
             sha_b = lb.get(f"{repo_name}_commit")

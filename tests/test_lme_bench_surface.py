@@ -401,3 +401,57 @@ def test_real_manifest_fingerprints_with_every_glob_matching() -> None:
 def test_real_manifest_declares_every_pipeline_stage() -> None:
     snapshot = surface.fingerprint(surface.DEFAULT_MANIFEST)
     assert set(snapshot["stages"]) == set(surface.STAGE_ORDER)
+
+
+def test_blame_finds_dirty_flags_recorded_only_in_phase_settings(tmp_path: Path) -> None:
+    """build_graph.sh records dirty state in the phase, not the attempt record.
+
+    Reading only latest_attempt reported "cleanliness unknown" for every graph build even
+    though the flags were right there in effective_settings -- withholding a dirty-tree
+    warning the record could support. Found by running the real date-smoke build, not by
+    the synthetic fixtures above.
+    """
+    manifest, _ = _make_surface(tmp_path)
+    snapshot = surface.fingerprint(manifest)
+    graph_build = {
+        "container": "menhir-lme-datesmoke",
+        "latest_attempt": {"menhir_commit": "a" * 40, "bench_commit": "b" * 40},
+        "phases": [{
+            "phase": "ingest-graph",
+            "effective_settings": {
+                "menhir_commit": "a" * 40, "bench_commit": "b" * 40,
+                "menhir_dirty": False, "bench_dirty": True,
+            },
+        }],
+        "surface_fingerprints": [{"attempt": 1, **snapshot}],
+    }
+    report = surface.blame(graph_build, _run_document("b", snapshot))
+    assert any("DIRTY tree (bench)" in w for w in report["warnings"])
+    assert not any("cleanliness is unknown" in w for w in report["warnings"])
+
+
+def test_blame_still_reports_unknown_cleanliness_when_nothing_recorded_it(
+    tmp_path: Path,
+) -> None:
+    manifest, _ = _make_surface(tmp_path)
+    snapshot = surface.fingerprint(manifest)
+    document = {
+        "run_id": "old",
+        "latest_attempt": {"menhir_commit": "a" * 40},
+        "surface_fingerprints": [{"attempt": 1, **snapshot}],
+    }
+    report = surface.blame(document, _run_document("b", snapshot))
+    assert any("cleanliness is unknown" in w for w in report["warnings"])
+
+
+def test_blame_names_a_run_by_container_when_it_has_no_run_id(tmp_path: Path) -> None:
+    """Graph provenance carries `container`, not `run_id`; "?" would be unactionable."""
+    manifest, _ = _make_surface(tmp_path)
+    snapshot = surface.fingerprint(manifest)
+    document = {
+        "container": "menhir-lme-datesmoke",
+        "latest_attempt": {"menhir_commit": "a" * 40, "menhir_dirty": True},
+        "surface_fingerprints": [{"attempt": 1, **snapshot}],
+    }
+    report = surface.blame(document, _run_document("b", snapshot))
+    assert any("menhir-lme-datesmoke" in w for w in report["warnings"])
