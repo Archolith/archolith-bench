@@ -363,6 +363,22 @@ def validate(
     def report(level: str, run_id: str, message: str) -> None:
         findings.append({"level": level, "run_id": run_id, "message": message})
 
+    # `results/` is gitignored: a fresh checkout carries ledger.csv and LEDGER.md and none of
+    # the run directories. Without this, every row recording has_results_dir=true fails in CI
+    # for the one reason that is not a defect -- the evidence was never committed. An absent
+    # tree is "cannot check", not "the claim is false"; the on-disk cross-checks below are
+    # skipped and said so once, while every schema and self-consistency check still runs.
+    evidence_present = results_dir.is_dir() and any(
+        child.is_dir() for child in results_dir.iterdir()
+    )
+    if not evidence_present:
+        report(
+            "WARN", "(ledger)",
+            f"no run directories under {results_dir} -- results/ is gitignored, so the "
+            "on-disk cross-checks (results dir, provenance, score.json, orphan runs) are "
+            "skipped here; schema checks still ran",
+        )
+
     seen: set[str] = set()
     current_canonical: list[str] = []
 
@@ -432,6 +448,9 @@ def validate(
         run_directory = results_dir / run_id
         exists = run_directory.is_dir()
         claimed = (row.get("has_results_dir") or "").strip().lower()
+        if not evidence_present:
+            # Nothing on disk to check this row against; see the note above.
+            continue
         if claimed in {"true", "yes", "1"} and not exists:
             report("FAIL", run_id, f"claims a results directory but {run_directory} is absent")
         if claimed in {"false", "no", "0"} and exists:
@@ -536,7 +555,7 @@ def validate(
     # diagnostics that may not belong in it. The distinction recorded is whether a score is
     # actually readable, because "a scored result is missing" needs following up and "an
     # aborted launch left provenance" does not.
-    if results_dir.is_dir():
+    if evidence_present:
         for candidate in sorted(results_dir.iterdir()):
             if not candidate.is_dir() or candidate.name in seen:
                 continue

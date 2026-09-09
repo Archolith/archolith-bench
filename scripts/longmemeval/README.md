@@ -303,6 +303,17 @@ anyone reading the table. Note that `manifest.json` and `harness_recall/` are de
 *not* treated as score evidence — they prove ingest or recall ran, not that a number was
 produced.
 
+Both directions' checks need the evidence tree. `results/` is gitignored, so a fresh
+checkout (CI included) has `ledger.csv` and none of the run directories: validate then skips
+the on-disk cross-checks and says so in one WARN, while every schema and self-consistency
+check still runs. Without that distinction, each row recording `has_results_dir=true` would
+fail in CI for the one reason that is not a defect — the evidence was never committed. An
+absent tree is *cannot check*, not *the claim is false*.
+
+CI runs these as a named step (`Ledger and benchmark-surface reports`) on top of the suite's
+own gates, so a red build names the offending row or file instead of reporting "a test
+failed", and the WARN tier the tests ignore stays visible.
+
 **Current state of the real ledger: 0 FAIL, 38 WARN.** The warnings are honest debt, not
 noise: 24 rows cover 51 run directories, 9 directories hold a readable score with no row
 (small-sample packet-shape and rescore panels — decide whether they belong in a *buildout*

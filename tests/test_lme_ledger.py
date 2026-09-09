@@ -206,7 +206,12 @@ def test_blank_run_id_fails(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 def test_claiming_a_results_directory_that_is_absent_fails(tmp_path: Path) -> None:
-    findings = _validate(tmp_path, [_row(has_results_dir="true")])
+    # The tree must be materialized for this to be a contradiction rather than "cannot
+    # check" -- an empty results/ is a fresh checkout, where the evidence was never
+    # committed. See test_a_checkout_without_the_evidence_tree_does_not_fail.
+    results = tmp_path / "results"
+    (results / "another-run").mkdir(parents=True)
+    findings = _validate(tmp_path, [_row(has_results_dir="true")], results=results)
     assert any("claims a results directory" in m for m in _messages(findings, "FAIL"))
 
 
@@ -595,3 +600,44 @@ def test_describe_score_returns_none_with_no_evidence(tmp_path: Path) -> None:
     run = tmp_path / "run"
     run.mkdir()
     assert ledger.describe_score(run) is None
+
+
+def test_a_checkout_without_the_evidence_tree_does_not_fail(tmp_path: Path) -> None:
+    """`results/` is gitignored: CI has ledger.csv and none of the run directories.
+
+    Without this distinction every row recording has_results_dir=true fails in CI for the
+    one reason that is not a defect -- the evidence was never committed. An absent tree is
+    "cannot check", not "the claim is false".
+    """
+    results = tmp_path / "results"
+    results.mkdir()
+    findings = _validate(
+        tmp_path,
+        [_row(run_id="run-a", has_results_dir="true"),
+         _row(run_id="run-b", has_results_dir="true", canonical="current")],
+        results=results,
+    )
+    assert _messages(findings, "FAIL") == []
+    assert any("no run directories under" in m for m in _messages(findings, "WARN"))
+
+
+def test_schema_checks_still_run_without_the_evidence_tree(tmp_path: Path) -> None:
+    """Skipping the on-disk checks must not turn validate into a no-op."""
+    results = tmp_path / "results"
+    results.mkdir()
+    findings = _validate(
+        tmp_path,
+        [_row(run_id="run-a", status="killed", score="0.5", has_results_dir="true")],
+        results=results,
+    )
+    assert any("implies status 'scored'" in m for m in _messages(findings, "FAIL"))
+
+
+def test_a_present_evidence_tree_still_catches_a_missing_run_dir(tmp_path: Path) -> None:
+    """The gate must not suppress the real contradiction it was guarding."""
+    results = tmp_path / "results"
+    (results / "some-other-run").mkdir(parents=True)  # tree IS materialized
+    findings = _validate(
+        tmp_path, [_row(run_id="run-a", has_results_dir="true")], results=results
+    )
+    assert any("claims a results directory" in m for m in _messages(findings, "FAIL"))

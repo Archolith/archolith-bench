@@ -119,6 +119,26 @@ jobs:
           MENHIR_ROOT: ${{ github.workspace }}/.menhir-src
         run: python -m pytest tests/ -q
 
+      # The suite already gates these (test_real_ledger_has_no_failures,
+      # test_real_manifest_fingerprints_with_every_glob_matching), but a pytest failure
+      # reports "a test failed" rather than which ledger row contradicts which file. This
+      # step prints the reports so a red build names the problem, and surfaces the WARN tier
+      # the tests deliberately ignore -- orphan runs, missing fingerprints, unchecked scores.
+      #
+      # `results/` is gitignored, so CI has ledger.csv and none of the run directories:
+      # validate skips its on-disk cross-checks here and says so. This is a schema and
+      # self-consistency gate, not an evidence audit.
+      - name: Ledger and benchmark-surface reports
+        env:
+          MENHIR_ROOT: ${{ github.workspace }}/.menhir-src
+        run: |
+          echo "::group::benchmark surface fingerprint"
+          python scripts/longmemeval/lib/bench_surface.py fingerprint
+          echo "::endgroup::"
+          echo "::group::ledger validate"
+          python scripts/longmemeval/lib/ledger.py validate
+          echo "::endgroup::"
+
   # Drift canary: the same suite, but against menhir's CURRENT main instead of the
   # pinned ref the `test` job uses. Its purpose is to answer one question on a
   # schedule -- "has menhir moved in a way that invalidates a bench expectation?" --
