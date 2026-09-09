@@ -1,0 +1,25 @@
+{
+  "run_id": "scalar-canonical-ku78-v1-20260806",
+  "source": [
+    "harness_recall/.checkpoint_longmemeval-menhir_oracle_gpt-4o.jsonl"
+  ],
+  "primary_arm": null,
+  "arms": {
+    "menhir_recall": {
+      "n": 78,
+      "correct": 68,
+      "score": 0.871795,
+      "input_tokens": 115384,
+      "output_tokens": 1620
+    },
+    "no_memory": {
+      "n": 78,
+      "correct": 6,
+      "score": 0.076923,
+      "input_tokens": 31760,
+      "output_tokens": 1711
+    }
+  },
+  "duplicate_entries_collapsed": 0,
+  "malformed_lines": 0
+}

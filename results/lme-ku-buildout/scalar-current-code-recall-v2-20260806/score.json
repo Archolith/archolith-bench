@@ -1,0 +1,18 @@
+{
+  "run_id": "scalar-current-code-recall-v2-20260806",
+  "source": [
+    "harness_recall/.checkpoint_longmemeval-menhir_oracle_gpt-4o.jsonl"
+  ],
+  "primary_arm": null,
+  "arms": {
+    "menhir_recall": {
+      "n": 78,
+      "correct": 72,
+      "score": 0.923077,
+      "input_tokens": 115490,
+      "output_tokens": 1390
+    }
+  },
+  "duplicate_entries_collapsed": 0,
+  "malformed_lines": 0
+}

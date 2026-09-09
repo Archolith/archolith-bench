@@ -1,0 +1,18 @@
+{
+  "run_id": "scalar-write-repair-targeted-v1-20260730",
+  "source": [
+    "harness_recall/.checkpoint_longmemeval-menhir_oracle_gpt-4o.jsonl"
+  ],
+  "primary_arm": null,
+  "arms": {
+    "menhir_recall": {
+      "n": 78,
+      "correct": 70,
+      "score": 0.897436,
+      "input_tokens": 115490,
+      "output_tokens": 1448
+    }
+  },
+  "duplicate_entries_collapsed": 0,
+  "malformed_lines": 0
+}

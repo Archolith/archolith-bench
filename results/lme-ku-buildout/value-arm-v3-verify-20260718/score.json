@@ -1,0 +1,39 @@
+{
+  "run_id": "value-arm-v3-verify-20260718",
+  "source": [
+    "harness_recall/.checkpoint_longmemeval-menhir_oracle_gpt-4o.jsonl"
+  ],
+  "primary_arm": null,
+  "arms": {
+    "menhir_recall": {
+      "n": 78,
+      "correct": 28,
+      "score": 0.358974,
+      "input_tokens": 43575,
+      "output_tokens": 765
+    },
+    "menhir_value_recall": {
+      "n": 78,
+      "correct": 55,
+      "score": 0.705128,
+      "input_tokens": 46049,
+      "output_tokens": 1067
+    },
+    "menhir_value_recall_v3_authoritative": {
+      "n": 78,
+      "correct": 53,
+      "score": 0.679487,
+      "input_tokens": 45097,
+      "output_tokens": 1044
+    },
+    "menhir_value_recall_v3_coarse": {
+      "n": 78,
+      "correct": 50,
+      "score": 0.641026,
+      "input_tokens": 45709,
+      "output_tokens": 1094
+    }
+  },
+  "duplicate_entries_collapsed": 0,
+  "malformed_lines": 0
+}

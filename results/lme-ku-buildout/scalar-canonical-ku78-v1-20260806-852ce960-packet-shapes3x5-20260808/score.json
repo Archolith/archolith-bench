@@ -1,0 +1,18 @@
+{
+  "run_id": "scalar-canonical-ku78-v1-20260806-852ce960-packet-shapes3x5-20260808",
+  "source": [
+    ".checkpoint_longmemeval-menhir_oracle_gpt-4o-mini.jsonl"
+  ],
+  "primary_arm": null,
+  "arms": {
+    "menhir_recall": {
+      "n": 15,
+      "correct": 15,
+      "score": 1.0,
+      "input_tokens": 10070,
+      "output_tokens": 270
+    }
+  },
+  "duplicate_entries_collapsed": 0,
+  "malformed_lines": 0
+}

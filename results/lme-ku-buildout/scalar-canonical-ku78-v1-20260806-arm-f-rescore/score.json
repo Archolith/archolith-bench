@@ -1,0 +1,18 @@
+{
+  "run_id": "scalar-canonical-ku78-v1-20260806-arm-f-rescore",
+  "source": [
+    ".checkpoint_longmemeval-menhir_s_gpt-4o.jsonl"
+  ],
+  "primary_arm": null,
+  "arms": {
+    "menhir_recall": {
+      "n": 78,
+      "correct": 64,
+      "score": 0.820513,
+      "input_tokens": 77605,
+      "output_tokens": 1471
+    }
+  },
+  "duplicate_entries_collapsed": 0,
+  "malformed_lines": 0
+}

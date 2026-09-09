@@ -1,0 +1,18 @@
+{
+  "run_id": "scalar-authority-recall-v1-20260730",
+  "source": [
+    "harness_recall/.checkpoint_longmemeval-menhir_oracle_gpt-4o.jsonl"
+  ],
+  "primary_arm": null,
+  "arms": {
+    "menhir_recall": {
+      "n": 78,
+      "correct": 63,
+      "score": 0.807692,
+      "input_tokens": 68863,
+      "output_tokens": 1355
+    }
+  },
+  "duplicate_entries_collapsed": 0,
+  "malformed_lines": 0
+}

@@ -1,0 +1,25 @@
+{
+  "run_id": "ku-adaptive-20260716",
+  "source": [
+    "harness_recall/.checkpoint_longmemeval-menhir_oracle_gpt-4o.jsonl"
+  ],
+  "primary_arm": null,
+  "arms": {
+    "menhir_recall": {
+      "n": 15,
+      "correct": 7,
+      "score": 0.466667,
+      "input_tokens": 7562,
+      "output_tokens": 174
+    },
+    "no_memory": {
+      "n": 15,
+      "correct": 0,
+      "score": 0.0,
+      "input_tokens": 1054,
+      "output_tokens": 60
+    }
+  },
+  "duplicate_entries_collapsed": 0,
+  "malformed_lines": 0
+}
