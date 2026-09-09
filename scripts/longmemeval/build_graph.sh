@@ -362,4 +362,21 @@ fi
   --phase ingest-graph --status completed \
   --setting "backfill_dates=${LME_BACKFILL_DATES}"
 
+# Ingest cost, from Menhir's provider-reported usage telemetry. Without this the tokens sit in
+# mcp_telemetry.db and nothing surfaces them, which is how a 78-item buildout came to have an
+# exactly-known recall cost ($0.40) and an ingest cost nobody could state. Ingest is the
+# expensive half, so it is the half that most needs recording.
+#
+# Ingest-only by design: the harness has not run at this point, and `summarize_llm_usage.py`
+# treats `--harness-checkpoint` as optional. A wrapper that later scores the graph overwrites
+# this file with the combined menhir+harness summary, which is strictly more information.
+USAGE_TOOL="$(dirname "${BASH_SOURCE[0]}")/lib/summarize_llm_usage.py"
+if [ -f "${USAGE_TOOL}" ] && [ -f "${MENHIR_MCP_TELEMETRY_DB}" ]; then
+  if "${BENCH_PY}" "${USAGE_TOOL}" "${MENHIR_MCP_TELEMETRY_DB}"        --run-id "${LME_NEO4J_NAME}"        --output "${LME_RESULTS_DIR}/run_llm_usage.json" >/dev/null; then
+    log "ingest LLM usage: ${LME_RESULTS_DIR}/run_llm_usage.json"
+  else
+    log "WARNING: ingest LLM usage summary failed; cost for this build is unrecorded"
+  fi
+fi
+
 log "build complete. Neo4j ${LME_NEO4J_NAME} (bolt ${LME_BOLT}) holds the data; manifest at ${LME_MANIFEST_PATH}."

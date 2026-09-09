@@ -113,6 +113,62 @@ def _new_harness_group(label: str, value: str) -> dict[str, int | str]:
     }
 
 
+
+# Per-model rates in USD per 1M tokens, for costing Menhir's ingest traffic. Static and dated,
+# matching core/metrics.py's convention -- no live pricing lookups.
+#
+# core.metrics.PRICING_DEFAULTS is not reused here because it is keyed by *provider* and its
+# "openai" entry is gpt-4o ($2.50/$10.00), the answer model. Ingest runs on gpt-4o-mini, 16x
+# cheaper on input; pricing ingest at the gpt-4o rate would overstate a 78-item buildout by
+# roughly an order of magnitude.
+#
+# Embeddings have no output tokens, so their output rate is 0.0 rather than unknown.
+INGEST_RATES_USD_PER_1M: dict[str, tuple[float, float]] = {
+    # chat
+    "gpt-4o": (2.50, 10.00),
+    "gpt-4o-mini": (0.15, 0.60),
+    "gpt-4.1-mini": (0.40, 1.60),
+    "gpt-4.1-nano": (0.10, 0.40),
+    # embeddings
+    "text-embedding-3-small": (0.02, 0.0),
+    "text-embedding-3-large": (0.13, 0.0),
+}
+RATES_DATED = "openai.com/api/pricing, rates as of 2026-09"
+
+
+def price_usage(by_model: list[dict[str, Any]]) -> dict[str, Any]:
+    """Cost each (kind, model) row, and say plainly what could not be priced.
+
+    An unknown model is reported, never priced at zero. Silently costing it at 0.0 would make
+    a run with an unrecognised model look cheaper than one without it, which is the opposite of
+    what a cost record is for.
+    """
+    priced: list[dict[str, Any]] = []
+    total = 0.0
+    unpriced: dict[str, int] = {}
+    for row in by_model:
+        model = str(row.get("model") or "")
+        rates = INGEST_RATES_USD_PER_1M.get(model)
+        if rates is None:
+            unpriced[model] = unpriced.get(model, 0) + int(row.get("calls") or 0)
+            priced.append({**row, "cost_usd": None})
+            continue
+        input_rate, output_rate = rates
+        cost = (
+            int(row.get("input_tokens") or 0) / 1_000_000 * input_rate
+            + int(row.get("output_tokens") or 0) / 1_000_000 * output_rate
+        )
+        total += cost
+        priced.append({**row, "cost_usd": round(cost, 6)})
+    return {
+        "by_model": priced,
+        "cost_usd": round(total, 6),
+        "rates_dated": RATES_DATED,
+        # Present and non-empty means `cost_usd` is a floor, not the total.
+        "unpriced_models": dict(sorted(unpriced.items())),
+        "unpriced_calls": sum(unpriced.values()),
+    }
+
 def summarize_llm_usage(db_path: Path, *, run_id: str | None = None) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "schema_version": 1,
@@ -166,11 +222,13 @@ def summarize_llm_usage(db_path: Path, *, run_id: str | None = None) -> dict[str
             params,
         ).fetchall()
 
+    rows = [dict(row) for row in by_model]
+    pricing = price_usage(rows)
     return {
         **payload,
         "available": True,
         **dict(totals),
-        "by_model": [dict(row) for row in by_model],
+        **pricing,
     }
 
 

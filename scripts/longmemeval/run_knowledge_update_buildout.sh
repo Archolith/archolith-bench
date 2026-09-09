@@ -540,7 +540,15 @@ if [ -n "${HARNESS_CHECKPOINT}" ]; then
     --output "${LME_RESULTS_DIR}/run_llm_usage.json" >/dev/null
   log "combined LLM usage: ${LME_RESULTS_DIR}/run_llm_usage.json"
 else
-  log "WARNING: no harness checkpoint found; run_llm_usage.json was not written"
+  # No checkpoint means the harness produced nothing to aggregate -- but the ingest usage is
+  # already in the telemetry DB and build_graph.sh has written the ingest-only summary. Saying
+  # "not written" here would be wrong, and discarding the ingest cost because the scoring half
+  # failed is how the expensive half of a run becomes unknown.
+  if [ -f "${LME_RESULTS_DIR}/run_llm_usage.json" ]; then
+    log "no harness checkpoint; keeping the ingest-only usage summary from build_graph.sh"
+  else
+    log "WARNING: no harness checkpoint and no ingest usage summary; cost is unrecorded"
+  fi
 fi
 log "done. Results in ${LME_RESULTS_DIR}"
 if [ "${LME_KU_KEEP_NEO4J_UP}" = "1" ]; then

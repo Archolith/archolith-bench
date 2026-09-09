@@ -143,3 +143,91 @@ def test_summarize_harness_usage_marks_required_missing_judge_usage(tmp_path) ->
     judge = next(row for row in summary["by_operation"] if row["operation"] == "judge")
     assert judge["calls"] == 1
     assert judge["missing_usage_calls"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Ingest cost
+#
+# Recall cost was always provider-reported in results.md; ingest cost was not surfaced at all,
+# so a 78-item buildout had an exactly-known $0.40 recall figure and an ingest figure nobody
+# could state. These cases cover the ways the new pricing could misreport it.
+# ---------------------------------------------------------------------------
+
+def _usage_db(tmp_path, rows):
+    db_path = tmp_path / "telemetry.db"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE llm_usage_events (
+                call_id TEXT PRIMARY KEY, recorded_at TEXT NOT NULL, run_id TEXT,
+                episode_uuid TEXT, operation TEXT, kind TEXT NOT NULL, model TEXT,
+                endpoint TEXT, status TEXT NOT NULL, duration_ms INTEGER,
+                input_tokens INTEGER, output_tokens INTEGER, total_tokens INTEGER,
+                cached_input_tokens INTEGER, reasoning_output_tokens INTEGER,
+                provider_usage_json TEXT, error TEXT
+            )
+            """
+        )
+        conn.executemany(
+            """
+            INSERT INTO llm_usage_events (
+                call_id, recorded_at, run_id, kind, model, endpoint, status,
+                input_tokens, output_tokens, total_tokens, cached_input_tokens,
+                reasoning_output_tokens
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            rows,
+        )
+    return db_path
+
+
+def test_ingest_cost_is_priced_per_model(tmp_path) -> None:
+    """gpt-4o-mini at $0.15/$0.60 per 1M: 1M in + 1M out = $0.75."""
+    db = _usage_db(tmp_path, [
+        ("a", "t", "r", "chat", "gpt-4o-mini", "chat", "completed",
+         1_000_000, 1_000_000, 2_000_000, 0, 0),
+    ])
+    summary = summarize_llm_usage(db, run_id="r")
+    assert summary["cost_usd"] == 0.75
+    assert summary["unpriced_calls"] == 0
+
+
+def test_ingest_is_not_priced_at_the_answer_model_rate(tmp_path) -> None:
+    """core.metrics PRICING_DEFAULTS["openai"] is gpt-4o ($2.50/$10.00). Pricing ingest there
+    would overstate a buildout by roughly an order of magnitude."""
+    db = _usage_db(tmp_path, [
+        ("a", "t", "r", "chat", "gpt-4o-mini", "chat", "completed", 1_000_000, 0, 1_000_000, 0, 0),
+    ])
+    assert summarize_llm_usage(db, run_id="r")["cost_usd"] == 0.15
+
+
+def test_embeddings_cost_their_input_only(tmp_path) -> None:
+    db = _usage_db(tmp_path, [
+        ("a", "t", "r", "embedding", "text-embedding-3-small", "embed", "completed",
+         1_000_000, 0, 1_000_000, 0, 0),
+    ])
+    assert summarize_llm_usage(db, run_id="r")["cost_usd"] == 0.02
+
+
+def test_an_unknown_model_is_reported_not_priced_at_zero(tmp_path) -> None:
+    """Costing an unrecognised model at 0.0 would make a run carrying one look CHEAPER than
+    one without it -- the opposite of what a cost record is for."""
+    db = _usage_db(tmp_path, [
+        ("a", "t", "r", "chat", "gpt-4o-mini", "chat", "completed", 1_000_000, 0, 1_000_000, 0, 0),
+        ("b", "t", "r", "chat", "some-new-model", "chat", "completed", 9_000_000, 0, 9_000_000, 0, 0),
+    ])
+    summary = summarize_llm_usage(db, run_id="r")
+    assert summary["unpriced_models"] == {"some-new-model": 1}
+    assert summary["unpriced_calls"] == 1
+    # The priced total stands as a floor, and the unknown row carries no fabricated number.
+    assert summary["cost_usd"] == 0.15
+    unknown = [r for r in summary["by_model"] if r["model"] == "some-new-model"][0]
+    assert unknown["cost_usd"] is None
+
+
+def test_rates_are_dated(tmp_path) -> None:
+    """Static rates must say when they were taken, matching core/metrics.py's convention."""
+    db = _usage_db(tmp_path, [
+        ("a", "t", "r", "chat", "gpt-4o-mini", "chat", "completed", 10, 1, 11, 0, 0),
+    ])
+    assert "2026" in summarize_llm_usage(db, run_id="r")["rates_dated"]

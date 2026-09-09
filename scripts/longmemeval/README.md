@@ -335,6 +335,45 @@ noise: 24 rows cover 51 run directories, 9 directories hold a readable score wit
 (small-sample packet-shape and rescore panels — decide whether they belong in a *buildout*
 scoreboard), and most pre-fingerprint runs cannot have their deltas attributed to files.
 
+## Run cost: both halves, recorded
+
+Recall/QA cost was always provider-reported in `harness_recall/results.md`. Ingest cost -- the
+expensive half -- was not surfaced at all, so a 78-item buildout had an exactly-known $0.40
+recall figure and an ingest figure nobody could state.
+
+Menhir records the raw usage itself: `llm_usage_events` in the run's `mcp_telemetry.db`, written
+via `infrastructure/telemetry/llm_usage_store.py`. That landed **2026-08-10**, which is why runs
+before it (including `scalar-canonical-ku78-v1-20260806`) have no ingest tokens -- a date
+problem, not a missing feature, and not backfillable.
+
+`build_graph.sh` now writes `run_llm_usage.json` after every ingest, so a graph build records its
+own cost whether or not anything later scores it. A wrapper that does score the graph overwrites
+that file with the combined menhir+harness summary. When the harness produces no checkpoint the
+buildout wrapper keeps the ingest-only summary rather than discarding it: losing the expensive
+half because the scoring half failed is the failure this closes.
+
+```bash
+python scripts/longmemeval/lib/summarize_llm_usage.py <run>/mcp_telemetry.db   --run-id <id> --output <run>/run_llm_usage.json          # ingest only
+#   ... --harness-checkpoint <run>/harness_recall/.checkpoint_*.jsonl   # + recall
+```
+
+Rates live in `INGEST_RATES_USD_PER_1M` in that script: static and dated, matching
+`core/metrics.py`'s convention. They are deliberately **not** `core.metrics.PRICING_DEFAULTS`,
+which is keyed by provider and whose `openai` entry is gpt-4o ($2.50/$10.00), the answer model;
+ingest runs on gpt-4o-mini, 16x cheaper on input, so pricing ingest there would overstate a
+buildout by roughly an order of magnitude.
+
+**An unknown model is reported, never priced at zero.** `unpriced_models` and `unpriced_calls`
+say what could not be costed, and that row's `cost_usd` is `null` rather than `0.0` -- costing an
+unrecognised model at zero would make a run carrying one look *cheaper* than one without it.
+When `unpriced_calls` is non-zero, `cost_usd` is a floor.
+
+**Measured 2026-09-08** (1-item date smoke, 23 turns): 96 chat calls + 23 embedding calls,
+124,457 input / 5,334 output tokens, **$0.0219 per item**, 0 calls missing usage. The canonical
+78-item run recorded 11,178 chat calls (~143/item), which at that per-call rate is roughly
+**$2.50-3.00 ingest + $0.40 recall**. Re-measure rather than trusting that extrapolation: the
+smoke item is one fixture item, not the 78-item average.
+
 ## Benchmark Surface Fingerprint (`bench-surface.yaml`)
 
 A commit SHA does not establish what code a run executed. Two runs can share a SHA and
