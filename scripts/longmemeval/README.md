@@ -363,16 +363,22 @@ which is keyed by provider and whose `openai` entry is gpt-4o ($2.50/$10.00), th
 ingest runs on gpt-4o-mini, 16x cheaper on input, so pricing ingest there would overstate a
 buildout by roughly an order of magnitude.
 
+**Cached input is priced at the cache rate.** Provider usage reports `input_tokens` as the FULL
+prompt with `cached_input_tokens` as a SUBSET of it, so costing all input at the full rate
+overcharges every cached call. That is not a rounding detail here: the 1-item smoke below had
+33% of its input served from cache, and ignoring it overstated the run by 17%.
+
 **An unknown model is reported, never priced at zero.** `unpriced_models` and `unpriced_calls`
 say what could not be costed, and that row's `cost_usd` is `null` rather than `0.0` -- costing an
 unrecognised model at zero would make a run carrying one look *cheaper* than one without it.
 When `unpriced_calls` is non-zero, `cost_usd` is a floor.
 
 **Measured 2026-09-08** (1-item date smoke, 23 turns): 96 chat calls + 23 embedding calls,
-124,457 input / 5,334 output tokens, **$0.0219 per item**, 0 calls missing usage. The canonical
-78-item run recorded 11,178 chat calls (~143/item), which at that per-call rate is roughly
-**$2.50-3.00 ingest + $0.40 recall**. Re-measure rather than trusting that extrapolation: the
-smoke item is one fixture item, not the 78-item average.
+124,457 input / 5,334 output tokens of which **41,472 input (33%) were cache reads**, 0 calls
+missing usage. Cost **$0.018759** cache-aware. The canonical 78-item run recorded 11,178 chat
+calls (~143/item), which at that per-call rate is roughly **$2.20 ingest + $0.40 recall**.
+Re-measure rather than trusting that extrapolation: the smoke item is one fixture item, not the
+78-item average, and cache hit rate varies with how much prompt prefix repeats.
 
 ## Benchmark Surface Fingerprint (`bench-surface.yaml`)
 

@@ -46,6 +46,12 @@ if [ "${LME_REQUIRE_FRESH}" = "1" ]; then
   [ "${VOLUME_PRE_EXISTED}" = "false" ] || die "fresh build refused: volume already exists: ${LME_NEO4J_VOL}"
   [ "${CONTAINER_PRE_EXISTED}" = "false" ] || die "fresh build refused: container already exists: ${LME_NEO4J_NAME}"
   [ ! -e "${LME_MANIFEST_PATH}" ] || die "fresh build refused: manifest already exists: ${LME_MANIFEST_PATH}"
+  # Checked here so the error names the stale file. Without it the run proceeds to `begin`,
+  # which refuses on a surface_digest or identity mismatch against an attempt whose graph is
+  # already gone -- a confusing failure for a genuinely fresh build. Not deleted automatically:
+  # provenance is an audit record, and removing one is the caller's explicit decision (--clean).
+  [ ! -e "${LME_RESULTS_DIR}/graph-provenance-${LME_NEO4J_NAME}.json" ] ||
+    die "fresh build refused: provenance from an earlier attempt already exists: ${LME_RESULTS_DIR}/graph-provenance-${LME_NEO4J_NAME}.json (remove it, or re-run with --clean)"
 fi
 
 GRAPH_FRESH="false"
@@ -188,8 +194,14 @@ log "graph provenance recorded: ${GRAPH_PROVENANCE_PATH} (graph_fresh=${GRAPH_FR
 # Tracked-only dirty checks prove committed source is clean, but untracked .py files in
 # src/ or scripts/ can shadow committed modules and make the executed code differ from what
 # the commit hash claims. Warn loudly; refuse in canonical mode.
-MENHIR_UNTRACKED="$(git -C "${MENHIR_MAIN}" ls-files --others --exclude-standard -- 'src/' 'scripts/' 2>/dev/null || true)"
-BENCH_UNTRACKED="$(git -C "${BENCH_DIR}" ls-files --others --exclude-standard -- 'scripts/' 'archolith_bench/' 2>/dev/null || true)"
+#
+# Scoped to SOURCE extensions. The path globs alone matched every untracked file under those
+# directories, including benchmark outputs that land in scripts/longmemeval/results/ -- so a
+# stale JSON from a July gate run refused an unrelated canonical build. Only files Python
+# imports or bash sources can shadow committed code; a data file cannot, and refusing on one
+# trains people to reach for LME_NONCANONICAL=1, which disables the check that matters.
+MENHIR_UNTRACKED="$(git -C "${MENHIR_MAIN}" ls-files --others --exclude-standard   -- 'src/**/*.py' 'scripts/**/*.py' 'src/**/*.sh' 'scripts/**/*.sh' 2>/dev/null || true)"
+BENCH_UNTRACKED="$(git -C "${BENCH_DIR}" ls-files --others --exclude-standard   -- 'scripts/**/*.py' 'archolith_bench/**/*.py' 'scripts/**/*.sh' 2>/dev/null || true)"
 if [ -n "${MENHIR_UNTRACKED}" ] || [ -n "${BENCH_UNTRACKED}" ]; then
   log "WARNING: untracked source files detected:"
   [ -n "${MENHIR_UNTRACKED}" ] && printf '  menhir: %s\n' ${MENHIR_UNTRACKED} >&2
@@ -372,7 +384,7 @@ fi
 # this file with the combined menhir+harness summary, which is strictly more information.
 USAGE_TOOL="$(dirname "${BASH_SOURCE[0]}")/lib/summarize_llm_usage.py"
 if [ -f "${USAGE_TOOL}" ] && [ -f "${MENHIR_MCP_TELEMETRY_DB}" ]; then
-  if "${BENCH_PY}" "${USAGE_TOOL}" "${MENHIR_MCP_TELEMETRY_DB}"        --run-id "${LME_NEO4J_NAME}"        --output "${LME_RESULTS_DIR}/run_llm_usage.json" >/dev/null; then
+  if "${BENCH_PY}" "${USAGE_TOOL}" "${MENHIR_MCP_TELEMETRY_DB}"        --run-id "${MENHIR_BENCH_ACTIVE_RUN_ID}"        --output "${LME_RESULTS_DIR}/run_llm_usage.json" >/dev/null; then
     log "ingest LLM usage: ${LME_RESULTS_DIR}/run_llm_usage.json"
   else
     log "WARNING: ingest LLM usage summary failed; cost for this build is unrecorded"

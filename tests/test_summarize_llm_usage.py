@@ -154,6 +154,7 @@ def test_summarize_harness_usage_marks_required_missing_judge_usage(tmp_path) ->
 # ---------------------------------------------------------------------------
 
 def _usage_db(tmp_path, rows):
+    tmp_path.mkdir(parents=True, exist_ok=True)
     db_path = tmp_path / "telemetry.db"
     with sqlite3.connect(db_path) as conn:
         conn.execute(
@@ -231,3 +232,57 @@ def test_rates_are_dated(tmp_path) -> None:
         ("a", "t", "r", "chat", "gpt-4o-mini", "chat", "completed", 10, 1, 11, 0, 0),
     ])
     assert "2026" in summarize_llm_usage(db, run_id="r")["rates_dated"]
+
+
+def test_cached_input_is_priced_at_the_cache_rate(tmp_path) -> None:
+    """input_tokens is the FULL prompt and cached_input_tokens a SUBSET of it, so pricing all
+    input at the full rate overcharges every cached call. For this workload input is ~96% of
+    tokens, so that error would swamp the comparison it exists to support."""
+    db = _usage_db(tmp_path, [
+        # 1M prompt of which 900k cache-read, on Luna: 100k @ $0.20/M + 900k @ $0.02/M
+        ("a", "t", "r", "chat", "openai/gpt-5.6-luna", "chat", "completed",
+         1_000_000, 0, 1_000_000, 900_000, 0),
+    ])
+    cost = summarize_llm_usage(db, run_id="r")["cost_usd"]
+    assert cost == round(0.1 * 0.20 + 0.9 * 0.02, 6)
+
+
+def test_fully_uncached_luna_costs_the_full_input_rate(tmp_path) -> None:
+    db = _usage_db(tmp_path, [
+        ("a", "t", "r", "chat", "openai/gpt-5.6-luna", "chat", "completed",
+         1_000_000, 0, 1_000_000, 0, 0),
+    ])
+    assert summarize_llm_usage(db, run_id="r")["cost_usd"] == 0.20
+
+
+def test_cached_exceeding_total_cannot_credit_the_bill(tmp_path) -> None:
+    """A provider quirk reporting cached > prompt must not drive the fresh half negative."""
+    db = _usage_db(tmp_path, [
+        ("a", "t", "r", "chat", "openai/gpt-5.6-luna", "chat", "completed",
+         1_000, 0, 1_000, 999_999, 0),
+    ])
+    cost = summarize_llm_usage(db, run_id="r")["cost_usd"]
+    assert cost >= 0
+    assert cost == round(1_000 / 1_000_000 * 0.02, 6)
+
+
+def test_batch_slug_is_half_the_sync_rate(tmp_path) -> None:
+    """Priced for comparison only -- :batch is an async submit-and-poll API that Menhir's
+    sequentially-dependent ingest cannot use."""
+    rows = lambda model: [("a", "t", "r", "chat", model, "chat", "completed",
+                           1_000_000, 1_000_000, 2_000_000, 0, 0)]
+    sync = summarize_llm_usage(_usage_db(tmp_path / "s", rows("openai/gpt-5.6-luna")), run_id="r")
+    batch = summarize_llm_usage(
+        _usage_db(tmp_path / "b", rows("openai/gpt-5.6-luna:batch")), run_id="r"
+    )
+    assert batch["cost_usd"] == round(sync["cost_usd"] / 2, 6)
+
+
+def test_luna_and_luna_pro_are_priced_identically(tmp_path) -> None:
+    rows = lambda model: [("a", "t", "r", "chat", model, "chat", "completed",
+                           500_000, 10_000, 510_000, 0, 0)]
+    a = summarize_llm_usage(_usage_db(tmp_path / "a", rows("openai/gpt-5.6-luna")), run_id="r")
+    b = summarize_llm_usage(
+        _usage_db(tmp_path / "p", rows("openai/gpt-5.6-luna-pro")), run_id="r"
+    )
+    assert a["cost_usd"] == b["cost_usd"]

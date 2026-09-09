@@ -123,17 +123,40 @@ def _new_harness_group(label: str, value: str) -> dict[str, int | str]:
 # roughly an order of magnitude.
 #
 # Embeddings have no output tokens, so their output rate is 0.0 rather than unknown.
-INGEST_RATES_USD_PER_1M: dict[str, tuple[float, float]] = {
-    # chat
-    "gpt-4o": (2.50, 10.00),
-    "gpt-4o-mini": (0.15, 0.60),
-    "gpt-4.1-mini": (0.40, 1.60),
-    "gpt-4.1-nano": (0.10, 0.40),
-    # embeddings
-    "text-embedding-3-small": (0.02, 0.0),
-    "text-embedding-3-large": (0.13, 0.0),
+# (input, output, cached_input) in USD per 1M tokens.
+#
+# `cached_input` is load-bearing, not a refinement: provider usage reports `input_tokens` as the
+# FULL prompt with `cached_input_tokens` as a SUBSET of it (OpenAI's prompt_tokens vs
+# prompt_tokens_details.cached_tokens; see menhir observability._normalized_usage). Pricing all
+# input at the full rate therefore overcharges every cached call -- and for this workload input
+# is ~96% of tokens, so a cache-heavy run would be reported far above what it actually cost.
+#
+# A model with no published cache rate gets its full input rate here. Never invent a discount:
+# assuming one understates real spend, which is the direction that matters.
+INGEST_RATES_USD_PER_1M: dict[str, tuple[float, float, float]] = {
+    # chat -- OpenAI direct
+    "gpt-4o": (2.50, 10.00, 1.25),
+    "gpt-4o-mini": (0.15, 0.60, 0.075),
+    "gpt-4.1-mini": (0.40, 1.60, 0.10),
+    "gpt-4.1-nano": (0.10, 0.40, 0.025),
+    # chat -- OpenRouter slugs. Fetched from openrouter.ai/api/v1/models on 2026-09-08:
+    # prompt 2e-7/token = $0.20/M, completion 1.2e-6 = $1.20/M, cache read 2e-8 = $0.02/M.
+    # luna and luna-pro are priced identically, so Pro is capability upside at no extra cost.
+    "openai/gpt-5.6-luna": (0.20, 1.20, 0.02),
+    "openai/gpt-5.6-luna-pro": (0.20, 1.20, 0.02),
+    # The :batch variants are exactly 50% off. They are an ASYNCHRONOUS submit-and-poll API
+    # (202 Accepted, status "validating"), so they are priced here for comparison but are NOT
+    # reachable from Menhir's ingest, whose extraction calls are sequentially dependent.
+    "openai/gpt-5.6-luna:batch": (0.10, 0.60, 0.01),
+    "openai/gpt-5.6-luna-pro:batch": (0.10, 0.60, 0.01),
+    # embeddings -- no output tokens, so the output rate is 0.0 rather than unknown
+    "text-embedding-3-small": (0.02, 0.0, 0.02),
+    "text-embedding-3-large": (0.13, 0.0, 0.13),
 }
-RATES_DATED = "openai.com/api/pricing, rates as of 2026-09"
+RATES_DATED = (
+    "OpenAI rates as of 2026-09 (openai.com/api/pricing); OpenRouter slugs fetched from "
+    "openrouter.ai/api/v1/models 2026-09-08"
+)
 
 
 def price_usage(by_model: list[dict[str, Any]]) -> dict[str, Any]:
@@ -153,9 +176,16 @@ def price_usage(by_model: list[dict[str, Any]]) -> dict[str, Any]:
             unpriced[model] = unpriced.get(model, 0) + int(row.get("calls") or 0)
             priced.append({**row, "cost_usd": None})
             continue
-        input_rate, output_rate = rates
+        input_rate, output_rate, cached_rate = rates
+        total_input = int(row.get("input_tokens") or 0)
+        cached_input = int(row.get("cached_input_tokens") or 0)
+        # cached_input is a subset of total_input; clamp so a provider quirk cannot make the
+        # fresh half negative and silently credit the bill.
+        cached_input = max(0, min(cached_input, total_input))
+        fresh_input = total_input - cached_input
         cost = (
-            int(row.get("input_tokens") or 0) / 1_000_000 * input_rate
+            fresh_input / 1_000_000 * input_rate
+            + cached_input / 1_000_000 * cached_rate
             + int(row.get("output_tokens") or 0) / 1_000_000 * output_rate
         )
         total += cost
@@ -223,6 +253,30 @@ def summarize_llm_usage(db_path: Path, *, run_id: str | None = None) -> dict[str
         ).fetchall()
 
     rows = [dict(row) for row in by_model]
+
+    # A run_id filter that matches nothing, against a table that HAS rows, is a wiring bug --
+    # not a free run. Returning zeros here would report $0.00 for a run that really spent money,
+    # the most dangerous possible cost record because it reads as authoritative. Caught when
+    # build_graph.sh passed the container name while Menhir stamps MENHIR_BENCH_ACTIVE_RUN_ID.
+    if run_id is not None and not rows:
+        with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as conn:
+            conn.row_factory = sqlite3.Row
+            total = conn.execute("SELECT COUNT(*) AS n FROM llm_usage_events").fetchone()["n"]
+            known = [
+                str(r["run_id"])
+                for r in conn.execute(
+                    "SELECT DISTINCT run_id FROM llm_usage_events LIMIT 10"
+                ).fetchall()
+            ]
+        if total:
+            return {
+                **payload,
+                "available": False,
+                "reason": "run_id_matched_no_rows",
+                "rows_in_table": total,
+                "run_ids_present": known,
+            }
+
     pricing = price_usage(rows)
     return {
         **payload,
