@@ -5,32 +5,41 @@ Frozen detector snapshots are saved in each run's results directory where applic
 
 ## Scoreboard
 
-| Run ID | Date | N | Segmentation | Score | Extract Model | Notes |
-|--------|------|---|--------------|-------|---------------|-------|
-| matrix-frontier (prod graph) | 2026-07-12 | 15 | sentence (legacy) | 0.267 | gpt-4.1-nano | Production 500-item graph, old extraction |
-| matrix-node_plain (prod graph) | 2026-07-12 | 15 | sentence (legacy) | 0.267 | gpt-4.1-nano | Same graph, node_plain retrieval |
-| matrix-pointer (prod graph) | 2026-07-12 | 15 | sentence (legacy) | 0.200 | gpt-4.1-nano | Same graph, pointer retrieval |
-| abl-oracle (prod graph) | 2026-07-12 | 10 | sentence (legacy) | 0.300 | gpt-4.1-nano | Same graph, oracle retrieval |
-| recall-menhir (prod graph, all subsets) | 2026-07-12 | 100 | sentence (legacy) | 0.230 | gpt-4.1-nano | All 6 subsets, not just knowledge-update |
-| **ku-fix-20260716** | 2026-07-17 | 7/78 | sentence | (killed) | gpt-4o-mini | Killed — sentence splitting caused ~190 episodes/item (8x inflation) |
-| **ku-nosplit-20260716** | 2026-07-17 | 15 | none | **0.333** | gpt-4o-mini | Fix stack: temp=0, gpt-4o-mini, dedup hardening |
-| **ku-split15-20260716** | 2026-07-17 | 8/15 | sentence | (killed) | gpt-4o-mini | Killed — infeasible episode inflation |
-| **ku-adaptive-20260716** | 2026-07-17 | 15 | adaptive | **0.467** | gpt-4o-mini | Frozen detector v1, +40% relative vs no-split |
-| **ku-adaptive-full-20260717** | 2026-07-17 | 78 | adaptive | **0.346** | gpt-4o-mini | Full validation of adaptive segmentation |
-| **ku-nosplit-full-20260717** | 2026-07-17 | 53/78 | none | *(stopped partial)* | gpt-4o-mini | 50 healthy, 3 drain timeouts; unscored; graph volume preserved |
-| **value-arm-verify-20260717** | 2026-07-17 | 78 | adaptive (reused) | **0.679** | gpt-4o-mini | Three-arm value-recall verification on the ku-adaptive-full graph; see below |
-| **value-arm-v2-verify-20260718** | 2026-07-18 | 78 | adaptive (reused) | v2c **0.667** / v2h **0.679** | gpt-4o-mini | Pre-registered supersession arms; NEGATIVE (0/5 targets, no lift); see below |
-| **value-arm-v3-verify-20260718** | 2026-07-18 | 78 | adaptive (reused) | v3c **0.641** / v3a **0.679** (v1 0.705) | gpt-4o-mini | Authoritative composition; MIXED - recovers 4/5 targets but net-neg from over-merge; needs confidence-gating |
-| **v4 advisory (offline)** | 2026-07-18 | 78 | n/a (offline) | *(no paid run)* | n/a | Advise-don't-delete; clean-supersession tier fires 0/78; = additive v1 + candidate hints, predicted ~= v1 |
-| **v5 derived (offline)** | 2026-07-18 | 78 | n/a (offline) | *(no paid run)* | n/a | Delta-fold "assumptions" arm; fires 1/78 (69fee5aa -> ~38 correct); all offline gates pass; NOT benchmax, no paid run on n=1 |
-| **scalar-ku-20260722** | 2026-07-22 | 78 | adaptive | *(measure-only, no QA)* | gpt-4o-mini | Scalar-consolidation MEASURE run (k=3). Materialization, not recall-scored: 18/78 (23%) scalar views, 20/78 typed. See section below + `.agent/reviews/menhir-lme-scalar-ku-20260722-results.md` |
-| **scalar-current-candidate-v3-20260728** | 2026-07-29 | 32/78 | adaptive | **(killed / INVALID)** | gpt-4o-mini | Mixed-code/provenance run; item `2133c1b5` was consolidated with one real FAILED episode under threshold 2. Do not resume, score, or compare. |
-| **scalar-canonical-ku78-v1-20260806** | 2026-08-06 | 78 | adaptive | **0.872** | gpt-4o-mini | **CANONICAL BENCHMARK EVIDENCE.** Fresh candidate-arm ingest; 68/78 recall vs 6/78 (0.077) no-memory; harness exit 0. |
-| **scalar-event-activity-ku78-v2-20260809** | 2026-08-09 | 0/78 | adaptive | *(aborted pre-manifest)* | gpt-4o-mini | Launch attempt produced provenance only; no graph result or semantic evidence. |
-| **scalar-event-activity-ku78-v3-20260809** | 2026-08-09 | 0/78 | adaptive | *(aborted pre-manifest)* | gpt-4o-mini | Launch reached fresh-graph startup but produced no manifest or score; container/volume later absent. |
-| **scalar-event-activity-ku78-v4-20260809** | 2026-08-09 | 78 | adaptive | **0.885** | gpt-4o-mini | Fresh clean run; 69/78 recall vs 6/78 (0.077) no-memory; harness exit 0. Superseded by v6. |
-| **scalar-event-activity-ku78-v5-20260809** | 2026-08-09 | 0/78 | adaptive | *(launch refused)* | gpt-4o-mini | No ingest: first wrapper call refused an existing result directory; replacement attempt left provenance only. No graph/container. |
-| **scalar-event-activity-ku78-v6-20260809** | 2026-08-09 | 78 | adaptive | **0.910** | gpt-4o-mini | **CURRENT CANONICAL BENCHMARK EVIDENCE.** Fresh clean run; 71/78 recall vs 6/78 (0.077) no-memory; harness exit 0. |
+The scoreboard below is GENERATED from `ledger.csv`. Edit the CSV, then run
+`python ../../scripts/longmemeval/lib/ledger.py render`. Do not hand-edit the table:
+the next render overwrites it. Prose sections in this file are hand-maintained and are
+never touched by the generator.
+
+<!-- BEGIN GENERATED SCOREBOARD -- edit ledger.csv, then run ledger.py render -->
+
+| Run ID | Date | N | Segmentation | Score | Status | Extract Model | Notes |
+|--------|------|---|--------------|-------|--------|---------------|-------|
+| matrix-frontier (prod graph) | 2026-07-12 | 15 | sentence (legacy) | 0.267 | scored | gpt-4.1-nano | Production 500-item graph, old extraction |
+| matrix-node_plain (prod graph) | 2026-07-12 | 15 | sentence (legacy) | 0.267 | scored | gpt-4.1-nano | Same graph, node_plain retrieval |
+| matrix-pointer (prod graph) | 2026-07-12 | 15 | sentence (legacy) | 0.200 | scored | gpt-4.1-nano | Same graph, pointer retrieval |
+| abl-oracle (prod graph) | 2026-07-12 | 10 | sentence (legacy) | 0.300 | scored | gpt-4.1-nano | Same graph, oracle retrieval |
+| recall-menhir (prod graph, all subsets) | 2026-07-12 | 100 | sentence (legacy) | 0.230 | scored | gpt-4.1-nano | All 6 subsets, not just knowledge-update |
+| ku-fix-20260716 | 2026-07-17 | 7/78 | sentence | (killed) | killed | gpt-4o-mini | Killed — sentence splitting caused ~190 episodes/item (8x inflation) |
+| ku-nosplit-20260716 | 2026-07-17 | 15 | none | 0.333 | scored | gpt-4o-mini | Fix stack: temp=0, gpt-4o-mini, dedup hardening |
+| ku-split15-20260716 | 2026-07-17 | 8/15 | sentence | (killed) | killed | gpt-4o-mini | Killed — infeasible episode inflation |
+| ku-adaptive-20260716 | 2026-07-17 | 15 | adaptive | 0.467 | scored | gpt-4o-mini | Frozen detector v1, +40% relative vs no-split |
+| ku-adaptive-full-20260717 | 2026-07-17 | 78 | adaptive | 0.346 | scored | gpt-4o-mini | Full validation of adaptive segmentation |
+| ku-nosplit-full-20260717 | 2026-07-17 | 53/78 | none | *(stopped partial)* | partial | gpt-4o-mini | 50 healthy, 3 drain timeouts; unscored; graph volume preserved |
+| value-arm-verify-20260717 | 2026-07-17 | 78 | adaptive (reused) | 0.679 | scored | gpt-4o-mini | Three-arm value-recall verification on the ku-adaptive-full graph; see below |
+| value-arm-v2-verify-20260718 | 2026-07-18 | 78 | adaptive (reused) | v2c 0.667 / v2h 0.679 | multi_arm | gpt-4o-mini | Pre-registered supersession arms; NEGATIVE (0/5 targets, no lift); see below |
+| value-arm-v3-verify-20260718 | 2026-07-18 | 78 | adaptive (reused) | v3c 0.641 / v3a 0.679 (v1 0.705) | multi_arm | gpt-4o-mini | Authoritative composition; MIXED - recovers 4/5 targets but net-neg from over-merge; needs confidence-gating |
+| v4 advisory (offline) | 2026-07-18 | 78 | n/a (offline) | *(no paid run)* | offline | n/a | Advise-don't-delete; clean-supersession tier fires 0/78; = additive v1 + candidate hints, predicted ~= v1 |
+| v5 derived (offline) | 2026-07-18 | 78 | n/a (offline) | *(no paid run)* | offline | n/a | Delta-fold "assumptions" arm; fires 1/78 (69fee5aa -> ~38 correct); all offline gates pass; NOT benchmax, no paid run on n=1 |
+| scalar-ku-20260722 | 2026-07-22 | 78 | adaptive | *(measure-only, no QA)* | measure_only | gpt-4o-mini | Scalar-consolidation MEASURE run (k=3). Materialization, not recall-scored: 18/78 (23%) scalar views, 20/78 typed. See section below + .agent/reviews/menhir-lme-scalar-ku-20260722-results.md |
+| scalar-current-candidate-v3-20260728 | 2026-07-29 | 32/78 | adaptive | (killed / INVALID) | invalid | gpt-4o-mini | Mixed-code/provenance run; item 2133c1b5 was consolidated with one real FAILED episode under threshold 2. Do not resume, score, or compare. |
+| scalar-canonical-ku78-v1-20260806 | 2026-08-06 | 78 | adaptive | 0.872 | scored | gpt-4o-mini | CANONICAL BENCHMARK EVIDENCE. Fresh candidate-arm ingest; 68/78 recall vs 6/78 (0.077) no-memory; harness exit 0. |
+| scalar-event-activity-ku78-v2-20260809 | 2026-08-09 | 0/78 | adaptive | *(aborted pre-manifest)* | aborted | gpt-4o-mini | Launch attempt produced provenance only; no graph result or semantic evidence. |
+| scalar-event-activity-ku78-v3-20260809 | 2026-08-09 | 0/78 | adaptive | *(aborted pre-manifest)* | aborted | gpt-4o-mini | Launch reached fresh-graph startup but produced no manifest or score; container/volume later absent. |
+| scalar-event-activity-ku78-v4-20260809 | 2026-08-09 | 78 | adaptive | 0.885 | scored | gpt-4o-mini | Fresh clean run; 69/78 recall vs 6/78 (0.077) no-memory; harness exit 0. Superseded by v6. |
+| scalar-event-activity-ku78-v5-20260809 | 2026-08-09 | 0/78 | adaptive | *(launch refused)* | aborted | gpt-4o-mini | No ingest: first wrapper call refused an existing result directory; replacement attempt left provenance only. No graph/container. |
+| **scalar-event-activity-ku78-v6-20260809** | 2026-08-09 | 78 | adaptive | **0.910** | scored | gpt-4o-mini | CURRENT CANONICAL BENCHMARK EVIDENCE. Fresh clean run; 71/78 recall vs 6/78 (0.077) no-memory; harness exit 0. |
+
+<!-- END GENERATED SCOREBOARD -->
 
 ## 2026-08-09 — Event/activity scalar KU78 campaign
 

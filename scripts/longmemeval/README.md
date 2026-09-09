@@ -220,6 +220,63 @@ Each phase entry records the state it inherited and the settings it truly ran un
 A phase is closed only on the success path, so a killed run leaves its phase `started`; the next
 attempt's `begin` marks it `interrupted`. That is a fact worth seeing, not an error.
 
+## Ledger: `ledger.csv` is the source, `LEDGER.md`'s table is generated
+
+`LEDGER.md` carries real analysis — regression breakdowns, per-item tables, findings — and
+that prose stays prose, hand-maintained. Its *scoreboard* was different: tabular data being
+hand-typed, which meant nothing could join a score delta to a provenance delta without a
+human reading both files.
+
+So the scoreboard lives in `results/lme-ku-buildout/ledger.csv` and the markdown table is
+generated from it. Edit the CSV, then render. Only the region between the
+`BEGIN/END GENERATED SCOREBOARD` markers is rewritten; if those markers are missing the
+generator refuses rather than guessing where the table is, because guessing would overwrite
+analysis.
+
+```bash
+LIB=scripts/longmemeval/lib
+
+python $LIB/ledger.py render     # CSV -> the table in LEDGER.md
+python $LIB/ledger.py validate   # rows vs. the closed vocabulary and the filesystem
+python $LIB/ledger.py join A B   # score delta + surface blame, in one command
+```
+
+`join` is the question the ledger could not answer before: a score moved, where do I look
+first? The delta comes from the CSV, the attribution from the surface fingerprints in each
+run's provenance.
+
+### Schema
+
+The columns refuse to launder messy reality into clean numbers:
+
+- `score` is empty unless the run produced exactly one usable score. A row reporting two arms
+  (`v2c 0.667 / v2h 0.679`) keeps both in `score_raw` and leaves `score` empty — any single
+  float there would be a fabrication.
+- `status` is a closed vocabulary (`scored`, `multi_arm`, `killed`, `aborted`, `invalid`,
+  `partial`, `measure_only`, `offline`), so an empty score always has a stated reason and is
+  never ambiguous between *unscored* and *scored zero*.
+- `canonical` is `""`, `superseded`, or `current`, and **at most one row may be `current`** —
+  two rows claiming to be the current canonical evidence is an unresolved claim, not a
+  formatting detail.
+
+### Severity model
+
+`FAIL` means the ledger asserts something false; `WARN` means it is incomplete. Only `FAIL`
+exits non-zero (use `--strict` to fail on warnings too), which keeps `validate` usable as a
+gate instead of permanently red.
+
+Validation runs in **both directions**. Rows → disk catches a row claiming a results directory
+that is not there. Disk → rows catches the more dangerous case: a run that executed, wrote
+provenance, and never reached the scoreboard, so its evidence exists but is invisible to
+anyone reading the table. Note that `manifest.json` and `harness_recall/` are deliberately
+*not* treated as score evidence — they prove ingest or recall ran, not that a number was
+produced.
+
+**Current state of the real ledger: 0 FAIL, 38 WARN.** The warnings are honest debt, not
+noise: 24 rows cover 51 run directories, 9 directories hold a readable score with no row
+(small-sample packet-shape and rescore panels — decide whether they belong in a *buildout*
+scoreboard), and most pre-fingerprint runs cannot have their deltas attributed to files.
+
 ## Benchmark Surface Fingerprint (`bench-surface.yaml`)
 
 A commit SHA does not establish what code a run executed. Two runs can share a SHA and
