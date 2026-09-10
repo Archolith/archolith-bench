@@ -115,6 +115,9 @@ cat > "${GRAPH_ATTEMPT_RECORD}" <<EOF
   "scalar_canonical_self": ${LME_SCALAR_CANONICAL_SELF},
   "scalar_output_required": ${LME_REQUIRE_SCALAR_OUTPUT},
   "turn_evidence_required": ${LME_REQUIRE_TURN_EVIDENCE},
+  "consolidation_audit_enabled": ${LME_CONSOLIDATION_AUDIT_ENABLED},
+  "recall_audit_enabled": ${LME_RECALL_AUDIT_ENABLED},
+  "menhir_log_level": "${MENHIR_LOG_LEVEL:-${LME_MENHIR_LOG_LEVEL}}",
   "menhir_commit": "$(git -C "${MENHIR_MAIN}" rev-parse HEAD 2>/dev/null || echo unknown)",
   "bench_commit": "$(git -C "${BENCH_DIR}" rev-parse HEAD 2>/dev/null || echo unknown)",
   "surface_digest": "${GRAPH_SURFACE_DIGEST}",
@@ -187,6 +190,9 @@ fi
   --setting "scalar_reconcile_attribute=${LME_SCALAR_RECONCILE_ATTRIBUTE}" \
   --setting "scalar_reconcile_scope=${LME_SCALAR_RECONCILE_SCOPE}" \
   --setting "scalar_reconcile_subject=${LME_SCALAR_RECONCILE_SUBJECT}" \
+  --setting "consolidation_audit_enabled=${LME_CONSOLIDATION_AUDIT_ENABLED}" \
+  --setting "recall_audit_enabled=${LME_RECALL_AUDIT_ENABLED}" \
+  --setting "menhir_log_level=${MENHIR_LOG_LEVEL:-${LME_MENHIR_LOG_LEVEL}}" \
   --setting "turn_evidence_required=${LME_REQUIRE_TURN_EVIDENCE}"
 log "graph provenance recorded: ${GRAPH_PROVENANCE_PATH} (graph_fresh=${GRAPH_FRESH})"
 
@@ -244,13 +250,20 @@ export MENHIR_PERSONAL_MEMORY_SUM_GROUNDING=1
 export LME_REQUIRE_TURN_EVIDENCE="${LME_REQUIRE_TURN_EVIDENCE}"
 # Raise the per-episode LLM extraction budget (default 10) so long turns finish enrichment
 # instead of hitting FAILED; the ingest script does a best-effort FAILED-retry for the rest.
-export MENHIR_MAX_LLM_CALLS_PER_JOB=20
+export MENHIR_MAX_LLM_CALLS_PER_JOB="${LME_MAX_LLM_CALLS_PER_JOB:-20}"
 # Menhir allows this many distinct namespaces to enrich concurrently. ingest.py uses the same
 # value for its namespace window and keeps only one active episode in each namespace.
 export MENHIR_INGEST_CONCURRENCY="${LME_INGEST_CONCURRENCY}"
 # Per-run telemetry: each build gets its own SQLite sidecar so vote receipts, lifecycle
 # events, and scalar audit trails are preserved with the results and attributable to this
 # exact run. The dashboard's ScalarTaskReader reads from this path.
+# Decision-point evidence. Without these the telemetry DB holds llm_usage_events but NOT the
+# consolidation audit, so a scalar pass that writes nothing leaves no record of WHY -- the drop
+# reasons and vote distributions live only here. Defaults are set in config.sh; both audits are
+# behavior-neutral.
+export MENHIR_PERSONAL_MEMORY_CONSOLIDATION_AUDIT_ENABLED="${LME_CONSOLIDATION_AUDIT_ENABLED}"
+export MENHIR_PERSONAL_MEMORY_RECALL_AUDIT_ENABLED="${LME_RECALL_AUDIT_ENABLED}"
+export MENHIR_LOG_LEVEL="${MENHIR_LOG_LEVEL:-${LME_MENHIR_LOG_LEVEL}}"
 export MENHIR_MCP_TELEMETRY_DB="${LME_RESULTS_DIR}/mcp_telemetry.db"
 log "telemetry DB: ${MENHIR_MCP_TELEMETRY_DB}"
 # Bench-run explorer: point at the results root and identify this run so

@@ -97,6 +97,29 @@ LME_REQUIRE_FRESH="${LME_REQUIRE_FRESH:-0}"
 # labelled noncanonical.
 LME_NONCANONICAL="${LME_NONCANONICAL:-0}"
 LME_REQUIRE_TURN_EVIDENCE="${LME_REQUIRE_TURN_EVIDENCE:-0}"
+
+# ---- Evidence capture: ON for every run, not just the KU buildout ----
+# WHY THESE DEFAULT ON. The decision points that explain a scalar result are recorded through the
+# consolidation audit, NOT through the log. A 2026-09-09 date-smoke ran at MENHIR_LOG_LEVEL=DEBUG and
+# produced 2,649 log lines that did not contain the answer: the typed-scalar extract drop reasons
+# (`by_reason`), the per-claim vote distributions, and the gate verdicts are emitted to telemetry
+# `lifecycle_events` by consolidation_audit, which was OFF because only
+# run_knowledge_update_buildout.sh set it. The run reported "scalar ingest validation: PASS" while
+# writing zero assertions, and the cause (hedged_value, then interpretation scatter) was invisible
+# until the pass was re-run with the audit on.
+#
+# The audits are behavior-neutral by contract -- consolidation_audit's emit can never raise into the
+# caller and changes only what is recorded -- so there is no measurement reason to keep them off.
+# Set either to 0 to opt out of a specific run.
+LME_CONSOLIDATION_AUDIT_ENABLED="${LME_CONSOLIDATION_AUDIT_ENABLED:-1}"
+LME_RECALL_AUDIT_ENABLED="${LME_RECALL_AUDIT_ENABLED:-1}"
+
+# Menhir log level for bench runs. INFO by default: the failure paths worth reading (View write
+# refusals, budget refusals, slow enrichment) already log at INFO or WARNING, and DEBUG turns on the
+# openai client's full request dump -- every prompt, including the episode text -- which is both
+# enormous and a disclosure risk on any corpus that is not a public fixture. Set DEBUG deliberately
+# while troubleshooting a specific run, not as a standing default.
+LME_MENHIR_LOG_LEVEL="${LME_MENHIR_LOG_LEVEL:-INFO}"
 LME_SCALAR_STATE_ENABLED="${LME_SCALAR_STATE_ENABLED:-0}"
 LME_SCALAR_HISTORY_ENABLED="${LME_SCALAR_HISTORY_ENABLED:-0}"
 LME_SCALAR_CONSOLIDATION_K="${LME_SCALAR_CONSOLIDATION_K:-3}"
