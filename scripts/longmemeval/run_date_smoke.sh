@@ -55,6 +55,12 @@ export LME_MANIFEST_PATH="${LME_MANIFEST_PATH:-${HERE}/results/manifest-datesmok
 
 log(){ printf '[date-smoke] %s\n' "$*" >&2; }
 
+# Sourced here, not only before the verify step below: the --clean block needs LME_RESULTS_DIR to
+# remove this graph's provenance record, and under `set -u` an unsourced config aborted --clean
+# AFTER it had already destroyed the container and volume. config.sh is side-effect free and every
+# value it sets is ${VAR:-default}, so the exports above still win.
+source "${HERE}/config.sh"
+
 if [ "${1:-}" = "--clean" ] || [ "${LME_SMOKE_CLEAN:-0}" = "1" ]; then
   log "removing previous smoke container/volume/manifest..."
   docker rm -f "${LME_NEO4J_NAME}" >/dev/null 2>&1 || true
