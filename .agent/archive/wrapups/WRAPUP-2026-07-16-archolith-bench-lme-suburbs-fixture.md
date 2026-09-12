@@ -107,3 +107,15 @@ current Chicago edge survived. It also exposed a separate `source="user"` admiss
 
 - Live verification output is at
   `C:\Users\thron\IdeaProjects\projects\archolith\archolith-bench\results\lme-fixtures\suburbs-fix-20260716-v1\verification.json`.
+
+---
+
+## Disposition - 2026-09-12 (post-archive closure verification)
+
+The PARTIAL status is obsolete: the subject of this fixture (the menhir suburbs extraction
+failure) was subsequently FIXED at menhir `d0e9f915` (self-endpoint binding, 2026-07-27)
+and verified by the 2026-09-09 bench run `lme-grounded-run.log` (ready=23 failed=0) -
+the fix and its verification are recorded in the archived plan
+`menhir-combined-extraction-collapse.md`. Bench commit `5b1b442` is in `master` history;
+the fixture (`menhir_suburbs_extraction_regression.json`), runner, and verifier are all
+present. Ledger entry appended 2026-09-12.

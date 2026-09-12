@@ -120,3 +120,13 @@ The bench-local code/test remediation is now commit-anchored. Remaining open wor
 4. Execute the distribution plan separately if packaging/publication is still in launch scope.
 5. Run wrapup validation when the artifact validator is available, then move the wrapup to `READY FOR REVIEW` only if validation passes.
 6. Push/open PR if that is the desired publication path for the four bench-local commits.
+
+---
+
+## Disposition - 2026-09-12 (post-archive closure verification)
+
+Status at archive time (PARTIAL) reflected the split follow-up plan
+`archolith-bench-remaining-evidence-closeout-plan-2026-06-21.md`, which is itself now
+archived. Verified 2026-09-12: commits `aaa8a19`..`5828364` are all in bench `master`
+history; no outstanding bench work references this remediation. Ledger entry appended to
+the workspace grade ledger the same day.
