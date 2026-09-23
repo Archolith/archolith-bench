@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import shlex
 from pathlib import Path
 from typing import Any
 
@@ -37,6 +38,31 @@ def _as_list(answer: dict[str, Any], key: str) -> list[str]:
     if isinstance(value, str):
         return [value]
     return [str(item) for item in value if isinstance(item, str | int | float)]
+
+
+def _command_tokens(value: str) -> list[str]:
+    text = _norm_command(value)
+    try:
+        return shlex.split(text)
+    except ValueError:
+        return text.split()
+
+
+def command_matches(given: str, expected: str, allowed_flags: tuple[str, ...] = ()) -> bool:
+    """*given* is *expected* followed only by plain arguments (paths) or allowed flags.
+
+    The repository's examples often continue with paths, so extra arguments pass; an
+    added flag such as ``--fix`` changes what the command does and fails unless the
+    task's gold allows it.
+    """
+    want, have = _command_tokens(expected), _command_tokens(given)
+    if have[: len(want)] != want:
+        return False
+    allowed = {flag.lower() for flag in allowed_flags}
+    return all(
+        not token.startswith("-") or token in allowed or token.split("=", 1)[0] in allowed
+        for token in have[len(want):]
+    )
 
 
 def _recall(expected: tuple[str, ...], given: list[str], norm: Any) -> float | None:
@@ -87,7 +113,6 @@ def score(answer: dict[str, Any] | None, gold: Gold, repo_root: Path) -> dict[st
         "doc_recall": _recall(gold.docs, _as_list(answer, "docs"), _norm_path),
         "file_recall": _recall(gold.files, _as_list(answer, "files"), _norm_path),
         "file_precision": _precision(gold.files, _as_list(answer, "files"), _norm_path),
-        # A gold command may be a prefix (the repo's example continues with paths).
         "command_recall": (
             None
             if not gold.commands
@@ -95,7 +120,7 @@ def score(answer: dict[str, Any] | None, gold: Gold, repo_root: Path) -> dict[st
                 1
                 for expected in gold.commands
                 if any(
-                    _norm_command(given).startswith(_norm_command(expected))
+                    command_matches(given, expected, gold.allowed_flags)
                     for given in _as_list(answer, "commands")
                 )
             )

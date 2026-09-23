@@ -16,6 +16,9 @@
 - `archolith_bench/beacon_eval/models.py`, `cli.py`: cache and reported-total token fields;
   `--run-reserve-tokens`.
 - `tests/test_beacon_eval.py`: tests for each case above. Scoring and gold unchanged; no paid runs.
+- `scoring.py`, `models.py` (owner decision: scoring 1A): a command matches when its tokens start
+  with the gold command's and every extra token is a plain argument; an added flag fails unless the
+  task's optional `gold.allowed_flags` lists it.
 
 ## 2026-09-23 - Beacon agent-task evaluation harness (P3 step 1)
 

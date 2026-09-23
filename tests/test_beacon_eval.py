@@ -360,3 +360,18 @@ def test_a_gold_command_may_be_a_prefix(tmp_path: Path) -> None:
     answer = {"commands": ["ruff check --select F811,F821,ASYNC src/menhir/x.py"]}
     assert score(answer, gold, tmp_path)["command_recall"] == 1.0
     assert score({"commands": ["ruff check ."]}, gold, tmp_path)["command_recall"] == 0.0
+
+
+def test_an_added_flag_fails_unless_the_gold_allows_it(tmp_path: Path) -> None:
+    gold = Gold(commands=("ruff check --select F811,F821,ASYNC",))
+    wrong = {"commands": ["ruff check --select F811,F821,ASYNC --fix --unsafe-fixes ."]}
+    assert score(wrong, gold, tmp_path)["command_recall"] == 0.0
+    pytest_gold = Gold(commands=('python -m pytest --run-online -m "online and not needs_llm" -q',),
+                       allowed_flags=("-x", "--maxfail"))
+    ok = {"commands": ['python -m pytest --run-online -m "online and not needs_llm" -q -x --maxfail=2 tests/a.py']}
+    assert score(ok, pytest_gold, tmp_path)["command_recall"] == 1.0
+    extra = {"commands": ['python -m pytest --run-online -m "online and not needs_llm" -q --lf']}
+    assert score(extra, pytest_gold, tmp_path)["command_recall"] == 0.0
+    # Token prefix, not string prefix: "-qx" is not "-q" plus arguments.
+    fused = {"commands": ['python -m pytest --run-online -m "online and not needs_llm" -qx']}
+    assert score(fused, pytest_gold, tmp_path)["command_recall"] == 0.0
