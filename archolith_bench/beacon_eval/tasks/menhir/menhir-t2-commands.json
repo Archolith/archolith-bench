@@ -11,16 +11,44 @@
     "files": [],
     "commands": [
       "python -m pip install -e . --group dev",
-      "python -m pytest --run-online -m \"online and not needs_llm\" -q",
+      "python -m pytest --run-online",
       "ruff check --select F811,F821,ASYNC"
     ],
     "guardrails": [
-      "disposable test database",
-      "full suite in CI",
-      "online tests opt-in"
+      [
+        "disposable test database",
+        "disposable neo4j",
+        "never production graph",
+        "never operator graph"
+      ],
+      [
+        "full suite in CI",
+        "complete suite CI",
+        "full suite CI",
+        "entire suite CI"
+      ],
+      [
+        "online tests opt-in",
+        "online tests --run-online",
+        "live tests opt-in",
+        "live neo4j opt-in"
+      ],
+      [
+        "focused unit tests",
+        "focused tests",
+        "narrowest tests",
+        "direct tests"
+      ]
     ],
     "verdict": "",
-    "risky": []
+    "risky": [],
+    "allowed_flags": [
+      "-q",
+      "-x",
+      "-v",
+      "-m",
+      "-k"
+    ]
   },
   "gold_citations": [
     {
@@ -38,14 +66,14 @@
       "quote": "python -m pip install -e . --group dev"
     },
     {
-      "item": "python -m pytest --run-online -m \"online and not needs_llm\" -q",
+      "item": "python -m pytest --run-online",
       "path": ".agent/workflows/run_and_test.md",
       "line_start": 129,
       "line_end": 132,
       "quote": "python -m pytest --run-online -m \"online and not needs_llm\" -q"
     },
     {
-      "item": "python -m pytest --run-online -m \"online and not needs_llm\" -q",
+      "item": "python -m pytest --run-online",
       "path": ".agent/workflows/run_and_test.md",
       "line_start": 82,
       "line_end": 82,
@@ -92,6 +120,20 @@
       "line_start": 49,
       "line_end": 49,
       "quote": "Live Neo4j/LLM tests require explicit opt-in"
+    },
+    {
+      "item": "focused unit tests",
+      "path": ".agent/workflows/run_and_test.md",
+      "line_start": 82,
+      "line_end": 82,
+      "quote": "Focused unit tests plus disposable-Neo4j online tests"
+    },
+    {
+      "item": "focused unit tests",
+      "path": ".agent/workflows/run_and_test.md",
+      "line_start": 34,
+      "line_end": 36,
+      "quote": "Run the narrowest credible tests during implementation"
     }
   ]
 }
