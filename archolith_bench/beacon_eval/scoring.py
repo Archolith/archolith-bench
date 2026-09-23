@@ -87,7 +87,20 @@ def score(answer: dict[str, Any] | None, gold: Gold, repo_root: Path) -> dict[st
         "doc_recall": _recall(gold.docs, _as_list(answer, "docs"), _norm_path),
         "file_recall": _recall(gold.files, _as_list(answer, "files"), _norm_path),
         "file_precision": _precision(gold.files, _as_list(answer, "files"), _norm_path),
-        "command_recall": _recall(gold.commands, _as_list(answer, "commands"), _norm_command),
+        # A gold command may be a prefix (the repo's example continues with paths).
+        "command_recall": (
+            None
+            if not gold.commands
+            else sum(
+                1
+                for expected in gold.commands
+                if any(
+                    _norm_command(given).startswith(_norm_command(expected))
+                    for given in _as_list(answer, "commands")
+                )
+            )
+            / len(gold.commands)
+        ),
         "guardrail_recall": (
             None
             if not gold.guardrails

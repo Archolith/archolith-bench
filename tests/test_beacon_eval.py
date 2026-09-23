@@ -252,3 +252,10 @@ def test_grounding_check_flags_uncited_items_bad_ranges_and_missing_quotes(tmp_p
     assert any(p.startswith("bad line range 1-9") for p in problems)
     assert "cited path missing: missing.md" in problems
     assert len(problems) == 3
+
+
+def test_a_gold_command_may_be_a_prefix(tmp_path: Path) -> None:
+    gold = Gold(commands=("ruff check --select F811,F821,ASYNC",))
+    answer = {"commands": ["ruff check --select F811,F821,ASYNC src/menhir/x.py"]}
+    assert score(answer, gold, tmp_path)["command_recall"] == 1.0
+    assert score({"commands": ["ruff check ."]}, gold, tmp_path)["command_recall"] == 0.0
