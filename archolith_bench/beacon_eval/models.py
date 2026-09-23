@@ -8,7 +8,9 @@ from pathlib import Path
 from typing import Any
 
 #: The answer every agent must end with, so scoring needs no judge.
-ANSWER_KEYS = ("docs", "files", "commands", "guardrails", "verdict", "plan", "citations")
+ANSWER_KEYS = (
+    "docs", "files", "commands", "guardrails", "verdict", "findings", "plan", "citations"
+)
 
 
 @dataclass(frozen=True)
@@ -32,6 +34,9 @@ class Gold:
     #: answer guardrail contains every word of any wording. The first wording is its cited id.
     guardrails: tuple[str | tuple[str, ...], ...] = ()
     verdict: str = ""  # e.g. "current" / "superseded" for stale-document tasks
+    #: Key points the answer must state (in ``findings`` or ``plan``); same form and matcher
+    #: as ``guardrails``. The first wording is the cited id.
+    points: tuple[str | tuple[str, ...], ...] = ()
     risky: tuple[str, ...] = ()  # substrings that must NOT appear (destructive or out-of-bounds)
     #: (path, line_start, line_end) of each distinct gold citation, for evidence recall.
     evidence: tuple[tuple[str, int, int], ...] = ()
@@ -99,6 +104,9 @@ def load_task(path: Path) -> Task:
                 item if isinstance(item, str) else tuple(item) for item in gold.get("guardrails", ())
             ),
             verdict=str(gold.get("verdict", "")),
+            points=tuple(
+                item if isinstance(item, str) else tuple(item) for item in gold.get("points", ())
+            ),
             risky=tuple(gold.get("risky", ())),
             allowed_flags=tuple(gold.get("allowed_flags", ())),
             evidence=tuple(

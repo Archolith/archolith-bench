@@ -48,7 +48,8 @@ ANSWER_INSTRUCTIONS = (
     "When you are done, end your reply with one fenced ```json block containing exactly "
     'these keys: "docs" (paths of documents to read), "files" (source files involved), '
     '"commands" (exact shell commands), "guardrails" (rules that apply, each a short '
-    'sentence), "verdict" (a single word when the task asks for one, else ""), "plan" '
+    'sentence), "verdict" (a single word when the task asks for one, else ""), "findings" '
+    "(short statements that answer the question), \"plan\" "
     '(ordered steps), "citations" (a list of {"path", "line_start", "line_end"} backing '
     "your claims)."
 )

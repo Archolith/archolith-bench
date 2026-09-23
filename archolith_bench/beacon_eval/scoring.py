@@ -214,6 +214,18 @@ def score(answer: dict[str, Any] | None, gold: Gold, repo_root: Path) -> dict[st
             )
             / len(gold.guardrails)
         ),
+        "point_recall": (
+            None
+            if not gold.points
+            else sum(
+                1
+                for accepted in gold.points
+                if guardrail_met(
+                    accepted, _as_list(answer, "findings") + _as_list(answer, "plan")
+                )
+            )
+            / len(gold.points)
+        ),
         "verdict_correct": (
             None
             if not gold.verdict

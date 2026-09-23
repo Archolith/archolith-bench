@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-_GOLD_LISTS = ("docs", "files", "commands", "guardrails", "risky")
+_GOLD_LISTS = ("docs", "files", "commands", "guardrails", "points", "risky")
 
 
 def _norm(text: str) -> str:
@@ -28,7 +28,7 @@ def check_task_file(task_path: Path, checkout: Path) -> list[str]:
         if key == "risky":
             continue  # risky items are prohibitions, not claims about the repository
         for entry in gold.get(key) or []:
-            # A guardrail may list accepted wordings; its first wording is the cited id.
+            # A guardrail or point may list accepted wordings; its first wording is the cited id.
             item = entry[0] if isinstance(entry, list) and entry else entry
             if item not in cited_items:
                 problems.append(f"{key} item has no citation: {item}")

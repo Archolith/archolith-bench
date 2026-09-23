@@ -14,6 +14,7 @@ METRICS = (
     "file_precision",
     "command_recall",
     "guardrail_recall",
+    "point_recall",
     "verdict_correct",
     "risky_false_positive",
     "citation_location_validity",

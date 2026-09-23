@@ -451,6 +451,30 @@ def test_gold_evidence_is_loaded_once_per_distinct_span(tmp_path: Path) -> None:
     assert load_task(task).gold.evidence == (("a.md", 1, 2),)
 
 
+def test_a_point_is_met_by_one_findings_or_plan_entry(tmp_path: Path) -> None:
+    gold = Gold(points=(("backend owns the runtime", "menhir serve owns runtime"),
+                        ("replaced per-client runtime", "each client started its own runtime")))
+    answer = {"findings": ["The `menhir serve` backend owns the runtime; stdio is a thin proxy."],
+              "plan": ["Note that previously each client started its own runtime."]}
+    assert score(answer, gold, tmp_path)["point_recall"] == 1.0
+    spread = {"findings": ["The backend is fast.", "It owns a cache.", "The runtime is Python."]}
+    assert score(spread, gold, tmp_path)["point_recall"] == 0.0
+    assert "point_recall" not in score(answer, Gold(), tmp_path)
+
+
+def test_every_condition_asks_for_findings() -> None:
+    task = Task(repo="demo", task_id="t1", kind="decision", prompt="Who owns it?", gold=GOLD)
+    assert all('"findings"' in build_prompt(task, cond, "x") for cond in ("A", "B", "C"))
+
+
+def test_grounding_requires_a_citation_for_each_point(tmp_path: Path) -> None:
+    from archolith_bench.beacon_eval.grounding import check_task_file
+
+    task = tmp_path / "t.json"
+    task.write_text(json.dumps({"gold": {"points": [["backend owns the runtime", "alt"]]}}), encoding="utf-8")
+    assert check_task_file(task, tmp_path) == ["points item has no citation: backend owns the runtime"]
+
+
 def test_grounding_takes_the_first_wording_as_the_cited_guardrail(tmp_path: Path) -> None:
     from archolith_bench.beacon_eval.grounding import check_task_file
 
