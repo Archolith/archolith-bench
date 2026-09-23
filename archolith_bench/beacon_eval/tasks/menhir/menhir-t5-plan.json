@@ -25,6 +25,41 @@
       "git add -A",
       "--apply",
       "uuid.uuid4"
+    ],
+    "acceptable_files": [
+      "CHANGELOG.md",
+      ".agent/CHANGELOG.md",
+      ".agent/archive/plans/menhir-artifact-semantic-model.md"
+    ],
+    "points": [
+      [
+        ".agent/archive/plans",
+        "archive/plans",
+        ".agent/archive/plans/menhir-artifact-semantic-model.md",
+        "archive/plans/menhir-artifact-semantic-model.md"
+      ],
+      [
+        "remove from index",
+        "remove from plans index",
+        "update .agent/plans/readme.md",
+        "update plans/readme.md",
+        "remove readme.md entry",
+        "repair referrers"
+      ],
+      [
+        "changelog entry",
+        "update changelog",
+        "update changelog.md",
+        "changelog.md"
+      ],
+      [
+        "stage explicit paths",
+        "add files explicitly by path",
+        "stage named files",
+        "stage by path",
+        "stage files by path",
+        "explicit paths"
+      ]
     ]
   },
   "gold_citations": [
@@ -125,6 +160,34 @@
       "line_start": 95,
       "line_end": 96,
       "quote": "python -c \"import uuid; print(uuid.uuid4())\""
+    },
+    {
+      "item": ".agent/archive/plans",
+      "path": ".agent/workflows/artifact_authoring.md",
+      "line_start": 159,
+      "line_end": 159,
+      "quote": "Move the file under `.agent/archive/<kind>/`."
+    },
+    {
+      "item": "remove from index",
+      "path": ".agent/workflows/artifact_authoring.md",
+      "line_start": 160,
+      "line_end": 160,
+      "quote": "Remove it from its old index and repair any live referrers."
+    },
+    {
+      "item": "changelog entry",
+      "path": ".agent/maintenance.md",
+      "line_start": 35,
+      "line_end": 36,
+      "quote": "Always add a CHANGELOG entry when finishing a session with meaningful changes."
+    },
+    {
+      "item": "stage explicit paths",
+      "path": ".agent/maintenance.md",
+      "line_start": 48,
+      "line_end": 50,
+      "quote": "Add files explicitly by path."
     }
   ]
 }

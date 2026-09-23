@@ -419,8 +419,12 @@ def test_grounding_flags_a_missing_acceptable_file(tmp_path: Path) -> None:
 
     (tmp_path / "real.py").write_text("x\n", encoding="utf-8")
     task = tmp_path / "t.json"
-    task.write_text(json.dumps({"gold": {"acceptable_files": ["real.py", "gone.py"]}}), encoding="utf-8")
-    assert check_task_file(task, tmp_path) == ["acceptable file missing: gone.py"]
+    (tmp_path / "archive").mkdir()
+    task.write_text(json.dumps({"gold": {"acceptable_files": [
+        "real.py", "archive/new.md", "nowhere/new.md", "../outside.py"]}}), encoding="utf-8")
+    # A new file is acceptable when its folder exists; a missing folder or an escape is not.
+    assert check_task_file(task, tmp_path) == [
+        "acceptable file missing: nowhere/new.md", "acceptable file missing: ../outside.py"]
 
 
 def test_a_citation_without_lines_is_not_a_valid_location(tmp_path: Path) -> None:

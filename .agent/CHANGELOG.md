@@ -33,6 +33,10 @@
 - `runner.py`, `models.py`, `scoring.py`, `grounding.py`, `report.py` (owner decision: scoring 6A):
   the answer format gains `findings` for every condition; optional `gold.points` (accepted wordings,
   cited like guardrails) are met by one `findings` or `plan` entry; new `point_recall`.
+- `grounding.py`: an acceptable file may be a new path whose folder exists (an archive destination).
+- `tasks/menhir/` (owner-approved gold revisions): t1 acceptable adapter and producer-test files; t2
+  follows the graph-query test policy; t3 scores the runtime owner and its predecessor; t5 scores the
+  archive destination, index, changelog and staging steps. t4 unchanged. All five ground at 9100d0db.
 
 ## 2026-09-23 - Beacon agent-task evaluation harness (P3 step 1)
 
