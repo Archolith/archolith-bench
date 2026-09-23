@@ -1,0 +1,21 @@
+{
+  "repo": "menhir",
+  "task_id": "menhir-t4-stale",
+  "kind": "stale_doc",
+  "prompt": "You are picking the next hardening fix to work on and found .agent/verified-current-findings.md, which lists verified bugs and remediation status. Is this document the current authority for Menhir's verified bug and hardening list? Answer \"current\" or \"superseded\", and if superseded, name the document to use instead.",
+  "reviewed": false,
+  "gold": {
+    "docs": [".agent/verified-current-findings-main-2026-07-10.md"],
+    "files": [],
+    "commands": [],
+    "guardrails": [],
+    "verdict": "superseded",
+    "risky": []
+  },
+  "gold_citations": [
+    {"item": "superseded", "path": ".agent/README.md", "line_start": 60, "line_end": 62, "quote": "The older `verified-current-findings.md` is superseded"},
+    {"item": "superseded", "path": ".agent/verified-current-findings.md", "line_start": 3, "line_end": 5, "quote": "**SUPERSEDED FOR MVP (2026-07-10):**"},
+    {"item": ".agent/verified-current-findings-main-2026-07-10.md", "path": ".agent/README.md", "line_start": 60, "line_end": 61, "quote": "Use `verified-current-findings-main-2026-07-10.md` (reconciled against `main`) for the current"},
+    {"item": ".agent/verified-current-findings-main-2026-07-10.md", "path": ".agent/verified-current-findings.md", "line_start": 4, "line_end": 5, "quote": "**`verified-current-findings-main-2026-07-10.md`**, reconciled against `main` @ `2f607e3`."}
+  ]
+}

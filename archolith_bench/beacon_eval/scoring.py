@@ -82,7 +82,6 @@ def score(answer: dict[str, Any] | None, gold: Gold, repo_root: Path) -> dict[st
     """Metrics in [0, 1]; a metric the gold does not define is omitted."""
     if answer is None:
         return {"answered": 0.0}
-    text = json.dumps(answer).lower()
     metrics: dict[str, float | None] = {
         "answered": 1.0,
         "doc_recall": _recall(gold.docs, _as_list(answer, "docs"), _norm_path),
@@ -104,8 +103,18 @@ def score(answer: dict[str, Any] | None, gold: Gold, repo_root: Path) -> dict[st
             if not gold.verdict
             else float(str(answer.get("verdict", "")).strip().lower() == gold.verdict.lower())
         ),
+        # Only what the answer tells the agent to run counts: a plan that warns
+        # "never use git add -A" must not be scored as risky.
         "risky_false_positive": (
-            None if not gold.risky else float(any(item.lower() in text for item in gold.risky))
+            None
+            if not gold.risky
+            else float(
+                any(
+                    item.lower() in command.lower()
+                    for item in gold.risky
+                    for command in _as_list(answer, "commands")
+                )
+            )
         ),
         "citation_validity": citation_validity(answer, repo_root),
     }

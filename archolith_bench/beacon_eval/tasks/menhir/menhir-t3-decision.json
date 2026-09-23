@@ -1,0 +1,29 @@
+{
+  "repo": "menhir",
+  "task_id": "menhir-t3-decision",
+  "kind": "decision",
+  "prompt": "You want to change what happens when a coding agent launches Menhir's stdio MCP server (python -m menhir.mcp.server). Before changing it: under the current design, who owns the Menhir runtime (Neo4j pool, enrichment queue, scheduler) when a client connects over stdio, and what earlier arrangement did that design replace? Name the documents and source files that state the current decision.",
+  "reviewed": false,
+  "gold": {
+    "docs": [".agent/workflows/backend-first-mcp.md", ".agent/architecture.md"],
+    "files": ["src/menhir/mcp/lifecycle.py", "src/menhir/core/runtime.py"],
+    "commands": [],
+    "guardrails": [
+      "no second runtime",
+      "MENHIR_BACKEND_URL",
+      "menhir serve"
+    ],
+    "verdict": "",
+    "risky": []
+  },
+  "gold_citations": [
+    {"item": ".agent/workflows/backend-first-mcp.md", "path": ".agent/workflows/backend-first-mcp.md", "line_start": 5, "line_end": 13, "quote": "Stdio MCP is no longer a second runtime owner."},
+    {"item": ".agent/architecture.md", "path": ".agent/architecture.md", "line_start": 156, "line_end": 156, "quote": "those stdio processes are now backend clients rather than independent runtime owners"},
+    {"item": "src/menhir/core/runtime.py", "path": ".agent/architecture.md", "line_start": 94, "line_end": 94, "quote": "`core/runtime.py` is now the canonical runtime owner for init, shutdown, and runtime state"},
+    {"item": "src/menhir/mcp/lifecycle.py", "path": ".agent/architecture.md", "line_start": 94, "line_end": 94, "quote": "`mcp/lifecycle.py` is a thin stdio-client lifespan wrapper"},
+    {"item": "src/menhir/mcp/lifecycle.py", "path": "src/menhir/mcp/lifecycle.py", "line_start": 58, "line_end": 64, "quote": "MCP stdio now requires menhir_BACKEND_URL. "},
+    {"item": "no second runtime", "path": "README.md", "line_start": 300, "line_end": 301, "quote": "The stdio bridge does not create a second runtime."},
+    {"item": "MENHIR_BACKEND_URL", "path": ".agent/architecture.md", "line_start": 141, "line_end": 141, "quote": "stdio MCP now requires `MENHIR_BACKEND_URL`; it health-checks the backend during lifespan startup and does not own local runtime bootstrap/shutdown at all"},
+    {"item": "menhir serve", "path": ".agent/workflows/backend-first-mcp.md", "line_start": 11, "line_end": 12, "quote": "- backend owner: `menhir serve`"}
+  ]
+}

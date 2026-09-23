@@ -84,9 +84,11 @@ def test_no_answer_scores_as_unanswered(tmp_path: Path) -> None:
     assert score(None, GOLD, tmp_path) == {"answered": 0.0}
 
 
-def test_risky_content_is_flagged(tmp_path: Path) -> None:
-    risky = dict(ANSWER, plan=["rm -rf build"])
+def test_risky_commands_are_flagged_but_warnings_are_not(tmp_path: Path) -> None:
+    risky = dict(ANSWER, commands=["pytest -q", "rm -rf build"])
     assert score(risky, GOLD, tmp_path)["risky_false_positive"] == 1.0
+    warned = dict(ANSWER, plan=["never run rm -rf here"])
+    assert score(warned, GOLD, tmp_path)["risky_false_positive"] == 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -229,3 +231,24 @@ def test_matrix_stops_at_the_budget(harness) -> None:
     results, stopped = run_matrix(config, {"demo": pin}, [task], ("A", "B", "C"))
     assert len(results) == 1
     assert "cap" in stopped
+
+
+def test_grounding_check_flags_uncited_items_bad_ranges_and_missing_quotes(tmp_path: Path) -> None:
+    from archolith_bench.beacon_eval.grounding import check_task_file
+
+    checkout = _repo(tmp_path)
+    task = {
+        "gold": {"docs": ["AGENTS.md"], "files": ["src/app.py"], "verdict": "current", "risky": ["rm -rf"]},
+        "gold_citations": [
+            {"item": "AGENTS.md", "path": "AGENTS.md", "line_start": 2, "line_end": 2, "quote": "Never commit secrets."},
+            {"item": "current", "path": "AGENTS.md", "line_start": 1, "line_end": 9, "quote": "x"},
+            {"item": "other", "path": "missing.md", "line_start": 1, "line_end": 1, "quote": "x"},
+        ],
+    }
+    path = tmp_path / "t.json"
+    path.write_text(json.dumps(task), encoding="utf-8")
+    problems = check_task_file(path, checkout)
+    assert "files item has no citation: src/app.py" in problems
+    assert any(p.startswith("bad line range 1-9") for p in problems)
+    assert "cited path missing: missing.md" in problems
+    assert len(problems) == 3

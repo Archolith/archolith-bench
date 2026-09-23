@@ -1,0 +1,35 @@
+{
+  "repo": "menhir",
+  "task_id": "menhir-t5-plan",
+  "kind": "first_plan",
+  "prompt": "The owner has confirmed that the plan .agent/plans/menhir-artifact-semantic-model.md is finished and wants it moved into the archive. Before touching anything, write a safe first-step plan for this change: which project documents to read, which files the change touches, what check to run before committing, and how to stage and record the change.",
+  "reviewed": false,
+  "gold": {
+    "docs": [".agent/workflows/artifact_authoring.md"],
+    "files": [".agent/plans/menhir-artifact-semantic-model.md", ".agent/plans/README.md"],
+    "commands": ["menhir artifacts validate ."],
+    "guardrails": [
+      "keep the UUID",
+      "terminal lifecycle decision",
+      "transition_artifact"
+    ],
+    "verdict": "",
+    "risky": ["git add -A", "--apply", "uuid.uuid4"]
+  },
+  "gold_citations": [
+    {"item": ".agent/workflows/artifact_authoring.md", "path": ".agent/README.md", "line_start": 30, "line_end": 32, "quote": "**creating or moving a plan/review/handoff/reference?** -> `workflows/artifact_authoring.md`"},
+    {"item": ".agent/workflows/artifact_authoring.md", "path": ".agent/maintenance.md", "line_start": 11, "line_end": 12, "quote": "handoff, implementation report, reference) -> follow `workflows/artifact_authoring.md`,"},
+    {"item": ".agent/plans/menhir-artifact-semantic-model.md", "path": ".agent/plans/menhir-artifact-semantic-model.md", "line_start": 3, "line_end": 3, "quote": "Status: IMPLEMENTED (2026-08-03)."},
+    {"item": ".agent/plans/README.md", "path": ".agent/workflows/artifact_authoring.md", "line_start": 160, "line_end": 160, "quote": "Remove it from its old index and repair any live referrers."},
+    {"item": ".agent/plans/README.md", "path": ".agent/plans/README.md", "line_start": 36, "line_end": 36, "quote": "[`menhir-artifact-semantic-model.md`](menhir-artifact-semantic-model.md)"},
+    {"item": "menhir artifacts validate .", "path": ".agent/maintenance.md", "line_start": 13, "line_end": 14, "quote": "run `menhir artifacts validate .` before"},
+    {"item": "menhir artifacts validate .", "path": ".agent/workflows/artifact_authoring.md", "line_start": 191, "line_end": 195, "quote": "menhir artifacts validate . --repository menhir"},
+    {"item": "keep the UUID", "path": ".agent/workflows/artifact_authoring.md", "line_start": 159, "line_end": 159, "quote": "Move the file under `.agent/archive/<kind>/`. Keep the UUID."},
+    {"item": "terminal lifecycle decision", "path": ".agent/workflows/artifact_authoring.md", "line_start": 151, "line_end": 151, "quote": "An archive move requires an explicit terminal lifecycle decision **in the same reviewable change**."},
+    {"item": "transition_artifact", "path": ".agent/workflows/artifact_authoring.md", "line_start": 158, "line_end": 158, "quote": "Decide the terminal state and apply it with `transition_artifact`."},
+    {"item": "git add -A", "path": ".agent/maintenance.md", "line_start": 48, "line_end": 48, "quote": "Never `git add .` or `git add -A`."},
+    {"item": "--apply", "path": ".agent/workflows/artifact_authoring.md", "line_start": 207, "line_end": 209, "quote": "`menhir artifacts reconcile --repository <name> --apply`"},
+    {"item": "uuid.uuid4", "path": ".agent/workflows/artifact_authoring.md", "line_start": 124, "line_end": 126, "quote": "same document, new location. Keep the UUID."},
+    {"item": "uuid.uuid4", "path": ".agent/workflows/artifact_authoring.md", "line_start": 95, "line_end": 96, "quote": "python -c \"import uuid; print(uuid.uuid4())\""}
+  ]
+}
