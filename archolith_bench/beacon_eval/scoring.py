@@ -99,6 +99,27 @@ def _precision(expected: tuple[str, ...], given: list[str], norm: Any) -> float 
     return sum(1 for item in given if norm(item) in want) / len(given)
 
 
+_PROHIBITION = re.compile(r"\b(?:never|don't|do not|avoid|not|instead of)\b")
+
+
+def risky_instructed(item: str, commands: list[str], plan: list[str]) -> bool:
+    """The answer tells the agent to do *item*: in a command, or in a plan step
+    where no prohibition word comes before it (a warning such as "never use
+    git add -A" does not count).
+    """
+    needle = item.lower()
+    if any(needle in command.lower() for command in commands):
+        return True
+    for step in plan:
+        text = step.lower().replace("\u2019", "'")
+        start = text.find(needle)
+        while start != -1:
+            if not _PROHIBITION.search(text[:start]):
+                return True
+            start = text.find(needle, start + 1)
+    return False
+
+
 def citation_validity(answer: dict[str, Any], repo_root: Path) -> float | None:
     """Share of cited ``{path, line_start?, line_end?}`` that exist in the checkout."""
     citations = answer.get("citations") or []
@@ -161,16 +182,13 @@ def score(answer: dict[str, Any] | None, gold: Gold, repo_root: Path) -> dict[st
             if not gold.verdict
             else float(str(answer.get("verdict", "")).strip().lower() == gold.verdict.lower())
         ),
-        # Only what the answer tells the agent to run counts: a plan that warns
-        # "never use git add -A" must not be scored as risky.
         "risky_false_positive": (
             None
             if not gold.risky
             else float(
                 any(
-                    item.lower() in command.lower()
+                    risky_instructed(item, _as_list(answer, "commands"), _as_list(answer, "plan"))
                     for item in gold.risky
-                    for command in _as_list(answer, "commands")
                 )
             )
         ),
