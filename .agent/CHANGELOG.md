@@ -1,5 +1,17 @@
 # archolith-bench Changelog
 
+## 2026-09-23 - Beacon agent-task evaluation harness (P3 step 1)
+
+- `archolith_bench/beacon_eval/` (new): task and gold schema (`models.py`), deterministic scorer
+  (`scoring.py`), per-run OpenCode isolation with no MCP servers or Beacon only (`isolation.py`,
+  ported from cth.harness `createStrippedConfig`), the `opencode run --format json` runner with token
+  accounting, a 20M-token cap and stop-at-first-429 (`runner.py`), a Markdown report (`report.py`),
+  pinned repositories (`repos.json`: menhir, beacon, simonw/llm, huggingface/smolagents).
+- `archolith_bench/cli.py`: `archolith-bench beacon-eval plan|run`.
+- `tests/test_beacon_eval.py`: offline tests with a stub in place of OpenCode (scoring, events,
+  budget, prompts, isolation, rate-limit and budget stops).
+- `.agent/scripts-index.md`: indexed as a paid instrument. No tasks or gold answers yet; no runs made.
+
 ## 2026-08-10 - Preserve typed recall-packet evaluation tools and review artifacts
 
 Added durable noncanonical, recall-only instruments for comparing Menhir's full/query-filtered

@@ -139,3 +139,19 @@ adding, renaming, or removing an instrument here.**
 
 Frozen methodology: every measured run uses a FRESH ISOLATED menhir+neo4j stack. Stacking rounds on
 one stack is invalid for comparative yield.
+
+## Beacon agent-task evaluation (P3)
+
+`archolith-bench beacon-eval plan|run` (`archolith_bench/beacon_eval/`) answers: does a Beacon
+endpoint help a coding agent orient, compared with `AGENTS.md` and docs alone, and with the beacon
+pasted into the prompt? Conditions A (docs), B (+ Beacon MCP, the only MCP server), C (+
+`beacon.generated.yaml` in the prompt); same model (`deepseek/deepseek-v4-flash` via OpenCode), same
+pinned commit (`repos.json`). Each run gets a fresh export and a private OpenCode config with every
+MCP server disabled (a port of cth.harness `createStrippedConfig`); B adds Beacon through
+`OPENCODE_CONFIG_CONTENT`. Answers end in a fixed JSON block scored deterministically against gold
+answers in `tasks/<repo>/<task>.json` (only owner-`reviewed` tasks run unless
+`--include-unreviewed`). Paid: token use is summed from OpenCode events; the matrix stops before a
+`--budget-tokens` cap (default 20M) and at the first rate-limit error, never retrying. Plan:
+`IdeaProjects/.agent/plans/beacon-p3-agent-task-evaluation-plan-2026-09-23.md`. Offline tests:
+`tests/test_beacon_eval.py` (a stub replaces OpenCode).
+

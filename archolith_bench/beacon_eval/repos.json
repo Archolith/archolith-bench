@@ -1,0 +1,24 @@
+{
+  "repos": [
+    {
+      "name": "menhir",
+      "url": "https://github.com/Archolith/menhir.git",
+      "commit": "9100d0db6a5a0164f4b83bb3da8c8bb410d237ca"
+    },
+    {
+      "name": "beacon",
+      "url": "https://github.com/Archolith/beacon.git",
+      "commit": "64675063fe7036a8bff813e33edc7efaf3164ab2"
+    },
+    {
+      "name": "llm",
+      "url": "https://github.com/simonw/llm.git",
+      "commit": "764dc386c58b625f3ad9d203e699715ad208455f"
+    },
+    {
+      "name": "smolagents",
+      "url": "https://github.com/huggingface/smolagents.git",
+      "commit": "227ef5e49ddd82339295939072f0223249aa8d38"
+    }
+  ]
+}
