@@ -404,6 +404,25 @@ def test_risky_steps_in_the_plan_count_but_warnings_do_not(tmp_path: Path) -> No
     assert risky({"commands": ["git add -A"], "plan": []}) == 1.0
 
 
+def test_acceptable_files_keep_precision_without_counting_for_recall(tmp_path: Path) -> None:
+    gold = Gold(files=("src/core.py",), acceptable_files=("src/adapter.py",))
+    with_extra = score({"files": ["src/core.py", "src/adapter.py"]}, gold, tmp_path)
+    assert (with_extra["file_recall"], with_extra["file_precision"]) == (1.0, 1.0)
+    unlisted = score({"files": ["src/core.py", "src/unrelated.py"]}, gold, tmp_path)
+    assert unlisted["file_precision"] == 0.5
+    only_extra = score({"files": ["src/adapter.py"]}, gold, tmp_path)
+    assert (only_extra["file_recall"], only_extra["file_precision"]) == (0.0, 1.0)
+
+
+def test_grounding_flags_a_missing_acceptable_file(tmp_path: Path) -> None:
+    from archolith_bench.beacon_eval.grounding import check_task_file
+
+    (tmp_path / "real.py").write_text("x\n", encoding="utf-8")
+    task = tmp_path / "t.json"
+    task.write_text(json.dumps({"gold": {"acceptable_files": ["real.py", "gone.py"]}}), encoding="utf-8")
+    assert check_task_file(task, tmp_path) == ["acceptable file missing: gone.py"]
+
+
 def test_grounding_takes_the_first_wording_as_the_cited_guardrail(tmp_path: Path) -> None:
     from archolith_bench.beacon_eval.grounding import check_task_file
 

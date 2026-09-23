@@ -35,6 +35,11 @@ def check_task_file(task_path: Path, checkout: Path) -> list[str]:
     if gold.get("verdict") and gold["verdict"] not in cited_items:
         problems.append(f"verdict has no citation: {gold['verdict']}")
     root = checkout.resolve()
+    for path in gold.get("acceptable_files") or []:
+        # Acceptable extras are not claims, so they need no citation, only a real path.
+        target = (root / path).resolve()
+        if not target.is_relative_to(root) or not target.is_file():
+            problems.append(f"acceptable file missing: {path}")
     for citation in citations:
         path = str(citation.get("path", ""))
         target = (root / path).resolve()

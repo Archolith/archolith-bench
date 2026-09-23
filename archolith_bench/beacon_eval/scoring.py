@@ -92,10 +92,13 @@ def _recall(expected: tuple[str, ...], given: list[str], norm: Any) -> float | N
     return sum(1 for item in expected if norm(item) in have) / len(expected)
 
 
-def _precision(expected: tuple[str, ...], given: list[str], norm: Any) -> float | None:
+def _precision(
+    expected: tuple[str, ...], given: list[str], norm: Any, acceptable: tuple[str, ...] = ()
+) -> float | None:
+    """Share of *given* that is required or acceptable (None when nothing is required)."""
     if not expected or not given:
         return None if not expected else 0.0
-    want = {norm(item) for item in expected}
+    want = {norm(item) for item in (*expected, *acceptable)}
     return sum(1 for item in given if norm(item) in want) / len(given)
 
 
@@ -153,7 +156,9 @@ def score(answer: dict[str, Any] | None, gold: Gold, repo_root: Path) -> dict[st
         "answered": 1.0,
         "doc_recall": _recall(gold.docs, _as_list(answer, "docs"), _norm_path),
         "file_recall": _recall(gold.files, _as_list(answer, "files"), _norm_path),
-        "file_precision": _precision(gold.files, _as_list(answer, "files"), _norm_path),
+        "file_precision": _precision(
+            gold.files, _as_list(answer, "files"), _norm_path, gold.acceptable_files
+        ),
         "command_recall": (
             None
             if not gold.commands

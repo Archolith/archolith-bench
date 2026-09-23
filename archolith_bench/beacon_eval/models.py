@@ -25,6 +25,8 @@ class Gold:
 
     docs: tuple[str, ...] = ()
     files: tuple[str, ...] = ()
+    #: Files a careful answer may reasonably add; they do not lower file precision.
+    acceptable_files: tuple[str, ...] = ()
     commands: tuple[str, ...] = ()
     #: Each guardrail is one wording or a tuple of accepted wordings; it is met when a single
     #: answer guardrail contains every word of any wording. The first wording is its cited id.
@@ -89,6 +91,7 @@ def load_task(path: Path) -> Task:
         gold=Gold(
             docs=tuple(gold.get("docs", ())),
             files=tuple(gold.get("files", ())),
+            acceptable_files=tuple(gold.get("acceptable_files", ())),
             commands=tuple(gold.get("commands", ())),
             guardrails=tuple(
                 item if isinstance(item, str) else tuple(item) for item in gold.get("guardrails", ())
