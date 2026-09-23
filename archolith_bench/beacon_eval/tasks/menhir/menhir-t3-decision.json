@@ -15,12 +15,35 @@
     ],
     "commands": [],
     "guardrails": [
-      "no second runtime",
+      [
+        "no second runtime",
+        "not a second runtime",
+        "no second runtime owner"
+      ],
       "MENHIR_BACKEND_URL",
       "menhir serve"
     ],
     "verdict": "",
-    "risky": []
+    "risky": [],
+    "points": [
+      [
+        "backend owns the runtime",
+        "backend owns runtime",
+        "menhir serve owns runtime",
+        "runtime owned backend",
+        "backend runtime owner",
+        "stdio client-only",
+        "stdio backend client"
+      ],
+      [
+        "stdio was an independent runtime owner",
+        "independent runtime owner",
+        "second runtime owner",
+        "its own runtime",
+        "each stdio process owned runtime",
+        "stdio owned local runtime"
+      ]
+    ]
   },
   "gold_citations": [
     {
@@ -78,6 +101,34 @@
       "line_start": 11,
       "line_end": 12,
       "quote": "- backend owner: `menhir serve`"
+    },
+    {
+      "item": "backend owns the runtime",
+      "path": ".agent/workflows/backend-first-mcp.md",
+      "line_start": 9,
+      "line_end": 12,
+      "quote": "It now behaves as a client and requires a running backend server:"
+    },
+    {
+      "item": "backend owns the runtime",
+      "path": ".agent/workflows/backend-first-mcp.md",
+      "line_start": 11,
+      "line_end": 12,
+      "quote": "- backend owner: `menhir serve`"
+    },
+    {
+      "item": "stdio was an independent runtime owner",
+      "path": ".agent/architecture.md",
+      "line_start": 156,
+      "line_end": 156,
+      "quote": "those stdio processes are now backend clients rather than independent runtime owners"
+    },
+    {
+      "item": "stdio was an independent runtime owner",
+      "path": ".agent/workflows/backend-first-mcp.md",
+      "line_start": 7,
+      "line_end": 7,
+      "quote": "Stdio MCP is no longer a second runtime owner."
     }
   ]
 }
