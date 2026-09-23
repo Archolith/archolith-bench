@@ -13,6 +13,7 @@ from archolith_bench.beacon_eval.report import render
 from archolith_bench.beacon_eval.runner import (
     DEFAULT_BUDGET_TOKENS,
     DEFAULT_MODEL,
+    DEFAULT_RUN_RESERVE,
     RunnerConfig,
     run_matrix,
 )
@@ -31,6 +32,12 @@ def add_parser(subparsers: argparse._SubParsersAction) -> None:
     parser.add_argument("--repeats", type=int, default=1)
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--budget-tokens", type=int, default=DEFAULT_BUDGET_TOKENS)
+    parser.add_argument(
+        "--run-reserve-tokens",
+        type=int,
+        default=DEFAULT_RUN_RESERVE,
+        help="Tokens set aside per run; a run past it is killed and the matrix stops",
+    )
     parser.add_argument("--workdir", default="results/beacon-eval")
     parser.add_argument("--beacon-python", default=sys.executable)
     parser.add_argument("--beacon-src", default=None, help="PYTHONPATH for a Beacon source tree")
@@ -68,6 +75,7 @@ def run(args: argparse.Namespace) -> int:
         beacon_src=args.beacon_src,
         model=args.model,
         budget_tokens=args.budget_tokens,
+        run_reserve_tokens=args.run_reserve_tokens,
     )
     results, stopped = run_matrix(config, pins, tasks, conditions, args.repeats)
     report = render(
@@ -77,7 +85,7 @@ def run(args: argparse.Namespace) -> int:
             "Model": args.model,
             "Conditions": ", ".join(conditions),
             "Repeats": str(args.repeats),
-            "Budget": f"{args.budget_tokens:,} tokens",
+            "Budget": f"{args.budget_tokens:,} tokens ({args.run_reserve_tokens:,} reserved per run)",
             "Pins": "; ".join(f"{name} {pin.commit[:10]}" for name, pin in pins.items()),
         },
         stopped,

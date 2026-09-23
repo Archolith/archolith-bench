@@ -55,10 +55,17 @@ class RunResult:
     seconds: float = 0.0
     error: str = ""
     scores: dict[str, float] = field(default_factory=dict)
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
+    #: Sum of OpenCode's own ``tokens.total`` per step, when it reports one.
+    reported_total_tokens: int = 0
 
     @property
     def total_tokens(self) -> int:
-        return self.input_tokens + self.output_tokens
+        computed = (
+            self.input_tokens + self.output_tokens + self.cache_read_tokens + self.cache_write_tokens
+        )
+        return max(self.reported_total_tokens, computed)
 
 
 def load_repos(path: Path) -> dict[str, RepoPin]:

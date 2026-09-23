@@ -1,9 +1,11 @@
 """Run the task x condition x repeat matrix through ``opencode run --format json``.
 
-Every run gets a fresh export of the repository at its pinned commit (condition A
-never sees a beacon), a private stripped OpenCode config, and a fixed prompt. Token
-use is read from OpenCode's JSON events; the matrix stops before the budget cap would
-be exceeded and at the first rate-limit error (never retrying).
+Every run gets a fresh export of the repository at its pinned commit, sealed as its own
+git repository (condition A never sees a beacon), a private OpenCode config home, and a
+fixed prompt on stdin. OpenCode's events are streamed: a run is killed as soon as its
+tokens pass the per-run reserve or a rate-limit error appears on stdout or stderr. The
+matrix admits a run only while the reserve still fits under the cap, and stops at the
+first rate limit (never retrying), an over-reserve run, or a run with no usage data.
 """
 
 from __future__ import annotations
@@ -11,22 +13,35 @@ from __future__ import annotations
 import io
 import json
 import os
+import queue
+import re
+import shutil
 import subprocess
+import sys
 import tarfile
+import threading
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import IO, Any
 
 from archolith_bench.beacon_eval import CONDITIONS
-from archolith_bench.beacon_eval.isolation import beacon_overlay, stripped_config
+from archolith_bench.beacon_eval.isolation import (
+    beacon_server,
+    default_config_source,
+    isolated_config_home,
+    isolated_env,
+)
 from archolith_bench.beacon_eval.models import ANSWER_KEYS, RepoPin, RunResult, Task
 from archolith_bench.beacon_eval.scoring import extract_answer, score
 
 DEFAULT_MODEL = "deepseek/deepseek-v4-flash"
 DEFAULT_BUDGET_TOKENS = 20_000_000
-#: Assumed cost of a run before any run has been measured.
-INITIAL_RUN_ESTIMATE = 80_000
+#: Tokens set aside for each run; a run that passes it is killed and stops the matrix.
+DEFAULT_RUN_RESERVE = 400_000
+
+#: Same line for every condition, so the only intended difference is the added context.
+TOOL_NOTE = "Use whatever tools are available to you."
 
 ANSWER_INSTRUCTIONS = (
     "Work read-only: do not edit, create or delete files, and do not run tests or installs. "
@@ -38,13 +53,31 @@ ANSWER_INSTRUCTIONS = (
     "your claims)."
 )
 
+_RATE_LIMIT = re.compile(r"\b429\b|rate[ _-]?limit|too many requests", re.IGNORECASE)
+
 
 class RateLimited(RuntimeError):
     """The provider refused with a rate limit; the matrix stops, nothing is retried."""
 
 
 class BudgetExhausted(RuntimeError):
-    """The next run could exceed the token cap."""
+    """The next run's reserve would not fit under the cap, or a run passed its reserve."""
+
+
+class AccountingError(RuntimeError):
+    """A run reported no token usage, so the budget can no longer be trusted."""
+
+
+def resolve_opencode() -> list[str]:
+    """The OpenCode executable; on Windows the real ``.exe`` behind the npm shim."""
+    found = shutil.which("opencode")
+    if not found:
+        return ["opencode"]
+    if sys.platform == "win32":
+        exe = Path(found).parent / "node_modules" / "opencode-ai" / "bin" / "opencode.exe"
+        if exe.is_file():
+            return [str(exe)]
+    return [found]
 
 
 @dataclass
@@ -52,28 +85,30 @@ class RunnerConfig:
     workdir: Path
     beacon_python: str
     beacon_src: str | None = None
-    opencode_cmd: list[str] = field(default_factory=lambda: ["opencode"])
+    opencode_cmd: list[str] = field(default_factory=resolve_opencode)
     model: str = DEFAULT_MODEL
+    #: The user's ``opencode.json``; only the model's provider block is taken from it.
     config_source: Path | None = None
     budget_tokens: int = DEFAULT_BUDGET_TOKENS
+    run_reserve_tokens: int = DEFAULT_RUN_RESERVE
     timeout_s: float = 900.0
 
 
 @dataclass
 class Budget:
     cap: int
+    reserve: int = DEFAULT_RUN_RESERVE
     used: int = 0
-    largest_run: int = INITIAL_RUN_ESTIMATE
 
     def check(self) -> None:
-        if self.used + self.largest_run > self.cap:
+        if self.used + self.reserve > self.cap:
             raise BudgetExhausted(
-                f"next run could exceed the {self.cap:,}-token cap ({self.used:,} used)"
+                f"the next run's {self.reserve:,}-token reserve would exceed the "
+                f"{self.cap:,}-token cap ({self.used:,} used)"
             )
 
     def spend(self, tokens: int) -> None:
         self.used += tokens
-        self.largest_run = max(self.largest_run, tokens)
 
 
 # ---------------------------------------------------------------------------
@@ -105,6 +140,24 @@ def export_commit(pin: RepoPin, dest: Path, cache: Path) -> Path:
     return dest
 
 
+def seal_checkout(checkout: Path) -> None:
+    """Make *checkout* its own git root with one commit.
+
+    OpenCode searches parent directories for project config and instructions up to the
+    git root; without this a checkout under the results tree picks up the enclosing
+    repositories' ``AGENTS.md`` and ``opencode.json``.
+    """
+    git = [
+        "git", "-C", str(checkout),
+        "-c", "user.name=beacon-eval", "-c", "user.email=beacon-eval@example.invalid",
+        "-c", "commit.gpgsign=false", "-c", "core.autocrlf=false",
+    ]
+    subprocess.run([*git, "init", "--quiet"], check=True, capture_output=True)
+    subprocess.run([*git, "add", "--all"], check=True, capture_output=True)
+    subprocess.run([*git, "commit", "--quiet", "--allow-empty", "-m", "pinned export"],
+                   check=True, capture_output=True)
+
+
 def build_beacon(config: RunnerConfig, pin: RepoPin) -> Path:
     """Build the beacon for *pin* in its own export (never the agent's checkout)."""
     root = config.workdir / "beacons" / pin.name
@@ -125,16 +178,15 @@ def build_beacon(config: RunnerConfig, pin: RepoPin) -> Path:
 
 
 def build_prompt(task: Task, condition: str, manifest_text: str = "") -> str:
-    parts = [task.prompt.strip(), ANSWER_INSTRUCTIONS]
-    if condition == "B":
-        parts.insert(1, "A Beacon MCP server for this project is available to you.")
+    """Task first, then (C only) the pasted manifest, then the same closing lines."""
+    parts = [task.prompt.strip()]
     if condition == "C":
-        parts.insert(
-            0,
+        parts.append(
             "Project knowledge (beacon.generated.yaml) follows.\n```yaml\n"
             + manifest_text.strip()
-            + "\n```",
+            + "\n```"
         )
+    parts += [TOOL_NOTE, ANSWER_INSTRUCTIONS]
     return "\n\n".join(parts)
 
 
@@ -143,51 +195,176 @@ def build_prompt(task: Task, condition: str, manifest_text: str = "") -> str:
 # ---------------------------------------------------------------------------
 
 
-def parse_events(stdout: str) -> dict[str, Any]:
-    """Final text, token use and tool-call count from ``--format json`` output.
+@dataclass
+class EventLog:
+    """Accumulates ``--format json`` events from their known locations only.
 
-    The event shape is read defensively: text parts, any ``tokens`` object with
-    ``input``/``output`` counts, and tool events are collected wherever they appear.
+    One JSON object per line with a top-level ``type``: ``text`` (``part.text``),
+    ``tool_use`` (one tool call), ``step_finish`` (``part.tokens``) and ``error``.
+    Rate limits are looked for in error events, non-JSON stdout lines and stderr,
+    never in text or tool output (which can quote "429" from the repository).
     """
-    texts: list[str] = []
-    input_tokens = output_tokens = tool_calls = 0
-    rate_limited = False
 
-    def walk(node: Any) -> None:
-        nonlocal input_tokens, output_tokens, tool_calls
-        if isinstance(node, dict):
-            if node.get("type") == "text" and isinstance(node.get("text"), str):
-                texts.append(node["text"])
-            if node.get("type") in ("tool", "tool_use", "tool-call", "tool_call"):
-                tool_calls += 1
-            tokens = node.get("tokens")
-            if isinstance(tokens, dict):
-                input_tokens += int(tokens.get("input") or 0)
-                output_tokens += int(tokens.get("output") or 0) + int(
-                    tokens.get("reasoning") or 0
-                )
-            for value in node.values():
-                if isinstance(value, dict | list):
-                    walk(value)
-        elif isinstance(node, list):
-            for value in node:
-                walk(value)
+    texts: list[str] = field(default_factory=list)
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
+    reported_total_tokens: int = 0
+    usage_events: int = 0
+    tool_calls: int = 0
+    errors: list[str] = field(default_factory=list)
+    unknown_types: set[str] = field(default_factory=set)
+    rate_limited: bool = False
 
-    for line in stdout.splitlines():
-        lowered = line.lower()
-        if '"429"' in lowered or " 429" in lowered or "rate limit" in lowered:
-            rate_limited = True
+    @property
+    def total_tokens(self) -> int:
+        computed = (
+            self.input_tokens + self.output_tokens + self.cache_read_tokens + self.cache_write_tokens
+        )
+        return max(self.reported_total_tokens, computed)
+
+    def feed(self, line: str) -> None:
+        line = line.strip()
+        if not line:
+            return
         try:
-            walk(json.loads(line))
+            event = json.loads(line)
         except json.JSONDecodeError:
-            continue
+            self._scan(line)
+            return
+        if not isinstance(event, dict):
+            return
+        kind = event.get("type")
+        raw_part = event.get("part")
+        part: dict[str, Any] = raw_part if isinstance(raw_part, dict) else {}
+        if kind == "error" or "error" in event:
+            message = json.dumps(event.get("error", event))[:500]
+            self.errors.append(message)
+            self._scan(message)
+        elif kind == "text":
+            if isinstance(part.get("text"), str):
+                self.texts.append(part["text"])
+        elif kind == "tool_use":
+            self.tool_calls += 1
+        elif kind == "step_finish":
+            self._add_usage(part.get("tokens"))
+        elif kind not in ("step_start", "reasoning"):
+            self.unknown_types.add(str(kind))
+
+    def feed_stderr(self, line: str) -> None:
+        self._scan(line)
+
+    def _scan(self, text: str) -> None:
+        if _RATE_LIMIT.search(text):
+            self.rate_limited = True
+
+    def _add_usage(self, tokens: Any) -> None:
+        if not isinstance(tokens, dict):
+            return
+        self.usage_events += 1
+        self.input_tokens += int(tokens.get("input") or 0)
+        self.output_tokens += int(tokens.get("output") or 0) + int(tokens.get("reasoning") or 0)
+        raw_cache = tokens.get("cache")
+        cache: dict[str, Any] = raw_cache if isinstance(raw_cache, dict) else {}
+        self.cache_read_tokens += int(cache.get("read") or 0)
+        self.cache_write_tokens += int(cache.get("write") or 0)
+        self.reported_total_tokens += int(tokens.get("total") or 0)
+
+
+def parse_events(stdout: str, stderr: str = "") -> dict[str, Any]:
+    """Summary of a finished run's output (see :class:`EventLog`)."""
+    log = EventLog()
+    for line in stdout.splitlines():
+        log.feed(line)
+    for line in stderr.splitlines():
+        log.feed_stderr(line)
     return {
-        "text": "\n".join(texts),
-        "input_tokens": input_tokens,
-        "output_tokens": output_tokens,
-        "tool_calls": tool_calls,
-        "rate_limited": rate_limited,
+        "text": "\n".join(log.texts),
+        "input_tokens": log.input_tokens,
+        "output_tokens": log.output_tokens,
+        "cache_read_tokens": log.cache_read_tokens,
+        "cache_write_tokens": log.cache_write_tokens,
+        "total_tokens": log.total_tokens,
+        "usage_events": log.usage_events,
+        "tool_calls": log.tool_calls,
+        "rate_limited": log.rate_limited,
     }
+
+
+def _kill_tree(proc: subprocess.Popen[str]) -> None:
+    if proc.poll() is not None:
+        return
+    if sys.platform == "win32":
+        subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"], capture_output=True)
+    else:
+        proc.kill()
+
+
+def _pump(stream: IO[str], tag: str, sink: queue.Queue[tuple[str, str | None]]) -> None:
+    for line in stream:
+        sink.put((tag, line))
+    sink.put((tag, None))
+
+
+def stream_opencode(
+    cmd: list[str], prompt: str, cwd: Path, env: dict[str, str], run_dir: Path,
+    reserve: int, timeout_s: float,
+) -> tuple[EventLog, str, int | None]:
+    """Run OpenCode, feeding events as they arrive; returns (log, stop reason, exit code).
+
+    The raw streams are kept in ``events.jsonl`` and ``stderr.log``. Stop reasons:
+    "" (finished), "rate_limited", "over_reserve", "timeout".
+    """
+    log = EventLog()
+    proc = subprocess.Popen(
+        cmd, cwd=cwd, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace",
+    )
+    assert proc.stdin and proc.stdout and proc.stderr
+    try:
+        proc.stdin.write(prompt)
+        proc.stdin.close()
+    except OSError:
+        pass  # the process exited early; its output says why
+    lines: queue.Queue[tuple[str, str | None]] = queue.Queue()
+    for stream, tag in ((proc.stdout, "out"), (proc.stderr, "err")):
+        threading.Thread(target=_pump, args=(stream, tag, lines), daemon=True).start()
+    reason, open_streams = "", 2
+    deadline = time.monotonic() + timeout_s
+    with (run_dir / "events.jsonl").open("w", encoding="utf-8") as events, (
+        run_dir / "stderr.log"
+    ).open("w", encoding="utf-8") as errors:
+        while open_streams:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                reason = "timeout"
+                break
+            try:
+                tag, line = lines.get(timeout=min(remaining, 1.0))
+            except queue.Empty:
+                continue
+            if line is None:
+                open_streams -= 1
+                continue
+            if tag == "out":
+                events.write(line)
+                log.feed(line)
+            else:
+                errors.write(line)
+                log.feed_stderr(line)
+            if log.rate_limited:
+                reason = "rate_limited"
+                break
+            if log.total_tokens > reserve:
+                reason = "over_reserve"
+                break
+    _kill_tree(proc)
+    try:
+        code = proc.wait(timeout=30)
+    except subprocess.TimeoutExpired:
+        code = None
+    return log, reason, code
 
 
 # ---------------------------------------------------------------------------
@@ -198,60 +375,67 @@ def parse_events(stdout: str) -> dict[str, Any]:
 def run_one(
     config: RunnerConfig, pin: RepoPin, task: Task, condition: str, repeat: int
 ) -> RunResult:
+    """One run. Raises RateLimited, BudgetExhausted or AccountingError after saving it."""
     if condition not in CONDITIONS:
         raise ValueError(f"unknown condition {condition!r}")
     run_dir = config.workdir / "runs" / f"{task.repo}-{task.task_id}-{condition}-{repeat}"
     checkout = export_commit(pin, run_dir / "checkout", config.workdir / "cache")
+    seal_checkout(checkout)
     manifest = build_beacon(config, pin) if condition in ("B", "C") else None
     prompt = build_prompt(
         task,
         condition,
         manifest.read_text(encoding="utf-8") if manifest and condition == "C" else "",
     )
-    env = dict(os.environ)
-    source = config.config_source or Path.home() / ".config" / "opencode"
+    (run_dir / "prompt.txt").write_text(prompt, encoding="utf-8")
+    mcp = (
+        beacon_server(config.beacon_python, manifest, config.beacon_src)
+        if condition == "B" and manifest is not None
+        else None
+    )
+    # --title skips OpenCode's title-generation request, whose tokens no event reports.
+    cmd = [*config.opencode_cmd, "run", "--pure", "--print-logs", "--title", "beacon-eval",
+           "-m", config.model, "--format", "json"]
     started = time.monotonic()
-    with stripped_config(source, run_dir) as config_dir:
-        env["OPENCODE_CONFIG_DIR"] = str(config_dir)
-        env.pop("OPENCODE_CONFIG_CONTENT", None)
-        if condition == "B" and manifest is not None:
-            env["OPENCODE_CONFIG_CONTENT"] = beacon_overlay(
-                config.beacon_python, manifest, config.beacon_src
-            )
-        try:
-            completed = subprocess.run(
-                [*config.opencode_cmd, "run", "-m", config.model, "--format", "json", prompt],
-                cwd=checkout,
-                env=env,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=config.timeout_s,
-            )
-            stdout, error = completed.stdout, completed.stderr[-500:] if completed.returncode else ""
-        except subprocess.TimeoutExpired as exc:
-            stdout = exc.stdout.decode("utf-8", "replace") if isinstance(exc.stdout, bytes) else exc.stdout or ""
-            error = "timeout"
-    events = parse_events(stdout)
-    if events["rate_limited"]:
-        raise RateLimited(f"rate limited during {run_dir.name}; stopping, not retrying")
-    answer = extract_answer(events["text"])
+    with isolated_config_home(config.config_source or default_config_source(), config.model, mcp) as home:
+        env = isolated_env(os.environ, home)
+        # An inherited PWD (Git Bash, MSYS, most shells) may root OpenCode in the
+        # caller's repo instead of the checkout; the fake-provider check exercises this.
+        env["PWD"] = str(checkout)
+        log, reason, code = stream_opencode(
+            cmd, prompt, checkout, env, run_dir, config.run_reserve_tokens, config.timeout_s
+        )
+    text = "\n".join(log.texts)
+    answer = extract_answer(text)
+    error = reason or ("; ".join(log.errors) if log.errors else "")
+    if not error and code not in (0, None):
+        error = f"exit code {code}"
     result = RunResult(
         repo=task.repo,
         task_id=task.task_id,
         condition=condition,
         repeat=repeat,
         answer=answer,
-        final_text=events["text"][-4000:],
-        input_tokens=events["input_tokens"],
-        output_tokens=events["output_tokens"],
-        tool_calls=events["tool_calls"],
+        final_text=text,
+        input_tokens=log.input_tokens,
+        output_tokens=log.output_tokens,
+        cache_read_tokens=log.cache_read_tokens,
+        cache_write_tokens=log.cache_write_tokens,
+        reported_total_tokens=log.reported_total_tokens,
+        tool_calls=log.tool_calls,
         seconds=round(time.monotonic() - started, 1),
-        error=error,
+        error=error[:500],
     )
     result.scores = score(answer, task.gold, checkout)
     (run_dir / "result.json").write_text(json.dumps(asdict(result), indent=2), encoding="utf-8")
+    if reason == "rate_limited":
+        raise RateLimited(f"rate limited during {run_dir.name}; stopping, not retrying")
+    if reason == "over_reserve":
+        raise BudgetExhausted(
+            f"{run_dir.name} passed its {config.run_reserve_tokens:,}-token reserve and was killed"
+        )
+    if log.usage_events == 0:
+        raise AccountingError(f"{run_dir.name} reported no token usage; stopping")
     return result
 
 
@@ -262,8 +446,11 @@ def run_matrix(
     conditions: tuple[str, ...] = CONDITIONS,
     repeats: int = 1,
 ) -> tuple[list[RunResult], str]:
-    """Run every task x condition x repeat; returns results and why it stopped ("" = done)."""
-    budget = Budget(config.budget_tokens)
+    """Run every task x condition x repeat; returns results and why it stopped ("" = done).
+
+    A run that stops the matrix is still recorded and counted against the budget.
+    """
+    budget = Budget(config.budget_tokens, config.run_reserve_tokens)
     results: list[RunResult] = []
     log = config.workdir / "results.jsonl"
     log.parent.mkdir(parents=True, exist_ok=True)
@@ -272,25 +459,50 @@ def run_matrix(
             for task in tasks:
                 for condition in conditions:
                     budget.check()
-                    result = run_one(config, pins[task.repo], task, condition, repeat)
+                    try:
+                        result = run_one(config, pins[task.repo], task, condition, repeat)
+                    except (RateLimited, BudgetExhausted, AccountingError):
+                        _record_stopped(config, task, condition, repeat, budget, results, log)
+                        raise
                     budget.spend(result.total_tokens)
                     results.append(result)
                     with log.open("a", encoding="utf-8") as handle:
                         handle.write(json.dumps(asdict(result)) + "\n")
-    except (BudgetExhausted, RateLimited) as exc:
+    except (BudgetExhausted, RateLimited, AccountingError) as exc:
         return results, str(exc)
     return results, ""
+
+
+def _record_stopped(
+    config: RunnerConfig, task: Task, condition: str, repeat: int, budget: Budget,
+    results: list[RunResult], log: Path,
+) -> None:
+    saved = config.workdir / "runs" / f"{task.repo}-{task.task_id}-{condition}-{repeat}" / "result.json"
+    if not saved.is_file():
+        return
+    data = json.loads(saved.read_text(encoding="utf-8"))
+    result = RunResult(**data)
+    budget.spend(result.total_tokens)
+    results.append(result)
+    with log.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(data) + "\n")
 
 
 __all__ = [
     "ANSWER_INSTRUCTIONS",
     "ANSWER_KEYS",
+    "AccountingError",
     "Budget",
     "BudgetExhausted",
+    "EventLog",
     "RateLimited",
     "RunnerConfig",
+    "TOOL_NOTE",
     "build_prompt",
     "parse_events",
+    "resolve_opencode",
     "run_matrix",
     "run_one",
+    "seal_checkout",
+    "stream_opencode",
 ]

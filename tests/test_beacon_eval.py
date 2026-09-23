@@ -5,17 +5,24 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
 
 from archolith_bench.beacon_eval import runner as runner_mod
-from archolith_bench.beacon_eval.isolation import beacon_overlay, stripped_config
+from archolith_bench.beacon_eval.isolation import (
+    IsolationError,
+    beacon_server,
+    isolated_config_home,
+    isolated_env,
+)
 from archolith_bench.beacon_eval.models import Gold, RepoPin, Task
 from archolith_bench.beacon_eval.report import render
 from archolith_bench.beacon_eval.runner import (
     Budget,
     BudgetExhausted,
+    TOOL_NOTE,
     RunnerConfig,
     build_prompt,
     parse_events,
@@ -110,21 +117,42 @@ def test_parse_events_reads_text_tokens_tools_and_rate_limits() -> None:
     assert parse_events('{"error": "HTTP 429 Too Many Requests"}')["rate_limited"]
 
 
-def test_budget_stops_before_the_cap() -> None:
-    budget = Budget(cap=200_000)
+def test_a_tool_call_with_a_nested_tool_part_counts_once() -> None:
+    event = {"type": "tool_use", "part": {"type": "tool", "tool": "read", "state": {"status": "completed"}}}
+    assert parse_events(json.dumps(event))["tool_calls"] == 1
+
+
+def test_cache_tokens_and_the_reported_total_are_counted() -> None:
+    step = {"type": "step_finish", "part": {"type": "step-finish", "tokens": {
+        "input": 1000, "output": 200, "reasoning": 50, "cache": {"read": 30000, "write": 500}}}}
+    assert parse_events(json.dumps(step))["total_tokens"] == 31750
+    step["part"]["tokens"]["total"] = 40000
+    assert parse_events(json.dumps(step))["total_tokens"] == 40000
+
+
+def test_rate_limits_are_found_on_stderr_but_not_in_repository_text() -> None:
+    assert parse_events("", "ERROR provider status=429 Too Many Requests")["rate_limited"]
+    quoted = {"type": "text", "part": {"type": "text", "text": "the handler returns 429 on rate limit"}}
+    tool = {"type": "tool_use", "part": {"type": "tool", "state": {"output": "HTTP 429"}}}
+    assert not parse_events(json.dumps(quoted) + "\n" + json.dumps(tool))["rate_limited"]
+
+
+def test_budget_admits_a_run_only_while_its_reserve_fits() -> None:
+    budget = Budget(cap=200_000, reserve=80_000)
     budget.check()
     budget.spend(150_000)
     with pytest.raises(BudgetExhausted):
         budget.check()
 
 
-def test_prompts_differ_only_by_condition() -> None:
+def test_prompts_differ_only_by_the_added_context() -> None:
     task = Task(repo="demo", task_id="t1", kind="docs_and_files", prompt="Find docs.", gold=GOLD)
     a, b, c = (build_prompt(task, cond, "project: x") for cond in ("A", "B", "C"))
-    assert "Beacon" not in a and "beacon.generated.yaml" not in a
-    assert "Beacon MCP server" in b and "project: x" not in b
-    assert "project: x" in c
-    assert all("```json" in p for p in (a, b, c))
+    assert a == b  # B's only difference is the server OpenCode lists as a tool
+    assert "Beacon" not in a and "project: x" not in a
+    assert c.startswith("Find docs.") and c.index("Find docs.") < c.index("project: x")
+    assert c.replace(c[c.index("Project knowledge"):c.index(TOOL_NOTE)], "") == a
+    assert all(TOOL_NOTE in p and "```json" in p for p in (a, b, c))
 
 
 # ---------------------------------------------------------------------------
@@ -132,27 +160,49 @@ def test_prompts_differ_only_by_condition() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_stripped_config_disables_every_mcp_server_and_leaves_the_source(tmp_path: Path) -> None:
-    source = tmp_path / "opencode"
-    (source / "node_modules" / "pkg").mkdir(parents=True)
-    (source / "node_modules" / "pkg" / "index.js").write_text("x", encoding="utf-8")
-    original = {"model": "m", "mcp": {"memory": {"type": "remote", "url": "u"}, "vps": {"type": "local"}}}
-    (source / "opencode.json").write_text(json.dumps(original), encoding="utf-8")
-    run_dir = tmp_path / "run"
-    with stripped_config(source, run_dir) as config_dir:
-        copied = json.loads((config_dir / "opencode.json").read_text(encoding="utf-8"))
-        assert all(server["enabled"] is False for server in copied["mcp"].values())
-        assert (config_dir / "node_modules" / "pkg" / "index.js").is_file()
-    assert not (run_dir / "opencode-config").exists()
-    assert json.loads((source / "opencode.json").read_text(encoding="utf-8")) == original
-    assert (source / "node_modules" / "pkg" / "index.js").is_file()  # link removed, target kept
+def _user_config(tmp_path: Path) -> Path:
+    path = tmp_path / "user-opencode" / "opencode.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({
+        "$schema": "https://opencode.ai/config.json",
+        "model": "other/x",
+        "provider": {"deepseek": {"options": {"baseURL": "u"}}, "other": {"options": {}}},
+        "mcp": {"memory": {"type": "remote", "url": "u"}},
+        "plugin": ["p"],
+        "instructions": ["i.md"],
+    }), encoding="utf-8")
+    return path
 
 
-def test_beacon_overlay_adds_only_beacon() -> None:
-    overlay = json.loads(beacon_overlay("py", Path("m.yaml"), "src"))
-    assert list(overlay["mcp"]) == ["beacon"]
-    assert overlay["mcp"]["beacon"]["command"][-2:] == ["--manifest", "m.yaml"]
-    assert overlay["mcp"]["beacon"]["environment"] == {"PYTHONPATH": "src"}
+def test_isolated_config_holds_only_the_model_provider_and_is_removed(tmp_path: Path) -> None:
+    source = _user_config(tmp_path)
+    before = source.read_text(encoding="utf-8")
+    with isolated_config_home(source, "deepseek/deepseek-v4-flash") as home:
+        config = json.loads((home / "opencode" / "opencode.json").read_text(encoding="utf-8"))
+        assert not home.is_relative_to(tmp_path)  # system temp, never the results tree
+    assert set(config) == {"$schema", "model", "provider"}
+    assert list(config["provider"]) == ["deepseek"]
+    assert not home.exists()
+    assert source.read_text(encoding="utf-8") == before
+
+
+def test_condition_b_config_adds_only_beacon(tmp_path: Path) -> None:
+    mcp = beacon_server("py", Path("m.yaml"), "src")
+    with isolated_config_home(_user_config(tmp_path), "deepseek/m", mcp) as home:
+        config = json.loads((home / "opencode" / "opencode.json").read_text(encoding="utf-8"))
+    assert list(config["mcp"]) == ["beacon"]
+    assert config["mcp"]["beacon"]["command"][-2:] == ["--manifest", "m.yaml"]
+    assert config["mcp"]["beacon"]["environment"] == {"PYTHONPATH": "src"}
+
+
+def test_a_missing_provider_fails_before_any_run(tmp_path: Path) -> None:
+    with pytest.raises(IsolationError), isolated_config_home(_user_config(tmp_path), "nope/m"):
+        pass
+
+
+def test_isolated_env_drops_opencode_overrides(tmp_path: Path) -> None:
+    env = isolated_env({"PATH": "p", "OPENCODE_CONFIG": "x", "OPENCODE_CONFIG_DIR": "y"}, tmp_path)
+    assert env == {"PATH": "p", "XDG_CONFIG_HOME": str(tmp_path), "OPENCODE_DISABLE_CLAUDE_CODE": "1"}
 
 
 # ---------------------------------------------------------------------------
@@ -161,16 +211,35 @@ def test_beacon_overlay_adds_only_beacon() -> None:
 
 STUB = r"""
 import json, os, sys
-config_dir = os.environ.get("OPENCODE_CONFIG_DIR", "")
-overlay = os.environ.get("OPENCODE_CONFIG_CONTENT", "")
-prompt = sys.argv[-1]
+prompt = sys.stdin.read()
+home = os.environ.get("XDG_CONFIG_HOME", "")
+config = json.load(open(os.path.join(home, "opencode", "opencode.json"), encoding="utf-8"))
+if "RATE_STDERR" in prompt:
+    print("ERROR 2026-09-23 service=llm status=429 retrying", file=sys.stderr, flush=True)
+    import time; time.sleep(30)
+    sys.exit(0)
 if "RATE" in prompt:
-    print(json.dumps({"error": "429 rate limit"}))
+    print(json.dumps({"type": "error", "error": {"name": "APIError", "data": {"message": "429 rate limit"}}}))
     sys.exit(1)
-record = {"config_dir_set": bool(config_dir), "overlay": overlay, "cwd_has_beacon": os.path.exists("beacon.generated.yaml"), "pasted": "PASTED" in prompt}
+if "BIG" in prompt:
+    for _ in range(100):
+        print(json.dumps({"type": "step_finish", "part": {"tokens": {"input": 50000, "output": 0}}}), flush=True)
+    sys.exit(0)
+record = {
+    "mcp": sorted(config.get("mcp", {})),
+    "config_keys": sorted(config),
+    "opencode_vars": sorted(k for k in os.environ if k.startswith("OPENCODE_")),
+    "own_git_root": os.path.isdir(".git"),
+    "pwd_is_cwd": os.path.samefile(os.environ.get("PWD") or "/", os.getcwd()),
+    "cwd_has_beacon": os.path.exists("beacon.generated.yaml"),
+    "pasted": "PASTED" in prompt,
+    "argv_has_prompt": any("Find docs" in a for a in sys.argv),
+}
 answer = {"docs": ["AGENTS.md"], "files": ["src/app.py"], "commands": [], "guardrails": [], "verdict": "", "plan": [], "citations": [{"path": "AGENTS.md", "line_start": 1, "line_end": 1}], "record": record}
+print(json.dumps({"type": "tool_use", "part": {"type": "tool", "tool": "read"}}))
 print(json.dumps({"type": "text", "part": {"type": "text", "text": "```json\n" + json.dumps(answer) + "\n```"}}))
-print(json.dumps({"type": "step_finish", "part": {"tokens": {"input": 1000, "output": 100}}}))
+if "NOUSAGE" not in prompt:
+    print(json.dumps({"type": "step_finish", "part": {"tokens": {"input": 1000, "output": 100}}}))
 """
 
 
@@ -178,9 +247,6 @@ print(json.dumps({"type": "step_finish", "part": {"tokens": {"input": 1000, "out
 def harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     stub = tmp_path / "stub_opencode.py"
     stub.write_text(STUB, encoding="utf-8")
-    source = tmp_path / "opencode"
-    source.mkdir()
-    (source / "opencode.json").write_text(json.dumps({"mcp": {"memory": {}}}), encoding="utf-8")
 
     def fake_build(config: RunnerConfig, pin: RepoPin) -> Path:
         manifest = config.workdir / "beacons" / pin.name / "beacon.generated.yaml"
@@ -189,12 +255,16 @@ def harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         return manifest
 
     monkeypatch.setattr(runner_mod, "build_beacon", fake_build)
+    monkeypatch.setenv("OPENCODE_CONFIG_DIR", str(tmp_path / "should-be-dropped"))
+    monkeypatch.setenv("PWD", str(tmp_path))  # a caller's directory, not the checkout
     config = RunnerConfig(
         workdir=tmp_path / "work",
         beacon_python="py",
         opencode_cmd=[sys.executable, str(stub)],
-        config_source=source,
+        config_source=_user_config(tmp_path),
         budget_tokens=10_000_000,
+        run_reserve_tokens=80_000,
+        timeout_s=60,
     )
     return config, _pin(_repo(tmp_path))
 
@@ -205,13 +275,19 @@ def test_each_condition_gets_the_right_isolation(harness) -> None:
     results, stopped = run_matrix(config, {"demo": pin}, [task], ("A", "B", "C"))
     assert stopped == ""
     records = {r.condition: r.answer["record"] for r in results}
-    assert all(rec["config_dir_set"] for rec in records.values())
-    assert records["A"]["overlay"] == "" and not records["A"]["pasted"]
-    assert json.loads(records["B"]["overlay"])["mcp"].keys() == {"beacon"}
-    assert records["C"]["pasted"] and records["C"]["overlay"] == ""
+    assert records["A"]["mcp"] == [] and records["C"]["mcp"] == []
+    assert records["B"]["mcp"] == ["beacon"]
+    assert all(rec["opencode_vars"] == ["OPENCODE_DISABLE_CLAUDE_CODE"] for rec in records.values())
+    assert all(set(rec["config_keys"]) <= {"$schema", "model", "provider", "mcp"} for rec in records.values())
+    assert all(rec["own_git_root"] for rec in records.values())
+    assert all(rec["pwd_is_cwd"] for rec in records.values())  # OpenCode roots itself at PWD
+    assert not any(rec["argv_has_prompt"] for rec in records.values())  # prompt goes on stdin
+    assert records["C"]["pasted"] and not records["A"]["pasted"] and not records["B"]["pasted"]
     # No condition ever finds a beacon in the agent's checkout.
     assert not any(rec["cwd_has_beacon"] for rec in records.values())
-    assert all(r.total_tokens == 1100 and r.scores["doc_recall"] == 0.5 for r in results)
+    assert all(r.total_tokens == 1100 and r.tool_calls == 1 and r.scores["doc_recall"] == 0.5 for r in results)
+    run_dir = config.workdir / "runs" / "demo-t1-A-1"
+    assert (run_dir / "events.jsonl").read_text(encoding="utf-8").count("\n") == 3
     assert "| B | 1 |" in render(results, {"Model": "stub"})
 
 
@@ -220,13 +296,38 @@ def test_matrix_stops_at_a_rate_limit(harness) -> None:
     ok = Task(repo="demo", task_id="ok", kind="k", prompt="fine", gold=GOLD)
     limited = Task(repo="demo", task_id="rl", kind="k", prompt="RATE", gold=GOLD)
     results, stopped = run_matrix(config, {"demo": pin}, [ok, limited, ok], ("A",))
-    assert len(results) == 1
+    assert [r.task_id for r in results] == ["ok", "rl"]
     assert "rate limited" in stopped
+
+
+def test_a_stderr_only_rate_limit_kills_the_run_and_stops(harness) -> None:
+    config, pin = harness
+    limited = Task(repo="demo", task_id="rl", kind="k", prompt="RATE_STDERR", gold=GOLD)
+    ok = Task(repo="demo", task_id="ok", kind="k", prompt="fine", gold=GOLD)
+    started = time.monotonic()
+    results, stopped = run_matrix(config, {"demo": pin}, [limited, ok], ("A",))
+    assert "rate limited" in stopped and len(results) == 1
+    assert time.monotonic() - started < 25  # killed, not waited out
+
+
+def test_a_run_past_its_reserve_is_killed_and_stops_the_matrix(harness) -> None:
+    config, pin = harness
+    big = Task(repo="demo", task_id="big", kind="k", prompt="BIG", gold=GOLD)
+    results, stopped = run_matrix(config, {"demo": pin}, [big, big], ("A",))
+    assert "reserve" in stopped and len(results) == 1
+    assert 80_000 < results[0].total_tokens <= 130_000  # overshoot is at most one step
+
+
+def test_a_run_without_usage_stops_the_matrix(harness) -> None:
+    config, pin = harness
+    task = Task(repo="demo", task_id="nu", kind="k", prompt="NOUSAGE", gold=GOLD)
+    results, stopped = run_matrix(config, {"demo": pin}, [task, task], ("A",))
+    assert "no token usage" in stopped and len(results) == 1
 
 
 def test_matrix_stops_at_the_budget(harness) -> None:
     config, pin = harness
-    config.budget_tokens = 81_000  # 80k estimate fits once; 1.1k used + 80k then exceeds it
+    config.budget_tokens = 81_000  # the 80k reserve fits once; 1.1k used + 80k then exceeds it
     task = Task(repo="demo", task_id="t", kind="k", prompt="fine", gold=GOLD)
     results, stopped = run_matrix(config, {"demo": pin}, [task], ("A", "B", "C"))
     assert len(results) == 1

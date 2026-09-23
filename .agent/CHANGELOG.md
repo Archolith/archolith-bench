@@ -1,5 +1,22 @@
 # archolith-bench Changelog
 
+## 2026-09-23 - Beacon eval harness: isolation, stops and accounting fixes from review
+
+- `archolith_bench/beacon_eval/isolation.py`: each run gets a temp `XDG_CONFIG_HOME` holding only
+  the model's provider (plus Beacon in B), with `OPENCODE_*` overrides dropped and Claude Code
+  fallbacks disabled. The old config-dir copy still loaded the global `AGENTS.md` and plugins.
+- `archolith_bench/beacon_eval/runner.py`: checkouts are sealed as their own git root and run with
+  `PWD` set to the checkout (an inherited `PWD` rooted OpenCode in the bench repo and loaded its
+  `AGENTS.md`); the prompt goes on stdin to the real `opencode.exe` with `--pure` and a fixed
+  `--title` (the title request's tokens were never reported); events are streamed and the run is
+  killed on a 429 in error events or stderr, or past a per-run token reserve (default 400k); a run
+  with no usage stops the matrix; tool calls count once; totals include cache tokens; raw
+  `events.jsonl`, `stderr.log` and `prompt.txt` are kept. Every condition gets the same tool line
+  and C's manifest follows the question.
+- `archolith_bench/beacon_eval/models.py`, `cli.py`: cache and reported-total token fields;
+  `--run-reserve-tokens`.
+- `tests/test_beacon_eval.py`: tests for each case above. Scoring and gold unchanged; no paid runs.
+
 ## 2026-09-23 - Beacon agent-task evaluation harness (P3 step 1)
 
 - `archolith_bench/beacon_eval/` (new): task and gold schema (`models.py`), deterministic scorer
