@@ -15,7 +15,16 @@
     "commands": [],
     "guardrails": [],
     "verdict": "",
-    "risky": []
+    "risky": [],
+    "acceptable_files": [
+      "scripts/hooks/menhir_turn_evidence.py",
+      "scripts/hooks/menhir_opencode_turn_evidence.py",
+      "scripts/hooks/menhir_codex_turn_evidence.py",
+      "scripts/opencode-plugin/menhir-turn-evidence.js",
+      "tests/test_turn_evidence.py",
+      "tests/test_opencode_turn_evidence.py",
+      "tests/test_codex_turn_evidence.py"
+    ]
   },
   "gold_citations": [
     {
