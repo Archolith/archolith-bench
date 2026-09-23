@@ -27,6 +27,9 @@
 - `scoring.py`, `models.py`, `grounding.py` (owner decision: scoring 4A): optional
   `gold.acceptable_files` do not lower file precision and do not count for recall; grounding checks
   that each exists.
+- `scoring.py`, `models.py`, `report.py` (owner decision: scoring 5B): `citation_validity` is now
+  `citation_location_validity` and needs a line range; new `evidence_recall` is the share of distinct
+  gold citation spans overlapped by an answer citation in the same file (a lower bound).
 
 ## 2026-09-23 - Beacon agent-task evaluation harness (P3 step 1)
 

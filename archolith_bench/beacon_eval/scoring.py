@@ -123,29 +123,61 @@ def risky_instructed(item: str, commands: list[str], plan: list[str]) -> bool:
     return False
 
 
-def citation_validity(answer: dict[str, Any], repo_root: Path) -> float | None:
-    """Share of cited ``{path, line_start?, line_end?}`` that exist in the checkout."""
+def _answer_spans(answer: dict[str, Any]) -> list[tuple[str, int, int]]:
+    """Answer citations with an integer line range (``line_end`` defaults to ``line_start``)."""
+    citations = answer.get("citations") or []
+    spans = []
+    for item in citations if isinstance(citations, list) else []:
+        if not isinstance(item, dict) or not isinstance(item.get("path"), str):
+            continue
+        start = item.get("line_start")
+        end = item.get("line_end", start)
+        if isinstance(start, int) and isinstance(end, int):
+            spans.append((_norm_path(item["path"]), start, end))
+    return spans
+
+
+def citation_location_validity(answer: dict[str, Any], repo_root: Path) -> float | None:
+    """Share of citations whose path exists in the checkout and whose line range fits.
+
+    A citation without a line range is invalid. This checks location only, not
+    whether the lines support the claim (see :func:`evidence_recall`).
+    """
     citations = answer.get("citations") or []
     if not isinstance(citations, list) or not citations:
         return None
+    root = repo_root.resolve()
     valid = 0
-    for item in citations:
-        if not isinstance(item, dict) or not isinstance(item.get("path"), str):
-            continue
-        target = (repo_root / _norm_path(item["path"])).resolve()
+    for path, start, end in _answer_spans(answer):
+        target = (root / path).resolve()
         try:
-            if not target.is_relative_to(repo_root.resolve()) or not target.is_file():
+            if not target.is_relative_to(root) or not target.is_file():
                 continue
             lines = target.read_text(encoding="utf-8", errors="replace").count("\n") + 1
         except OSError:
             continue
-        start = item.get("line_start")
-        end = item.get("line_end", start)
-        if start is None or (
-            isinstance(start, int) and isinstance(end, int) and 1 <= start <= end <= lines
-        ):
+        if 1 <= start <= end <= lines:
             valid += 1
     return valid / len(citations)
+
+
+def evidence_recall(answer: dict[str, Any], gold: Gold) -> float | None:
+    """Share of distinct gold citation spans overlapped by an answer citation in the same file.
+
+    A lower bound: correct evidence cited from elsewhere does not count.
+    """
+    if not gold.evidence:
+        return None
+    spans = _answer_spans(answer)
+    hit = sum(
+        1
+        for path, start, end in gold.evidence
+        if any(
+            given == _norm_path(path) and g_start <= end and start <= g_end
+            for given, g_start, g_end in spans
+        )
+    )
+    return hit / len(gold.evidence)
 
 
 def score(answer: dict[str, Any] | None, gold: Gold, repo_root: Path) -> dict[str, float]:
@@ -197,6 +229,7 @@ def score(answer: dict[str, Any] | None, gold: Gold, repo_root: Path) -> dict[st
                 )
             )
         ),
-        "citation_validity": citation_validity(answer, repo_root),
+        "citation_location_validity": citation_location_validity(answer, repo_root),
+        "evidence_recall": evidence_recall(answer, gold),
     }
     return {key: value for key, value in metrics.items() if value is not None}

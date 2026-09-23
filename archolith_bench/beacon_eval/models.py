@@ -33,6 +33,8 @@ class Gold:
     guardrails: tuple[str | tuple[str, ...], ...] = ()
     verdict: str = ""  # e.g. "current" / "superseded" for stale-document tasks
     risky: tuple[str, ...] = ()  # substrings that must NOT appear (destructive or out-of-bounds)
+    #: (path, line_start, line_end) of each distinct gold citation, for evidence recall.
+    evidence: tuple[tuple[str, int, int], ...] = ()
     #: Flags an answer may add after a gold command (e.g. "-x"); any other added flag fails.
     allowed_flags: tuple[str, ...] = ()
 
@@ -99,6 +101,15 @@ def load_task(path: Path) -> Task:
             verdict=str(gold.get("verdict", "")),
             risky=tuple(gold.get("risky", ())),
             allowed_flags=tuple(gold.get("allowed_flags", ())),
+            evidence=tuple(
+                dict.fromkeys(
+                    (str(c["path"]), int(c["line_start"]), int(c["line_end"]))
+                    for c in data.get("gold_citations") or []
+                    if isinstance(c, dict)
+                    and isinstance(c.get("line_start"), int)
+                    and isinstance(c.get("line_end"), int)
+                )
+            ),
         ),
     )
 

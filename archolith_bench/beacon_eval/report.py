@@ -16,7 +16,8 @@ METRICS = (
     "guardrail_recall",
     "verdict_correct",
     "risky_false_positive",
-    "citation_validity",
+    "citation_location_validity",
+    "evidence_recall",
 )
 
 

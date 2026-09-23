@@ -83,7 +83,7 @@ def test_extracts_the_last_json_block_and_scores_it(tmp_path: Path) -> None:
     assert scores["guardrail_recall"] == 1.0
     assert scores["verdict_correct"] == 1.0
     assert scores["risky_false_positive"] == 0.0
-    assert scores["citation_validity"] == 0.5
+    assert scores["citation_location_validity"] == 0.5
 
 
 def test_no_answer_scores_as_unanswered(tmp_path: Path) -> None:
@@ -421,6 +421,34 @@ def test_grounding_flags_a_missing_acceptable_file(tmp_path: Path) -> None:
     task = tmp_path / "t.json"
     task.write_text(json.dumps({"gold": {"acceptable_files": ["real.py", "gone.py"]}}), encoding="utf-8")
     assert check_task_file(task, tmp_path) == ["acceptable file missing: gone.py"]
+
+
+def test_a_citation_without_lines_is_not_a_valid_location(tmp_path: Path) -> None:
+    (tmp_path / "x.md").write_text("a\nb\n", encoding="utf-8")
+    answer = {"citations": [{"path": "x.md"}, {"path": "x.md", "line_start": 2}]}
+    assert score(answer, Gold(), tmp_path)["citation_location_validity"] == 0.5
+
+
+def test_evidence_recall_counts_gold_spans_overlapped_in_the_same_file(tmp_path: Path) -> None:
+    gold = Gold(evidence=(("docs/a.md", 10, 12), ("docs/b.md", 5, 5)))
+    answer = {"citations": [
+        {"path": "./docs/a.md", "line_start": 12, "line_end": 20},  # overlaps a.md 10-12
+        {"path": "docs/c.md", "line_start": 5, "line_end": 5},  # right lines, wrong file
+    ]}
+    assert score(answer, gold, tmp_path)["evidence_recall"] == 0.5
+    assert "evidence_recall" not in score(answer, Gold(), tmp_path)
+
+
+def test_gold_evidence_is_loaded_once_per_distinct_span(tmp_path: Path) -> None:
+    from archolith_bench.beacon_eval.models import load_task
+
+    task = tmp_path / "t.json"
+    span = {"path": "a.md", "line_start": 1, "line_end": 2, "quote": "q"}
+    task.write_text(json.dumps({
+        "repo": "r", "task_id": "t", "kind": "k", "prompt": "p", "gold": {},
+        "gold_citations": [dict(span, item="x"), dict(span, item="y"), {"item": "z", "path": "b.md"}],
+    }), encoding="utf-8")
+    assert load_task(task).gold.evidence == (("a.md", 1, 2),)
 
 
 def test_grounding_takes_the_first_wording_as_the_cited_guardrail(tmp_path: Path) -> None:
