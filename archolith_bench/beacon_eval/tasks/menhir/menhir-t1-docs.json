@@ -3,21 +3,62 @@
   "task_id": "menhir-t1-docs",
   "kind": "docs_and_files",
   "prompt": "You need to add a new deterministic triage signal so that user prompts containing a percentage (for example \"about 40% of my budget\") are captured as TurnEvidence. The change must apply identically to the Claude Code, OpenCode, and Codex prompt hooks. Which project documents should you read first, and which source and test files are involved in making this change?",
-  "reviewed": false,
+  "reviewed": true,
   "gold": {
-    "docs": ["docs/turn-evidence-producers.md"],
-    "files": ["scripts/hooks/menhir_turn_evidence_common.py", "tests/test_producer_pack.py"],
+    "docs": [
+      "docs/turn-evidence-producers.md"
+    ],
+    "files": [
+      "scripts/hooks/menhir_turn_evidence_common.py",
+      "tests/test_producer_pack.py"
+    ],
     "commands": [],
     "guardrails": [],
     "verdict": "",
     "risky": []
   },
   "gold_citations": [
-    {"item": "docs/turn-evidence-producers.md", "path": "docs/turn-evidence-producers.md", "line_start": 42, "line_end": 47, "quote": "All three are **thin adapters** over one shared core, `scripts/hooks/menhir_turn_evidence_common.py`,"},
-    {"item": "docs/turn-evidence-producers.md", "path": "docs/turn-evidence-producers.md", "line_start": 58, "line_end": 58, "quote": "Do **not** copy the triage rules into the new producer"},
-    {"item": "scripts/hooks/menhir_turn_evidence_common.py", "path": "scripts/hooks/menhir_turn_evidence_common.py", "line_start": 44, "line_end": 46, "quote": "The ONE definition of what counts as durable evidence."},
-    {"item": "scripts/hooks/menhir_turn_evidence_common.py", "path": "scripts/hooks/menhir_turn_evidence_common.py", "line_start": 126, "line_end": 129, "quote": "This is the SINGLE triage every producer shares."},
-    {"item": "tests/test_producer_pack.py", "path": "docs/turn-evidence-producers.md", "line_start": 45, "line_end": 47, "quote": "(`tests/test_producer_pack.py`) asserts the producers share byte-for-byte identical triage"},
-    {"item": "tests/test_producer_pack.py", "path": "tests/test_producer_pack.py", "line_start": 3, "line_end": 4, "quote": "one shared triage that cannot drift (behavioral + structural parity)"}
+    {
+      "item": "docs/turn-evidence-producers.md",
+      "path": "docs/turn-evidence-producers.md",
+      "line_start": 42,
+      "line_end": 47,
+      "quote": "All three are **thin adapters** over one shared core, `scripts/hooks/menhir_turn_evidence_common.py`,"
+    },
+    {
+      "item": "docs/turn-evidence-producers.md",
+      "path": "docs/turn-evidence-producers.md",
+      "line_start": 58,
+      "line_end": 58,
+      "quote": "Do **not** copy the triage rules into the new producer"
+    },
+    {
+      "item": "scripts/hooks/menhir_turn_evidence_common.py",
+      "path": "scripts/hooks/menhir_turn_evidence_common.py",
+      "line_start": 44,
+      "line_end": 46,
+      "quote": "The ONE definition of what counts as durable evidence."
+    },
+    {
+      "item": "scripts/hooks/menhir_turn_evidence_common.py",
+      "path": "scripts/hooks/menhir_turn_evidence_common.py",
+      "line_start": 126,
+      "line_end": 129,
+      "quote": "This is the SINGLE triage every producer shares."
+    },
+    {
+      "item": "tests/test_producer_pack.py",
+      "path": "docs/turn-evidence-producers.md",
+      "line_start": 45,
+      "line_end": 47,
+      "quote": "(`tests/test_producer_pack.py`) asserts the producers share byte-for-byte identical triage"
+    },
+    {
+      "item": "tests/test_producer_pack.py",
+      "path": "tests/test_producer_pack.py",
+      "line_start": 3,
+      "line_end": 4,
+      "quote": "one shared triage that cannot drift (behavioral + structural parity)"
+    }
   ]
 }
