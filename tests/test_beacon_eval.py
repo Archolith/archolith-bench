@@ -375,3 +375,28 @@ def test_an_added_flag_fails_unless_the_gold_allows_it(tmp_path: Path) -> None:
     # Token prefix, not string prefix: "-qx" is not "-q" plus arguments.
     fused = {"commands": ['python -m pytest --run-online -m "online and not needs_llm" -qx']}
     assert score(fused, pytest_gold, tmp_path)["command_recall"] == 0.0
+
+
+def test_a_guardrail_is_met_by_one_entry_holding_any_accepted_wording(tmp_path: Path) -> None:
+    gold = Gold(guardrails=(("online tests opt-in", "live tests --run-online"), "disposable test database"))
+    paraphrase = {"guardrails": [
+        "Live tests only run when you pass --run-online.",
+        "Point graph tests at a disposable Neo4j test database.",
+    ]}
+    assert score(paraphrase, gold, tmp_path)["guardrail_recall"] == 1.0
+    # Words spread across unrelated entries do not add up.
+    spread = {"guardrails": ["Online docs are generated.", "Tests are fast.", "Opt-in telemetry."]}
+    assert score(spread, gold, tmp_path)["guardrail_recall"] == 0.0
+
+
+def test_grounding_takes_the_first_wording_as_the_cited_guardrail(tmp_path: Path) -> None:
+    from archolith_bench.beacon_eval.grounding import check_task_file
+
+    (tmp_path / "AGENTS.md").write_text("Online tests are opt-in.\n", encoding="utf-8")
+    task = tmp_path / "t.json"
+    task.write_text(json.dumps({
+        "gold": {"guardrails": [["online tests opt-in", "live tests --run-online"]]},
+        "gold_citations": [{"item": "online tests opt-in", "path": "AGENTS.md", "line_start": 1,
+                            "line_end": 1, "quote": "Online tests are opt-in."}],
+    }), encoding="utf-8")
+    assert check_task_file(task, tmp_path) == []

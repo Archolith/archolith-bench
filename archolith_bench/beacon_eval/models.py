@@ -26,7 +26,9 @@ class Gold:
     docs: tuple[str, ...] = ()
     files: tuple[str, ...] = ()
     commands: tuple[str, ...] = ()
-    guardrails: tuple[str, ...] = ()  # keywords that must appear in a named guardrail
+    #: Each guardrail is one wording or a tuple of accepted wordings; it is met when a single
+    #: answer guardrail contains every word of any wording. The first wording is its cited id.
+    guardrails: tuple[str | tuple[str, ...], ...] = ()
     verdict: str = ""  # e.g. "current" / "superseded" for stale-document tasks
     risky: tuple[str, ...] = ()  # substrings that must NOT appear (destructive or out-of-bounds)
     #: Flags an answer may add after a gold command (e.g. "-x"); any other added flag fails.
@@ -88,7 +90,9 @@ def load_task(path: Path) -> Task:
             docs=tuple(gold.get("docs", ())),
             files=tuple(gold.get("files", ())),
             commands=tuple(gold.get("commands", ())),
-            guardrails=tuple(gold.get("guardrails", ())),
+            guardrails=tuple(
+                item if isinstance(item, str) else tuple(item) for item in gold.get("guardrails", ())
+            ),
             verdict=str(gold.get("verdict", "")),
             risky=tuple(gold.get("risky", ())),
             allowed_flags=tuple(gold.get("allowed_flags", ())),

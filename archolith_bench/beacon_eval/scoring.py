@@ -65,6 +65,26 @@ def command_matches(given: str, expected: str, allowed_flags: tuple[str, ...] = 
     )
 
 
+_WORD = re.compile(r"[a-z0-9_][a-z0-9_./-]*")
+
+
+def _words(text: str) -> set[str]:
+    # Paths and flags keep inner "." "/" "-"; sentence punctuation at the end is dropped.
+    return {word.rstrip("./-") for word in _WORD.findall(text.lower().replace("`", ""))} - {""}
+
+
+def guardrail_met(accepted: str | tuple[str, ...], entries: list[str]) -> bool:
+    """One answer entry holds every word of one accepted wording (any order).
+
+    Words are matched within a single entry so that pieces spread across unrelated
+    guardrails do not add up. Negation is not detected: rules are often phrased as
+    prohibitions, so "not" or "never" cannot count against an entry.
+    """
+    wordings = (accepted,) if isinstance(accepted, str) else accepted
+    wanted = [_words(wording) for wording in wordings if _words(wording)]
+    return any(want <= _words(entry) for entry in entries for want in wanted)
+
+
 def _recall(expected: tuple[str, ...], given: list[str], norm: Any) -> float | None:
     if not expected:
         return None
@@ -131,8 +151,8 @@ def score(answer: dict[str, Any] | None, gold: Gold, repo_root: Path) -> dict[st
             if not gold.guardrails
             else sum(
                 1
-                for keyword in gold.guardrails
-                if keyword.lower() in " ".join(_as_list(answer, "guardrails")).lower()
+                for accepted in gold.guardrails
+                if guardrail_met(accepted, _as_list(answer, "guardrails"))
             )
             / len(gold.guardrails)
         ),

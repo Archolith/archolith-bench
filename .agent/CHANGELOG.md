@@ -19,6 +19,9 @@
 - `scoring.py`, `models.py` (owner decision: scoring 1A): a command matches when its tokens start
   with the gold command's and every extra token is a plain argument; an added flag fails unless the
   task's optional `gold.allowed_flags` lists it.
+- `scoring.py`, `models.py`, `grounding.py` (owner decision: scoring 2A): a gold guardrail may list
+  accepted wordings and is met when one answer entry holds every word of any wording, in any order;
+  words no longer add up across entries. The first wording is the cited id. Negation is not detected.
 
 ## 2026-09-23 - Beacon agent-task evaluation harness (P3 step 1)
 
