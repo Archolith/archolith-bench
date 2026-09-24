@@ -25,7 +25,11 @@
         "runtime owned backend",
         "backend runtime owner",
         "stdio client-only",
-        "stdio backend client"
+        "stdio backend client",
+        "menhir serve owns",
+        "menhir serve process owns",
+        "stdio client bridge",
+        "stdio client requires MENHIR_BACKEND_URL"
       ],
       [
         "stdio was an independent runtime owner",
@@ -33,7 +37,10 @@
         "second runtime owner",
         "its own runtime",
         "each stdio process owned runtime",
-        "stdio owned local runtime"
+        "stdio owned local runtime",
+        "bootstrapped owned runtime",
+        "stdio bootstrapped runtime",
+        "stdio-launched process owned runtime"
       ]
     ]
   },
