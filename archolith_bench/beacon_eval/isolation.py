@@ -78,6 +78,25 @@ def beacon_server(beacon_python: str, manifest: Path, beacon_src: str | None) ->
     return {"beacon": server}
 
 
+#: Environment variable carrying condition M's memory key to the OpenCode process only.
+MEMORY_KEY_ENV = "BEACON_EVAL_MEMORY_KEY"
+
+
+def memory_server(url: str) -> dict[str, Any]:
+    """The ``mcp`` block for condition M: exactly one server, Menhir's remote MCP.
+
+    The key is referenced as ``{env:...}`` so it never lands in the written config.
+    """
+    return {
+        "menhir": {
+            "type": "remote",
+            "url": url,
+            "enabled": True,
+            "headers": {"Authorization": "Bearer {env:" + MEMORY_KEY_ENV + "}"},
+        }
+    }
+
+
 def isolated_env(base: Mapping[str, str], config_home: Path) -> dict[str, str]:
     """*base* without ``OPENCODE_*`` overrides, pointed at *config_home*."""
     env = {key: value for key, value in base.items() if not key.upper().startswith("OPENCODE_")}

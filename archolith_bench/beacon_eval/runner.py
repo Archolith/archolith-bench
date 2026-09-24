@@ -24,14 +24,18 @@ import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import IO, Any
+from urllib.parse import urlsplit, urlunsplit
+from urllib.request import urlopen
 
 from archolith_bench.beacon_eval import CONDITIONS, DEFAULT_CONDITIONS
 from archolith_bench.beacon_eval.isolation import (
+    MEMORY_KEY_ENV,
     beacon_server,
     default_config_source,
     isolated_config_home,
     isolated_env,
     load_api_keys,
+    memory_server,
 )
 from archolith_bench.beacon_eval.models import ANSWER_KEYS, RepoPin, RunResult, Task
 from archolith_bench.beacon_eval.scoring import extract_answer, score
@@ -110,6 +114,9 @@ class RunnerConfig:
     #: Dollar cap from OpenCode's per-step cost; when set, a run with no cost data stops the matrix.
     budget_usd: float | None = None
     run_reserve_usd: float = 0.10
+    #: Condition M: a Menhir remote MCP URL (e.g. http://127.0.0.1:8795/mcp-http) and its key.
+    memory_url: str | None = None
+    memory_key: str | None = field(default=None, repr=False)
 
 
 @dataclass
@@ -419,6 +426,8 @@ def run_one(
     """One run. Raises RateLimited, BudgetExhausted or AccountingError after saving it."""
     if condition not in CONDITIONS:
         raise ValueError(f"unknown condition {condition!r}")
+    if condition == "M" and not (config.memory_url and config.memory_key):
+        raise ValueError("condition M needs memory_url and memory_key")
     # Absolute paths: PWD and B's --manifest are resolved by processes running in the checkout.
     run_dir = (config.workdir / "runs" / f"{task.repo}-{task.task_id}-{condition}-{repeat}").resolve()
     checkout = export_commit(pin, run_dir / "checkout", config.workdir / "cache")
@@ -433,6 +442,8 @@ def run_one(
     mcp = (
         beacon_server(config.beacon_python, manifest, config.beacon_src)
         if condition in ("B", "D") and manifest is not None
+        else memory_server(str(config.memory_url))
+        if condition == "M"
         else None
     )
     disabled = BUILTIN_TOOLS if condition == "D" else ()
@@ -447,6 +458,9 @@ def run_one(
     ) as home:
         env = isolated_env(os.environ, home)
         env.update(keys)
+        if condition == "M":
+            # Read by OpenCode's {env:...} substitution; never written to the config file.
+            env[MEMORY_KEY_ENV] = str(config.memory_key)
         # An inherited PWD (Git Bash, MSYS, most shells) may root OpenCode in the
         # caller's repo instead of the checkout; the fake-provider check exercises this.
         env["PWD"] = str(checkout)
@@ -495,7 +509,7 @@ def run_one(
     )
     result.scores = score(answer, task.gold, checkout)
     (run_dir / "result.json").write_text(json.dumps(asdict(result), indent=2), encoding="utf-8")
-    _redact(run_dir, keys.values())
+    _redact(run_dir, [*keys.values(), *([config.memory_key] if config.memory_key else [])])
     if reason == "rate_limited":
         raise RateLimited(f"rate limited during {run_dir.name}; stopping, not retrying")
     if reason == "over_reserve":
@@ -540,6 +554,31 @@ def rescore(workdir: Path, tasks: list[Task]) -> list[RunResult]:
     return results
 
 
+class MemoryNotReady(RuntimeError):
+    """Condition M's memory backend cannot serve reads; nothing is run."""
+
+
+def check_memory_ready(mcp_url: str, timeout_s: float = 10.0) -> None:
+    """Refuse M unless the backend behind *mcp_url* reports ``reads_ready`` at ``/api/ready``.
+
+    A degraded backend (for example no working embedder) would still list its tools, so M
+    would silently run as A with failing recalls.
+    """
+    parts = urlsplit(mcp_url)
+    if not parts.scheme or not parts.netloc:
+        raise MemoryNotReady(f"condition M needs a memory MCP URL, got {mcp_url!r}")
+    ready_url = urlunsplit((parts.scheme, parts.netloc, "/api/ready", "", ""))
+    try:
+        with urlopen(ready_url, timeout=timeout_s) as response:  # noqa: S310 - operator-given URL
+            body = json.loads(response.read().decode("utf-8"))
+    except (OSError, ValueError) as exc:
+        raise MemoryNotReady(f"memory backend not reachable at {ready_url}: {exc}") from exc
+    capabilities = body.get("capabilities") or {}
+    if capabilities.get("reads_ready") is not True:
+        failures = "; ".join(str(f)[:120] for f in body.get("failures") or [])
+        raise MemoryNotReady(f"memory backend cannot serve reads ({body.get('status')}): {failures}")
+
+
 def _redact(run_dir: Path, secrets: Any) -> None:
     """Replace any key value that reached a saved file (logs can echo request errors)."""
     values = [value for value in secrets if len(value) >= 8]
@@ -573,6 +612,11 @@ def run_matrix(
         cap_usd=config.budget_usd, reserve_usd=config.run_reserve_usd,
     )
     results: list[RunResult] = []
+    if "M" in conditions:
+        try:
+            check_memory_ready(str(config.memory_url or ""))
+        except MemoryNotReady as exc:
+            return results, str(exc)
     log = config.workdir / "results.jsonl"
     log.parent.mkdir(parents=True, exist_ok=True)
     try:

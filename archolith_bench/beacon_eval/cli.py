@@ -70,6 +70,14 @@ def add_parser(subparsers: argparse._SubParsersAction) -> None:
         default="",
         help=".env whose *_API_KEY values are passed to OpenCode only (for built-in providers)",
     )
+    parser.add_argument(
+        "--memory-url", default="",
+        help="Condition M: Menhir remote MCP URL (e.g. http://127.0.0.1:8795/mcp-http)",
+    )
+    parser.add_argument(
+        "--memory-key-file", default="",
+        help="Condition M: file holding the Menhir key (read-only tier); passed to OpenCode only",
+    )
 
 
 def _split(value: str) -> tuple[str, ...]:
@@ -116,7 +124,16 @@ def run(args: argparse.Namespace) -> int:
         budget_usd=args.budget_usd,
         run_reserve_usd=args.run_reserve_usd,
         env_file=Path(args.env_file) if args.env_file else None,
+        memory_url=args.memory_url or None,
+        memory_key=(
+            Path(args.memory_key_file).read_text(encoding="utf-8").strip()
+            if args.memory_key_file
+            else None
+        ),
     )
+    if "M" in conditions and not (config.memory_url and config.memory_key):
+        print("condition M needs --memory-url and --memory-key-file", file=sys.stderr)
+        return 2
     results, stopped = run_matrix(config, pins, tasks, conditions, args.repeats)
     report = render(
         results,

@@ -1,5 +1,17 @@
 # archolith-bench Changelog
 
+## 2026-09-24 - Beacon eval: condition M (Menhir memory MCP)
+
+- `archolith_bench/beacon_eval/`: opt-in condition `M` gives the agent A's tools plus one remote
+  MCP server, Menhir (`--memory-url`, `--memory-key-file`). The key reaches the OpenCode process as
+  an environment variable referenced by `{env:...}` in the config, so it is never written to disk,
+  and it is redacted from saved run files. Before any run, the matrix checks `/api/ready` and
+  stops at zero cost unless the backend reports `reads_ready` (a degraded backend still lists its
+  tools, so M would otherwise run as A with failing recalls).
+- Intended use: a local Menhir backend in benchmark mode over a read-only graph copy, with a
+  read-only-tier key (21 read tools, no write tools).
+- `tests/test_beacon_eval.py`: config shape, ready check, stop-before-run, and missing settings.
+
 ## 2026-09-24 - Beacon eval: Menhir "why" tasks
 
 - `archolith_bench/beacon_eval/why_tasks/menhir/` (new): eight owner-approved "why" tasks (kind `why`)

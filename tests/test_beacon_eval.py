@@ -676,3 +676,77 @@ def test_why_task_set_loads_apart_and_gold_wordings_score(tmp_path: Path) -> Non
         scores = score({"findings": findings, "files": list(task.gold.files)}, task.gold, tmp_path)
         assert scores["point_recall"] == 1.0, task.task_id
         assert scores.get("risky_false_positive", 0.0) == 0.0, task.task_id
+
+
+def _ready_server(body: dict):
+    import http.server
+    import threading
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802
+            data = json.dumps(body).encode()
+            self.send_response(200 if self.path == "/api/ready" else 404)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(data)
+
+        def log_message(self, *args):
+            pass
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server, f"http://127.0.0.1:{server.server_address[1]}/mcp-http"
+
+
+def test_memory_server_config_references_key_by_env_only(tmp_path: Path) -> None:
+    from archolith_bench.beacon_eval.isolation import MEMORY_KEY_ENV, memory_server
+
+    source = tmp_path / "opencode.json"
+    source.write_text(json.dumps({"provider": {"openai": {}}}), encoding="utf-8")
+    with isolated_config_home(source, "openai/x", memory_server("http://127.0.0.1:1/mcp-http")) as home:
+        written = json.loads((home / "opencode" / "opencode.json").read_text(encoding="utf-8"))
+    assert list(written["mcp"]) == ["menhir"]
+    server = written["mcp"]["menhir"]
+    assert server["type"] == "remote" and server["url"].endswith("/mcp-http")
+    assert server["headers"]["Authorization"] == "Bearer {env:" + MEMORY_KEY_ENV + "}"
+
+
+def test_memory_ready_check_accepts_reads_ready_and_refuses_degraded() -> None:
+    from archolith_bench.beacon_eval.runner import MemoryNotReady, check_memory_ready
+
+    ok, ok_url = _ready_server({"status": "ready", "capabilities": {"reads_ready": True}})
+    bad, bad_url = _ready_server(
+        {"status": "degraded", "capabilities": {"reads_ready": False}, "failures": ["no embedder"]}
+    )
+    try:
+        check_memory_ready(ok_url)
+        with pytest.raises(MemoryNotReady, match="no embedder"):
+            check_memory_ready(bad_url)
+        with pytest.raises(MemoryNotReady):
+            check_memory_ready("not a url")
+    finally:
+        ok.shutdown()
+        bad.shutdown()
+
+
+def test_matrix_with_m_stops_before_any_run_when_memory_is_not_ready(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bad, bad_url = _ready_server({"status": "degraded", "capabilities": {"reads_ready": False}})
+    called: list[str] = []
+    monkeypatch.setattr(runner_mod, "run_one", lambda *a, **k: called.append("run"))
+    task = Task(repo="r", task_id="t", kind="why", prompt="q", reviewed=True, gold=Gold())
+    config = RunnerConfig(workdir=tmp_path, beacon_python=sys.executable, opencode_cmd=["x"],
+                          memory_url=bad_url, memory_key="k" * 12)
+    try:
+        results, stopped = run_matrix(config, {"r": RepoPin("r", "", "0" * 40)}, [task], ("A", "M"))
+    finally:
+        bad.shutdown()
+    assert results == [] and called == [] and "cannot serve reads" in stopped
+
+
+def test_condition_m_without_memory_settings_is_refused(tmp_path: Path) -> None:
+    task = Task(repo="r", task_id="t", kind="why", prompt="q", reviewed=True, gold=Gold())
+    config = RunnerConfig(workdir=tmp_path, beacon_python=sys.executable, opencode_cmd=["x"])
+    with pytest.raises(ValueError, match="memory_url"):
+        runner_mod.run_one(config, RepoPin("r", "", "0" * 40), task, "M", 1)
