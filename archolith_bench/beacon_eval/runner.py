@@ -35,7 +35,8 @@ from archolith_bench.beacon_eval.isolation import (
 from archolith_bench.beacon_eval.models import ANSWER_KEYS, RepoPin, RunResult, Task
 from archolith_bench.beacon_eval.scoring import extract_answer, score
 
-DEFAULT_MODEL = "deepseek/deepseek-v4-flash"
+#: V4.1 Flash; OpenCode 1.18 dropped deepseek-v4-flash from its DeepSeek catalog.
+DEFAULT_MODEL = "deepseek/deepseek-flash"
 DEFAULT_BUDGET_TOKENS = 20_000_000
 #: Tokens set aside for each run; a run that passes it is killed and stops the matrix.
 DEFAULT_RUN_RESERVE = 400_000

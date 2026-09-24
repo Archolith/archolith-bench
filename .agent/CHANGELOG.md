@@ -37,6 +37,8 @@
 - `tasks/menhir/` (owner-approved gold revisions): t1 acceptable adapter and producer-test files; t2
   follows the graph-query test policy; t3 scores the runtime owner and its predecessor; t5 scores the
   archive destination, index, changelog and staging steps. t4 unchanged. All five ground at 9100d0db.
+- `runner.py` (owner decision): default model `deepseek/deepseek-flash` (V4.1 Flash); OpenCode 1.18.31's
+  catalog no longer offers `deepseek-v4-flash`, so the first dry-run attempt stopped at 0 tokens.
 
 ## 2026-09-23 - Beacon agent-task evaluation harness (P3 step 1)
 
