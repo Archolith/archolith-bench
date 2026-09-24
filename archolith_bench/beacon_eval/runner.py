@@ -31,6 +31,7 @@ from archolith_bench.beacon_eval import CONDITIONS, DEFAULT_CONDITIONS
 from archolith_bench.beacon_eval.isolation import (
     MEMORY_KEY_ENV,
     beacon_server,
+    memory_stdio_server,
     default_config_source,
     isolated_config_home,
     isolated_env,
@@ -117,6 +118,12 @@ class RunnerConfig:
     #: Condition M: a Menhir remote MCP URL (e.g. http://127.0.0.1:8795/mcp-http) and its key.
     memory_url: str | None = None
     memory_key: str | None = field(default=None, repr=False)
+    #: Condition M over stdio instead of remote MCP: the bridge command, its non-secret
+    #: environment, and the variable it reads the backend key from. memory_url still names the
+    #: backend, for the readiness check.
+    memory_stdio: list[str] | None = None
+    memory_stdio_env: dict[str, str] = field(default_factory=dict)
+    memory_stdio_key_var: str = "MENHIR_API_KEY"
 
 
 @dataclass
@@ -442,7 +449,11 @@ def run_one(
     mcp = (
         beacon_server(config.beacon_python, manifest, config.beacon_src)
         if condition in ("B", "D") and manifest is not None
-        else memory_server(str(config.memory_url))
+        else (
+            memory_stdio_server(config.memory_stdio, config.memory_stdio_env, config.memory_stdio_key_var)
+            if config.memory_stdio
+            else memory_server(str(config.memory_url))
+        )
         if condition == "M"
         else None
     )

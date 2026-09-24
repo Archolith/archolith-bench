@@ -1,5 +1,13 @@
 # archolith-bench Changelog
 
+## 2026-09-24 - Beacon eval: condition M over Menhir's stdio bridge
+
+- `isolation.py`, `runner.py`, `cli.py`: `--memory-stdio` (bridge command as JSON), `--memory-stdio-env`
+  and `--memory-stdio-key-var` run condition M through Menhir's stdio bridge, the local-stdio MVP's
+  supported interface, instead of remote MCP. The backend key reaches the bridge as an `{env:...}`
+  reference; `--memory-url` still names the backend for the readiness check.
+- `tests/test_beacon_eval.py`: the written config carries the key reference only.
+
 ## 2026-09-24 - Beacon eval: stricter judge and why-gold fixes (owner decisions)
 
 - `judge.py`: the judge credits only the specific recorded reason, fact, decision, incident or

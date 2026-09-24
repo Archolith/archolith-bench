@@ -926,3 +926,18 @@ def test_a_new_judge_prompt_version_invalidates_cached_verdicts(
     judge_mod.judge_workdir(workdir, task_root, _fake_call(replies, seen))
     assert len(seen) == 4
 
+
+def test_memory_stdio_server_passes_the_key_by_env_reference_only(tmp_path: Path) -> None:
+    from archolith_bench.beacon_eval.isolation import MEMORY_KEY_ENV, memory_stdio_server
+
+    source = tmp_path / "opencode.json"
+    source.write_text(json.dumps({"provider": {"openai": {}}}), encoding="utf-8")
+    block = memory_stdio_server(["py", "-m", "menhir.mcp.server"],
+                                {"MENHIR_BACKEND_URL": "http://127.0.0.1:1"}, "MENHIR_API_KEY")
+    with isolated_config_home(source, "openai/x", block) as home:
+        written = json.loads((home / "opencode" / "opencode.json").read_text(encoding="utf-8"))
+    server = written["mcp"]["menhir"]
+    assert server["type"] == "local" and server["command"][-1] == "menhir.mcp.server"
+    assert server["environment"]["MENHIR_API_KEY"] == "{env:" + MEMORY_KEY_ENV + "}"
+    assert server["environment"]["MENHIR_BACKEND_URL"] == "http://127.0.0.1:1"
+

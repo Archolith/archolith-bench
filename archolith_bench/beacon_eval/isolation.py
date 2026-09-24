@@ -82,6 +82,24 @@ def beacon_server(beacon_python: str, manifest: Path, beacon_src: str | None) ->
 MEMORY_KEY_ENV = "BEACON_EVAL_MEMORY_KEY"
 
 
+def memory_stdio_server(
+    command: list[str], environment: dict[str, str], key_var: str
+) -> dict[str, Any]:
+    """The ``mcp`` block for condition M over stdio: Menhir's stdio bridge as a local server.
+
+    *key_var* names the variable the bridge reads its backend key from; its value is an
+    ``{env:...}`` reference, so the key never lands in the written config.
+    """
+    return {
+        "menhir": {
+            "type": "local",
+            "command": list(command),
+            "enabled": True,
+            "environment": {**environment, key_var: "{env:" + MEMORY_KEY_ENV + "}"},
+        }
+    }
+
+
 def memory_server(url: str) -> dict[str, Any]:
     """The ``mcp`` block for condition M: exactly one server, Menhir's remote MCP.
 

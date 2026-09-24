@@ -96,6 +96,19 @@ def add_parser(subparsers: argparse._SubParsersAction) -> None:
         help="Condition M: Menhir remote MCP URL (e.g. http://127.0.0.1:8795/mcp-http)",
     )
     parser.add_argument(
+        "--memory-stdio", default="",
+        help='Condition M over stdio: the bridge command as a JSON list, e.g. '
+        '["python", "-m", "menhir.mcp.server"]; --memory-url still names the backend',
+    )
+    parser.add_argument(
+        "--memory-stdio-env", default="{}",
+        help="Condition M over stdio: non-secret environment for the bridge, as a JSON object",
+    )
+    parser.add_argument(
+        "--memory-stdio-key-var", default="MENHIR_API_KEY",
+        help="Condition M over stdio: the variable the bridge reads the backend key from",
+    )
+    parser.add_argument(
         "--memory-key-file", default="",
         help="Condition M: file holding the Menhir key (read-only tier); passed to OpenCode only",
     )
@@ -148,6 +161,9 @@ def run(args: argparse.Namespace) -> int:
         run_reserve_usd=args.run_reserve_usd,
         env_file=Path(args.env_file) if args.env_file else None,
         memory_url=args.memory_url or None,
+        memory_stdio=json.loads(args.memory_stdio) if args.memory_stdio else None,
+        memory_stdio_env=json.loads(args.memory_stdio_env),
+        memory_stdio_key_var=args.memory_stdio_key_var,
         memory_key=(
             Path(args.memory_key_file).read_text(encoding="utf-8").strip()
             if args.memory_key_file
