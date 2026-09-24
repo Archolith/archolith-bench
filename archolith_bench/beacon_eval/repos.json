@@ -8,7 +8,7 @@
     {
       "name": "beacon",
       "url": "https://github.com/Archolith/beacon.git",
-      "commit": "64675063fe7036a8bff813e33edc7efaf3164ab2"
+      "commit": "27e2fad115273e765851d6c45a0a2ee2640300a3"
     },
     {
       "name": "llm",
