@@ -49,6 +49,9 @@
   the report shows total and median cost. Default model `openai/gpt-6-luna` (owner decision).
 - `runner.py`, `cli.py`: token limits can be off (None); dollar mode no longer uses a huge placeholder
   that tripped the cap check after the first run.
+- `scoring.py`: path cleanup strips only a leading `./` (it used to strip `.agent/` to `agent/`, failing
+  every dot-folder citation) and drops a trailing "(note)"; `runner.py`, `cli.py`: `beacon-eval rescore`
+  recomputes scores from saved answers with no model calls.
 
 ## 2026-09-23 - Beacon agent-task evaluation harness (P3 step 1)
 

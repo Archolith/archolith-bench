@@ -15,6 +15,7 @@ from archolith_bench.beacon_eval.runner import (
     DEFAULT_MODEL,
     DEFAULT_RUN_RESERVE,
     RunnerConfig,
+    rescore,
     run_matrix,
 )
 
@@ -25,7 +26,7 @@ def add_parser(subparsers: argparse._SubParsersAction) -> None:
     parser = subparsers.add_parser(
         "beacon-eval", help="Beacon agent-task evaluation (A: docs, B: +Beacon MCP, C: +pasted)"
     )
-    parser.add_argument("action", choices=("plan", "run"))
+    parser.add_argument("action", choices=("plan", "run", "rescore"))
     parser.add_argument("--repos", default="", help="Comma-separated repo names (default: all)")
     parser.add_argument("--tasks", default="", help="Comma-separated task ids (default: all)")
     parser.add_argument("--conditions", default=",".join(CONDITIONS))
@@ -83,6 +84,15 @@ def run(args: argparse.Namespace) -> int:
     for task in tasks:
         print(f"  {task.repo}/{task.task_id} ({task.kind}){'' if task.reviewed else ' [unreviewed]'}")
     if args.action == "plan" or not tasks:
+        return 0
+    if args.action == "rescore":
+        rescored = rescore(Path(args.workdir), tasks)
+        target = Path(args.report) if args.report else Path(args.workdir) / "report.md"
+        target.write_text(
+            render(rescored, {"Date": date.today().isoformat(), "Rescored": "from saved answers"}),
+            encoding="utf-8",
+        )
+        print(f"rescored {len(rescored)} run(s); report: {target}")
         return 0
     dollars = args.budget_usd is not None
     # In dollar mode token limits are off (None) unless given; placeholders would trip the check.

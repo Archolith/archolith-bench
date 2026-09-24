@@ -404,6 +404,24 @@ def test_in_dollar_mode_a_run_without_cost_stops_the_matrix(harness) -> None:
     assert "no cost" in stopped and len(results) == 1
 
 
+def test_rescore_recomputes_scores_from_saved_answers(harness) -> None:
+    from archolith_bench.beacon_eval.runner import rescore
+
+    config, pin = harness
+    task = Task(repo="demo", task_id="rs", kind="k", prompt="fine", gold=GOLD)
+    run_matrix(config, {"demo": pin}, [task], ("A",))
+    saved = config.workdir / "runs" / "demo-rs-A-1" / "result.json"
+    data = json.loads(saved.read_text(encoding="utf-8"))
+    original = data["scores"]
+    data["scores"] = {"answered": 0.0}
+    saved.write_text(json.dumps(data), encoding="utf-8")
+    stricter = Task(repo="demo", task_id="rs", kind="k", prompt="fine", gold=Gold(docs=("AGENTS.md",)))
+    results = rescore(config.workdir, [stricter])
+    assert len(results) == 1 and results[0].scores["doc_recall"] == 1.0 != original["doc_recall"]
+    assert json.loads(saved.read_text(encoding="utf-8"))["scores"] == results[0].scores
+    assert len((config.workdir / "results.jsonl").read_text(encoding="utf-8").splitlines()) == 1
+
+
 def test_matrix_stops_at_the_budget(harness) -> None:
     config, pin = harness
     config.budget_tokens = 81_000  # the 80k reserve fits once; 1.1k used + 80k then exceeds it
@@ -504,6 +522,22 @@ def test_grounding_flags_a_missing_acceptable_file(tmp_path: Path) -> None:
     # A new file is acceptable when its folder exists; a missing folder or an escape is not.
     assert check_task_file(task, tmp_path) == [
         "acceptable file missing: nowhere/new.md", "acceptable file missing: ../outside.py"]
+
+
+def test_dot_directory_citations_are_valid_locations(tmp_path: Path) -> None:
+    (tmp_path / ".agent").mkdir()
+    (tmp_path / ".agent" / "README.md").write_text("a\nb\nc\n", encoding="utf-8")
+    answer = {"citations": [{"path": ".agent/README.md", "line_start": 1, "line_end": 2},
+                            {"path": "./.agent/README.md", "line_start": 3, "line_end": 3}]}
+    assert score(answer, Gold(), tmp_path)["citation_location_validity"] == 1.0
+
+
+def test_a_trailing_note_after_a_path_still_matches(tmp_path: Path) -> None:
+    gold = Gold(docs=(".agent/README.md",), files=("scripts/core.py",))
+    answer = {"docs": ["./.agent/README.md"],
+              "files": ["scripts/core.py (canonical triage implementation)", "`scripts/other.py` (nearby)"]}
+    scores = score(answer, gold, tmp_path)
+    assert (scores["doc_recall"], scores["file_recall"], scores["file_precision"]) == (1.0, 1.0, 0.5)
 
 
 def test_a_citation_without_lines_is_not_a_valid_location(tmp_path: Path) -> None:

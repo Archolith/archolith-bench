@@ -25,8 +25,18 @@ def extract_answer(text: str) -> dict[str, Any] | None:
     return None
 
 
+_ANNOTATION = re.compile(r"\s+\(.*\)\s*$")
+
+
 def _norm_path(value: str) -> str:
-    return value.strip().strip("`").replace("\\", "/").lstrip("./").lower()
+    """Comparable path: drops a trailing "(note)", backticks and leading "./" only.
+
+    Dot-directories such as ``.agent/`` must survive (``lstrip("./")`` used to eat them).
+    """
+    path = _ANNOTATION.sub("", value.strip()).strip().strip("`").replace("\\", "/")
+    while path.startswith("./"):
+        path = path[2:]
+    return path.lower()
 
 
 def _norm_command(value: str) -> str:

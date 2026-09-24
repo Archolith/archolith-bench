@@ -482,6 +482,28 @@ def run_one(
     return result
 
 
+def rescore(workdir: Path, tasks: list[Task]) -> list[RunResult]:
+    """Recompute scores for every saved run from its answer and checkout (no model calls).
+
+    Rewrites each ``result.json`` and ``results.jsonl``; runs whose task is not in *tasks*
+    are left untouched and not returned.
+    """
+    by_id = {(task.repo, task.task_id): task for task in tasks}
+    results: list[RunResult] = []
+    for path in sorted((workdir / "runs").glob("*/result.json")):
+        result = RunResult(**json.loads(path.read_text(encoding="utf-8")))
+        task = by_id.get((result.repo, result.task_id))
+        if task is None:
+            continue
+        result.scores = score(result.answer, task.gold, path.parent / "checkout")
+        path.write_text(json.dumps(asdict(result), indent=2), encoding="utf-8")
+        results.append(result)
+    (workdir / "results.jsonl").write_text(
+        "".join(json.dumps(asdict(result)) + "\n" for result in results), encoding="utf-8"
+    )
+    return results
+
+
 def _redact(run_dir: Path, secrets: Any) -> None:
     """Replace any key value that reached a saved file (logs can echo request errors)."""
     values = [value for value in secrets if len(value) >= 8]
