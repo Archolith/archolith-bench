@@ -242,8 +242,15 @@ record = {
 answer = {"docs": ["AGENTS.md"], "files": ["src/app.py"], "commands": [], "guardrails": [], "verdict": "", "plan": [], "citations": [{"path": "AGENTS.md", "line_start": 1, "line_end": 1}], "record": record}
 print(json.dumps({"type": "tool_use", "part": {"type": "tool", "tool": "read"}}))
 print(json.dumps({"type": "text", "part": {"type": "text", "text": "```json\n" + json.dumps(answer) + "\n```"}}))
+if "COSTLY" in prompt:
+    for _ in range(20):
+        print(json.dumps({"type": "step_finish", "part": {"tokens": {"input": 10, "output": 1}, "cost": 0.03}}), flush=True)
+    sys.exit(0)
 if "NOUSAGE" not in prompt:
-    print(json.dumps({"type": "step_finish", "part": {"tokens": {"input": 1000, "output": 100}}}))
+    step = {"tokens": {"input": 1000, "output": 100}}
+    if "NOCOST" not in prompt:
+        step["cost"] = 0.02
+    print(json.dumps({"type": "step_finish", "part": step}))
 """
 
 
@@ -355,6 +362,35 @@ def test_env_file_keys_reach_opencode_only_and_are_redacted(harness, tmp_path: P
     for name in ("events.jsonl", "stderr.log", "result.json"):
         assert secret not in (run_dir / name).read_text(encoding="utf-8")
     assert "<redacted>" in (run_dir / "stderr.log").read_text(encoding="utf-8")
+
+
+def test_dollar_cap_admits_runs_only_while_the_reserve_fits(harness) -> None:
+    config, pin = harness
+    config.budget_usd, config.run_reserve_usd = 0.15, 0.10
+    first = Task(repo="demo", task_id="d1", kind="k", prompt="fine", gold=GOLD)
+    second = Task(repo="demo", task_id="d2", kind="k", prompt="fine", gold=GOLD)
+    results, stopped = run_matrix(config, {"demo": pin}, [first, second], ("A", "B", "C"))
+    # $0.02 per run: admitted at $0.00, $0.02 and $0.04; the 4th stops as $0.06 + $0.10 > $0.15.
+    assert len(results) == 3 and "$0.15 cap" in stopped
+    assert all(r.cost_usd == 0.02 for r in results)
+    assert "Total cost:** $0.0600" in render(results, {"Model": "stub"}, stopped)
+
+
+def test_a_run_past_its_dollar_reserve_is_killed(harness) -> None:
+    config, pin = harness
+    config.budget_usd, config.run_reserve_usd = 5.0, 0.10
+    task = Task(repo="demo", task_id="c", kind="k", prompt="COSTLY", gold=GOLD)
+    results, stopped = run_matrix(config, {"demo": pin}, [task, task], ("A",))
+    assert "$0.10" in stopped and len(results) == 1
+    assert 0.10 < results[0].cost_usd <= 0.13  # overshoot is at most one step
+
+
+def test_in_dollar_mode_a_run_without_cost_stops_the_matrix(harness) -> None:
+    config, pin = harness
+    config.budget_usd = 5.0
+    task = Task(repo="demo", task_id="n", kind="k", prompt="NOCOST", gold=GOLD)
+    results, stopped = run_matrix(config, {"demo": pin}, [task, task], ("A",))
+    assert "no cost" in stopped and len(results) == 1
 
 
 def test_matrix_stops_at_the_budget(harness) -> None:

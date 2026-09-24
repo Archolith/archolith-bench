@@ -36,8 +36,8 @@ from archolith_bench.beacon_eval.isolation import (
 from archolith_bench.beacon_eval.models import ANSWER_KEYS, RepoPin, RunResult, Task
 from archolith_bench.beacon_eval.scoring import extract_answer, score
 
-#: V4.1 Flash; OpenCode 1.18 dropped deepseek-v4-flash from its DeepSeek catalog.
-DEFAULT_MODEL = "deepseek/deepseek-flash"
+#: Owner decision 2026-09-23 (GPT-6 Luna via OpenAI; key through --env-file).
+DEFAULT_MODEL = "openai/gpt-6-luna"
 DEFAULT_BUDGET_TOKENS = 20_000_000
 #: Tokens set aside for each run; a run that passes it is killed and stops the matrix.
 DEFAULT_RUN_RESERVE = 400_000
@@ -97,6 +97,9 @@ class RunnerConfig:
     timeout_s: float = 900.0
     #: ``.env`` whose ``*_API_KEY`` values reach only the OpenCode process (built-in providers).
     env_file: Path | None = None
+    #: Dollar cap from OpenCode's per-step cost; when set, a run with no cost data stops the matrix.
+    budget_usd: float | None = None
+    run_reserve_usd: float = 0.10
 
 
 @dataclass
@@ -104,6 +107,9 @@ class Budget:
     cap: int
     reserve: int = DEFAULT_RUN_RESERVE
     used: int = 0
+    cap_usd: float | None = None
+    reserve_usd: float = 0.0
+    used_usd: float = 0.0
 
     def check(self) -> None:
         if self.used + self.reserve > self.cap:
@@ -111,9 +117,15 @@ class Budget:
                 f"the next run's {self.reserve:,}-token reserve would exceed the "
                 f"{self.cap:,}-token cap ({self.used:,} used)"
             )
+        if self.cap_usd is not None and self.used_usd + self.reserve_usd > self.cap_usd:
+            raise BudgetExhausted(
+                f"the next run's ${self.reserve_usd:.2f} reserve would exceed the "
+                f"${self.cap_usd:.2f} cap (${self.used_usd:.4f} spent)"
+            )
 
-    def spend(self, tokens: int) -> None:
+    def spend(self, tokens: int, usd: float = 0.0) -> None:
         self.used += tokens
+        self.used_usd += usd
 
 
 # ---------------------------------------------------------------------------
@@ -217,6 +229,8 @@ class EventLog:
     cache_write_tokens: int = 0
     reported_total_tokens: int = 0
     usage_events: int = 0
+    cost_usd: float = 0.0
+    cost_events: int = 0
     tool_calls: int = 0
     errors: list[str] = field(default_factory=list)
     unknown_types: set[str] = field(default_factory=set)
@@ -254,6 +268,9 @@ class EventLog:
             self.tool_calls += 1
         elif kind == "step_finish":
             self._add_usage(part.get("tokens"))
+            if isinstance(part.get("cost"), int | float):
+                self.cost_usd += float(part["cost"])
+                self.cost_events += 1
         elif kind not in ("step_start", "reasoning"):
             self.unknown_types.add(str(kind))
 
@@ -314,7 +331,7 @@ def _pump(stream: IO[str], tag: str, sink: queue.Queue[tuple[str, str | None]]) 
 
 def stream_opencode(
     cmd: list[str], prompt: str, cwd: Path, env: dict[str, str], run_dir: Path,
-    reserve: int, timeout_s: float,
+    reserve: int, timeout_s: float, reserve_usd: float | None = None,
 ) -> tuple[EventLog, str, int | None]:
     """Run OpenCode, feeding events as they arrive; returns (log, stop reason, exit code).
 
@@ -361,7 +378,7 @@ def stream_opencode(
             if log.rate_limited:
                 reason = "rate_limited"
                 break
-            if log.total_tokens > reserve:
+            if log.total_tokens > reserve or (reserve_usd is not None and log.cost_usd > reserve_usd):
                 reason = "over_reserve"
                 break
     _kill_tree(proc)
@@ -413,7 +430,8 @@ def run_one(
         # caller's repo instead of the checkout; the fake-provider check exercises this.
         env["PWD"] = str(checkout)
         log, reason, code = stream_opencode(
-            cmd, prompt, checkout, env, run_dir, config.run_reserve_tokens, config.timeout_s
+            cmd, prompt, checkout, env, run_dir, config.run_reserve_tokens, config.timeout_s,
+            config.run_reserve_usd if config.budget_usd is not None else None,
         )
     text = "\n".join(log.texts)
     answer = extract_answer(text)
@@ -432,6 +450,7 @@ def run_one(
         cache_read_tokens=log.cache_read_tokens,
         cache_write_tokens=log.cache_write_tokens,
         reported_total_tokens=log.reported_total_tokens,
+        cost_usd=round(log.cost_usd, 6),
         tool_calls=log.tool_calls,
         seconds=round(time.monotonic() - started, 1),
         error=error[:500],
@@ -443,10 +462,14 @@ def run_one(
         raise RateLimited(f"rate limited during {run_dir.name}; stopping, not retrying")
     if reason == "over_reserve":
         raise BudgetExhausted(
-            f"{run_dir.name} passed its {config.run_reserve_tokens:,}-token reserve and was killed"
+            f"{run_dir.name} passed its reserve ({config.run_reserve_tokens:,} tokens"
+            + (f" / ${config.run_reserve_usd:.2f}" if config.budget_usd is not None else "")
+            + ") and was killed"
         )
     if log.usage_events == 0:
         raise AccountingError(f"{run_dir.name} reported no token usage; stopping")
+    if config.budget_usd is not None and log.cost_events == 0:
+        raise AccountingError(f"{run_dir.name} reported no cost; the dollar cap cannot be kept")
     return result
 
 
@@ -478,7 +501,10 @@ def run_matrix(
 
     A run that stops the matrix is still recorded and counted against the budget.
     """
-    budget = Budget(config.budget_tokens, config.run_reserve_tokens)
+    budget = Budget(
+        config.budget_tokens, config.run_reserve_tokens,
+        cap_usd=config.budget_usd, reserve_usd=config.run_reserve_usd,
+    )
     results: list[RunResult] = []
     log = config.workdir / "results.jsonl"
     log.parent.mkdir(parents=True, exist_ok=True)
@@ -492,7 +518,7 @@ def run_matrix(
                     except (RateLimited, BudgetExhausted, AccountingError):
                         _record_stopped(config, task, condition, repeat, budget, results, log)
                         raise
-                    budget.spend(result.total_tokens)
+                    budget.spend(result.total_tokens, result.cost_usd)
                     results.append(result)
                     with log.open("a", encoding="utf-8") as handle:
                         handle.write(json.dumps(asdict(result)) + "\n")
@@ -510,7 +536,7 @@ def _record_stopped(
         return
     data = json.loads(saved.read_text(encoding="utf-8"))
     result = RunResult(**data)
-    budget.spend(result.total_tokens)
+    budget.spend(result.total_tokens, result.cost_usd)
     results.append(result)
     with log.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(data) + "\n")

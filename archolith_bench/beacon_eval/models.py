@@ -72,6 +72,8 @@ class RunResult:
     cache_write_tokens: int = 0
     #: Sum of OpenCode's own ``tokens.total`` per step, when it reports one.
     reported_total_tokens: int = 0
+    #: OpenCode's reported cost, summed over steps.
+    cost_usd: float = 0.0
 
     @property
     def total_tokens(self) -> int:

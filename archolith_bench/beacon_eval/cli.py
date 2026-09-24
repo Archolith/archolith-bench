@@ -31,12 +31,22 @@ def add_parser(subparsers: argparse._SubParsersAction) -> None:
     parser.add_argument("--conditions", default=",".join(CONDITIONS))
     parser.add_argument("--repeats", type=int, default=1)
     parser.add_argument("--model", default=DEFAULT_MODEL)
-    parser.add_argument("--budget-tokens", type=int, default=DEFAULT_BUDGET_TOKENS)
     parser.add_argument(
-        "--run-reserve-tokens",
-        type=int,
-        default=DEFAULT_RUN_RESERVE,
-        help="Tokens set aside per run; a run past it is killed and the matrix stops",
+        "--budget-tokens", type=int, default=None,
+        help=f"Token cap (default {DEFAULT_BUDGET_TOKENS:,}; none when --budget-usd is set)",
+    )
+    parser.add_argument(
+        "--run-reserve-tokens", type=int, default=None,
+        help=f"Tokens set aside per run; a run past it is killed and the matrix stops "
+        f"(default {DEFAULT_RUN_RESERVE:,}; none when --budget-usd is set)",
+    )
+    parser.add_argument(
+        "--budget-usd", type=float, default=None,
+        help="Dollar cap from OpenCode's per-step cost; runs with no cost data stop the matrix",
+    )
+    parser.add_argument(
+        "--run-reserve-usd", type=float, default=0.10,
+        help="Dollars set aside per run under --budget-usd; a run past it is killed",
     )
     parser.add_argument("--workdir", default="results/beacon-eval")
     parser.add_argument("--beacon-python", default=sys.executable)
@@ -74,13 +84,19 @@ def run(args: argparse.Namespace) -> int:
         print(f"  {task.repo}/{task.task_id} ({task.kind}){'' if task.reviewed else ' [unreviewed]'}")
     if args.action == "plan" or not tasks:
         return 0
+    unlimited = 10**15
+    dollars = args.budget_usd is not None
+    budget_tokens = args.budget_tokens or (unlimited if dollars else DEFAULT_BUDGET_TOKENS)
+    reserve_tokens = args.run_reserve_tokens or (unlimited if dollars else DEFAULT_RUN_RESERVE)
     config = RunnerConfig(
         workdir=Path(args.workdir),
         beacon_python=args.beacon_python,
         beacon_src=args.beacon_src,
         model=args.model,
-        budget_tokens=args.budget_tokens,
-        run_reserve_tokens=args.run_reserve_tokens,
+        budget_tokens=budget_tokens,
+        run_reserve_tokens=reserve_tokens,
+        budget_usd=args.budget_usd,
+        run_reserve_usd=args.run_reserve_usd,
         env_file=Path(args.env_file) if args.env_file else None,
     )
     results, stopped = run_matrix(config, pins, tasks, conditions, args.repeats)
@@ -91,7 +107,11 @@ def run(args: argparse.Namespace) -> int:
             "Model": args.model,
             "Conditions": ", ".join(conditions),
             "Repeats": str(args.repeats),
-            "Budget": f"{args.budget_tokens:,} tokens ({args.run_reserve_tokens:,} reserved per run)",
+            "Budget": (
+                f"${args.budget_usd:.2f} (${args.run_reserve_usd:.2f} reserved per run)"
+                if dollars
+                else f"{budget_tokens:,} tokens ({reserve_tokens:,} reserved per run)"
+            ),
             "Pins": "; ".join(f"{name} {pin.commit[:10]}" for name, pin in pins.items()),
         },
         stopped,

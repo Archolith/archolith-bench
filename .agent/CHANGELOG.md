@@ -44,6 +44,9 @@
 - `isolation.py`, `runner.py`, `cli.py`: `--env-file` passes `*_API_KEY` values to the OpenCode process
   only, so built-in providers (e.g. `openai/gpt-6-luna`) work without a config block; any key value
   echoed into a saved run file is redacted.
+- `runner.py`, `models.py`, `report.py`, `cli.py`: `--budget-usd` / `--run-reserve-usd` cap spend from
+  OpenCode's per-step cost (a run with no cost stops the matrix; token limits are off unless given);
+  the report shows total and median cost. Default model `openai/gpt-6-luna` (owner decision).
 
 ## 2026-09-23 - Beacon agent-task evaluation harness (P3 step 1)
 
