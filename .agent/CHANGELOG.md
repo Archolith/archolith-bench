@@ -5,7 +5,7 @@
 - `archolith_bench/beacon_eval/why_tasks/menhir/` (new): eight owner-approved "why" tasks (kind `why`)
   whose answers are in Menhir's recorded memory but not in the repository at `9432a60d`. Each gold
   point cites an episode uuid and a verbatim quote (`memory_citations`), verified against a read-only
-  copy of the restored graph. Kept outside `tasks/` so the default 20-task matrix is unchanged; the
+  copy of the restored graph. Kept outside `tasks/` so the default 20-task matrix is unchanged;
   `beacon-eval --task-set why` runs them (setups A, B, C score as-is; `point_recall` comes from
   `findings`). A memory-backed setup is not wired: Menhir's Beacon evidence provider carries
   structure only, no episodes.
