@@ -60,6 +60,9 @@
         "stage files by path",
         "explicit paths"
       ]
+    ],
+    "allowed_flags": [
+      "--repository"
     ]
   },
   "gold_citations": [

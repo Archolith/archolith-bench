@@ -14,15 +14,7 @@
       "src/menhir/core/runtime.py"
     ],
     "commands": [],
-    "guardrails": [
-      [
-        "no second runtime",
-        "not a second runtime",
-        "no second runtime owner"
-      ],
-      "MENHIR_BACKEND_URL",
-      "menhir serve"
-    ],
+    "guardrails": [],
     "verdict": "",
     "risky": [],
     "points": [

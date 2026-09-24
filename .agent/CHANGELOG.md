@@ -52,6 +52,8 @@
 - `scoring.py`: path cleanup strips only a leading `./` (it used to strip `.agent/` to `agent/`, failing
   every dot-folder citation) and drops a trailing "(note)"; `runner.py`, `cli.py`: `beacon-eval rescore`
   recomputes scores from saved answers with no model calls.
+- `scoring.py` (owner-approved): labelled entries ("Label: path") yield their path and grouped answers
+  are flattened; t5 gold allows `--repository`; t3 gold drops its guardrails (its points cover them).
 
 ## 2026-09-23 - Beacon agent-task evaluation harness (P3 step 1)
 

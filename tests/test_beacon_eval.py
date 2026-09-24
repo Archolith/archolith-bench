@@ -540,6 +540,17 @@ def test_a_trailing_note_after_a_path_still_matches(tmp_path: Path) -> None:
     assert (scores["doc_recall"], scores["file_recall"], scores["file_precision"]) == (1.0, 1.0, 0.5)
 
 
+def test_labelled_and_grouped_file_answers_still_match(tmp_path: Path) -> None:
+    gold = Gold(files=("scripts/core.py", "tests/test_core.py"))
+    labelled = {"files": ["Implementation: scripts/core.py", "Shared triage tests: `tests/test_core.py`"]}
+    grouped = {"files": {"source": ["scripts/core.py"], "tests": ["tests/test_core.py"]}}
+    for answer in (labelled, grouped):
+        scores = score(answer, gold, tmp_path)
+        assert (scores["file_recall"], scores["file_precision"]) == (1.0, 1.0)
+    # A sentence with a colon is not treated as a labelled path.
+    assert score({"files": ["Note: see the docs for details"]}, gold, tmp_path)["file_recall"] == 0.0
+
+
 def test_a_citation_without_lines_is_not_a_valid_location(tmp_path: Path) -> None:
     (tmp_path / "x.md").write_text("a\nb\n", encoding="utf-8")
     answer = {"citations": [{"path": "x.md"}, {"path": "x.md", "line_start": 2}]}

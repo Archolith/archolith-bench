@@ -26,6 +26,8 @@ def extract_answer(text: str) -> dict[str, Any] | None:
 
 
 _ANNOTATION = re.compile(r"\s+\(.*\)\s*$")
+# A short label, a colon and a space, then something that looks like a path (has "/" or ".").
+_LABEL = re.compile(r"^[^:/`]{1,60}:\s+(`?[^\s`]*[/.][^\s`]*`?)$")
 
 
 def _norm_path(value: str) -> str:
@@ -34,6 +36,10 @@ def _norm_path(value: str) -> str:
     Dot-directories such as ``.agent/`` must survive (``lstrip("./")`` used to eat them).
     """
     path = _ANNOTATION.sub("", value.strip()).strip().strip("`").replace("\\", "/")
+    # "Implementation: scripts/x.py" -> "scripts/x.py" (a label before a path-like value).
+    labelled = _LABEL.match(path)
+    if labelled:
+        path = labelled.group(1).strip().strip("`")
     while path.startswith("./"):
         path = path[2:]
     return path.lower()
@@ -43,11 +49,19 @@ def _norm_command(value: str) -> str:
     return " ".join(value.strip().strip("`").split()).lower()
 
 
+def _flatten(value: Any) -> list[str]:
+    if isinstance(value, str | int | float) and not isinstance(value, bool):
+        return [str(value)]
+    if isinstance(value, dict):
+        return [item for inner in value.values() for item in _flatten(inner)]
+    if isinstance(value, list | tuple):
+        return [item for inner in value for item in _flatten(inner)]
+    return []
+
+
 def _as_list(answer: dict[str, Any], key: str) -> list[str]:
-    value = answer.get(key) or []
-    if isinstance(value, str):
-        return [value]
-    return [str(item) for item in value if isinstance(item, str | int | float)]
+    """Answer entries as strings; grouped answers ({"source": [...], "tests": [...]}) are flattened."""
+    return _flatten(answer.get(key) or [])
 
 
 def _command_tokens(value: str) -> list[str]:
