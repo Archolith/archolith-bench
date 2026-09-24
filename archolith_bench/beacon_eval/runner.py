@@ -602,10 +602,13 @@ def run_matrix(
     tasks: list[Task],
     conditions: tuple[str, ...] = DEFAULT_CONDITIONS,
     repeats: int = 1,
+    resume: bool = False,
 ) -> tuple[list[RunResult], str]:
     """Run every task x condition x repeat; returns results and why it stopped ("" = done).
 
-    A run that stops the matrix is still recorded and counted against the budget.
+    A run that stops the matrix is still recorded and counted against the budget. With
+    *resume*, a run whose saved ``result.json`` has an answer and no error is reused (after a
+    killed matrix); a folder without one is run again from scratch.
     """
     budget = Budget(
         config.budget_tokens, config.run_reserve_tokens,
@@ -619,10 +622,26 @@ def run_matrix(
             return results, str(exc)
     log = config.workdir / "results.jsonl"
     log.parent.mkdir(parents=True, exist_ok=True)
+    logged: set[tuple[str, str, str, int]] = set()
+    if resume and log.is_file():
+        for line in log.read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                row = json.loads(line)
+                logged.add((row["repo"], row["task_id"], row["condition"], int(row["repeat"])))
     try:
         for repeat in range(1, repeats + 1):
             for task in tasks:
                 for condition in conditions:
+                    if resume:
+                        saved = _completed_run(config, task, condition, repeat)
+                        if saved is not None:
+                            # Reused, not rerun: its spend still counts against the cap.
+                            budget.spend(saved.total_tokens, saved.cost_usd)
+                            results.append(saved)
+                            if (saved.repo, saved.task_id, saved.condition, saved.repeat) not in logged:
+                                with log.open("a", encoding="utf-8") as handle:
+                                    handle.write(json.dumps(asdict(saved)) + "\n")
+                            continue
                     budget.check()
                     try:
                         result = run_one(config, pins[task.repo], task, condition, repeat)
@@ -636,6 +655,14 @@ def run_matrix(
     except (BudgetExhausted, RateLimited, AccountingError) as exc:
         return results, str(exc)
     return results, ""
+
+
+def _completed_run(config: RunnerConfig, task: Task, condition: str, repeat: int) -> RunResult | None:
+    saved = config.workdir / "runs" / f"{task.repo}-{task.task_id}-{condition}-{repeat}" / "result.json"
+    if not saved.is_file():
+        return None
+    result = RunResult(**json.loads(saved.read_text(encoding="utf-8")))
+    return result if result.answer is not None and not result.error else None
 
 
 def _record_stopped(

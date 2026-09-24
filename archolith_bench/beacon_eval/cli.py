@@ -80,6 +80,10 @@ def add_parser(subparsers: argparse._SubParsersAction) -> None:
         help=".env whose *_API_KEY values are passed to OpenCode only (for built-in providers)",
     )
     parser.add_argument(
+        "--resume", action="store_true",
+        help="run: reuse saved runs that have an answer and no error (after a killed matrix)",
+    )
+    parser.add_argument(
         "--judge-model", default=DEFAULT_JUDGE_MODEL,
         help="judge: OpenAI model grading each gold point of saved answers (key from --env-file)",
     )
@@ -153,7 +157,7 @@ def run(args: argparse.Namespace) -> int:
     if "M" in conditions and not (config.memory_url and config.memory_key):
         print("condition M needs --memory-url and --memory-key-file", file=sys.stderr)
         return 2
-    results, stopped = run_matrix(config, pins, tasks, conditions, args.repeats)
+    results, stopped = run_matrix(config, pins, tasks, conditions, args.repeats, resume=args.resume)
     report = render(
         results,
         {

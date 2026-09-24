@@ -856,3 +856,42 @@ def test_judge_call_omits_temperature_for_reasoning_models(monkeypatch: pytest.M
     assert "temperature" not in sent[0] and sent[1]["temperature"] == 0
     assert sent[0]["model"] == "gpt-6-luna" and usage == {"prompt_tokens": 3, "completion_tokens": 4}
 
+
+def test_resume_reuses_completed_runs_counts_their_spend_and_logs_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dataclasses import asdict
+
+    from archolith_bench.beacon_eval.models import RunResult
+
+    task = Task(repo="r", task_id="t", kind="why", prompt="q", reviewed=True, gold=Gold())
+    done = RunResult(repo="r", task_id="t", condition="A", repeat=1, answer={"findings": []},
+                     final_text="", cost_usd=0.46)
+    failed = RunResult(repo="r", task_id="t", condition="B", repeat=1, answer=None,
+                       final_text="", error="exit code 1", cost_usd=0.01)
+    for result in (done, failed):
+        run = tmp_path / "runs" / f"r-t-{result.condition}-1"
+        run.mkdir(parents=True)
+        (run / "result.json").write_text(json.dumps(asdict(done if result is done else failed)),
+                                         encoding="utf-8")
+    (tmp_path / "results.jsonl").write_text(json.dumps(asdict(done)) + "\n", encoding="utf-8")
+    ran: list[str] = []
+
+    def fake_run_one(config, pin, task, condition, repeat):
+        ran.append(condition)
+        return RunResult(repo="r", task_id="t", condition=condition, repeat=repeat,
+                         answer={"findings": []}, final_text="", cost_usd=0.46)
+
+    monkeypatch.setattr(runner_mod, "run_one", fake_run_one)
+    config = RunnerConfig(workdir=tmp_path, beacon_python=sys.executable, opencode_cmd=["x"],
+                          budget_tokens=None, run_reserve_tokens=None, budget_usd=1.00,
+                          run_reserve_usd=0.10)
+    results, stopped = run_matrix(config, {"r": RepoPin("r", "", "0" * 40)}, [task],
+                                  ("A", "B", "C"), resume=True)
+    # A is reused; B (error) is rerun; C would pass the $1 cap: $0.92 spent plus the $0.10 reserve.
+    assert ran == ["B"] and [r.condition for r in results] == ["A", "B"]
+    assert "cap" in stopped.lower() or "budget" in stopped.lower() or stopped
+    logged = [json.loads(line)["condition"] for line in
+              (tmp_path / "results.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert logged == ["A", "B"]
+

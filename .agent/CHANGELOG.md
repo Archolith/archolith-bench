@@ -1,5 +1,12 @@
 # archolith-bench Changelog
 
+## 2026-09-24 - Beacon eval: resume a killed matrix
+
+- `runner.py`, `cli.py`: `beacon-eval run --resume` reuses saved runs that have an answer and no
+  error, counts their cost against the cap, and adds them to `results.jsonl` once; other runs are
+  run from scratch. Needed after the why matrix was killed for low memory at 44 of 48 runs.
+- `tests/test_beacon_eval.py`: reuse, rerun of a failed run, cap accounting and single logging.
+
 ## 2026-09-24 - Beacon eval: LLM judge for "why" points (owner decision)
 
 - `archolith_bench/beacon_eval/judge.py` (new), `cli.py`, `report.py`: `beacon-eval judge` adds
