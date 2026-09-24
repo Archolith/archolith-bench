@@ -750,3 +750,88 @@ def test_condition_m_without_memory_settings_is_refused(tmp_path: Path) -> None:
     config = RunnerConfig(workdir=tmp_path, beacon_python=sys.executable, opencode_cmd=["x"])
     with pytest.raises(ValueError, match="memory_url"):
         runner_mod.run_one(config, RepoPin("r", "", "0" * 40), task, "M", 1)
+
+
+def _judge_fixture(tmp_path: Path, findings: list[str]) -> tuple[Path, Path]:
+    from dataclasses import asdict
+
+    from archolith_bench.beacon_eval.models import RunResult
+
+    task_root = tmp_path / "why_tasks"
+    (task_root / "r").mkdir(parents=True)
+    (task_root / "r" / "t.json").write_text(json.dumps({
+        "repo": "r", "task_id": "t", "kind": "why", "prompt": "Why was X rejected?",
+        "gold": {"points": [["dedupe dominates cost", "dedupe 62%"], ["torch image footprint"]]},
+        "memory_citations": [
+            {"item": "dedupe dominates cost", "episode_uuid": "e1", "quote": "dedupe is 62% of input"},
+        ],
+    }), encoding="utf-8")
+    workdir = tmp_path / "work"
+    run = workdir / "runs" / "r-t-M-1"
+    run.mkdir(parents=True)
+    result = RunResult(repo="r", task_id="t", condition="M", repeat=1,
+                       answer={"findings": findings, "plan": []}, final_text="")
+    (run / "result.json").write_text(json.dumps(asdict(result)), encoding="utf-8")
+    return workdir, task_root
+
+
+def _fake_call(replies: list[dict], seen: list[str]):
+    def call(messages):
+        seen.append(messages[-1]["content"])
+        return json.dumps(replies[len(seen) - 1]), {"prompt_tokens": 1000, "completion_tokens": 50}
+    return call
+
+
+def test_judge_counts_only_verdicts_whose_evidence_is_in_the_answer(tmp_path: Path) -> None:
+    from archolith_bench.beacon_eval.judge import judge_workdir
+
+    workdir, task_root = _judge_fixture(
+        tmp_path, ["About 62% of paid input went to deduplication, 17% to extraction."]
+    )
+    seen: list[str] = []
+    replies = [
+        {"met": True, "evidence": "62% of paid input went to deduplication", "reason": "same"},
+        {"met": True, "evidence": "PyTorch would bloat the image", "reason": "invented"},
+    ]
+    scores, spent = judge_workdir(workdir, task_root, _fake_call(replies, seen))
+    assert scores == {"r-t-M-1": 0.5}
+    cached = json.loads((workdir / "runs" / "r-t-M-1" / "judged.json").read_text(encoding="utf-8"))
+    assert [p["met"] for p in cached["points"]] == [True, False]
+    assert [p["raw_met"] for p in cached["points"]] == [True, True]
+    assert spent > 0
+    # The judge sees the question, point, reference and answer, never the run or condition.
+    assert "dedupe is 62% of input" in seen[0] and "Why was X rejected?" in seen[0]
+    assert "r-t-M-1" not in seen[0] and "condition" not in seen[0].lower()
+
+
+def test_judge_reuses_cached_verdicts_without_calls(tmp_path: Path) -> None:
+    from archolith_bench.beacon_eval.judge import judge_workdir
+
+    workdir, task_root = _judge_fixture(tmp_path, ["deduplication dominated cost at 62 percent"])
+    seen: list[str] = []
+    replies = [{"met": False, "evidence": "", "reason": ""}] * 2
+    judge_workdir(workdir, task_root, _fake_call(replies, seen))
+    assert len(seen) == 2
+    scores, spent = judge_workdir(workdir, task_root, _fake_call(replies, seen))
+    assert len(seen) == 2 and spent == 0.0 and scores == {"r-t-M-1": 0.0}
+
+
+def test_judge_stops_on_rate_limit_and_before_passing_the_cap(tmp_path: Path) -> None:
+    from archolith_bench.beacon_eval.judge import (
+        JudgeBudgetExhausted,
+        JudgeRateLimited,
+        judge_workdir,
+    )
+
+    workdir, task_root = _judge_fixture(tmp_path, ["something"])
+
+    def limited(messages):
+        raise JudgeRateLimited("judge rate limited (HTTP 429)")
+
+    with pytest.raises(JudgeRateLimited):
+        judge_workdir(workdir, task_root, limited)
+    assert not (workdir / "runs" / "r-t-M-1" / "judged.json").exists()
+    seen: list[str] = []
+    with pytest.raises(JudgeBudgetExhausted):
+        judge_workdir(workdir, task_root, _fake_call([], seen), budget_usd=0.001)
+    assert seen == []

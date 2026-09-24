@@ -1,15 +1,24 @@
-"""``archolith-bench beacon-eval plan|run``."""
+"""``archolith-bench beacon-eval plan|run|rescore|judge``."""
 
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from datetime import date
 from pathlib import Path
 
 from archolith_bench.beacon_eval import CONDITIONS, DEFAULT_CONDITIONS
-from archolith_bench.beacon_eval.models import load_repos, load_tasks
-from archolith_bench.beacon_eval.report import render
+from archolith_bench.beacon_eval.isolation import load_api_keys
+from archolith_bench.beacon_eval.judge import (
+    DEFAULT_JUDGE_MODEL,
+    JudgeBudgetExhausted,
+    JudgeRateLimited,
+    judge_workdir,
+    openai_call,
+)
+from archolith_bench.beacon_eval.models import RunResult, load_repos, load_tasks
+from archolith_bench.beacon_eval.report import METRICS, render
 from archolith_bench.beacon_eval.runner import (
     DEFAULT_BUDGET_TOKENS,
     DEFAULT_MODEL,
@@ -26,7 +35,7 @@ def add_parser(subparsers: argparse._SubParsersAction) -> None:
     parser = subparsers.add_parser(
         "beacon-eval", help="Beacon agent-task evaluation (A: docs, B: +Beacon MCP, C: +pasted)"
     )
-    parser.add_argument("action", choices=("plan", "run", "rescore"))
+    parser.add_argument("action", choices=("plan", "run", "rescore", "judge"))
     parser.add_argument("--repos", default="", help="Comma-separated repo names (default: all)")
     parser.add_argument("--tasks", default="", help="Comma-separated task ids (default: all)")
     parser.add_argument(
@@ -71,6 +80,14 @@ def add_parser(subparsers: argparse._SubParsersAction) -> None:
         help=".env whose *_API_KEY values are passed to OpenCode only (for built-in providers)",
     )
     parser.add_argument(
+        "--judge-model", default=DEFAULT_JUDGE_MODEL,
+        help="judge: OpenAI model grading each gold point of saved answers (key from --env-file)",
+    )
+    parser.add_argument(
+        "--judge-budget-usd", type=float, default=0.10,
+        help="judge: dollar cap for judge calls (cached verdicts cost nothing)",
+    )
+    parser.add_argument(
         "--memory-url", default="",
         help="Condition M: Menhir remote MCP URL (e.g. http://127.0.0.1:8795/mcp-http)",
     )
@@ -110,6 +127,8 @@ def run(args: argparse.Namespace) -> int:
         )
         print(f"rescored {len(rescored)} run(s); report: {target}")
         return 0
+    if args.action == "judge":
+        return _judge(args, task_root)
     dollars = args.budget_usd is not None
     # In dollar mode token limits are off (None) unless given; placeholders would trip the check.
     budget_tokens = args.budget_tokens or (None if dollars else DEFAULT_BUDGET_TOKENS)
@@ -156,3 +175,49 @@ def run(args: argparse.Namespace) -> int:
     target.write_text(report, encoding="utf-8")
     print(f"report: {target}" + (f" (stopped: {stopped})" if stopped else ""))
     return 1 if stopped else 0
+
+
+def _judge(args: argparse.Namespace, task_root: Path) -> int:
+    """Add ``point_recall_judged`` to saved runs (no agent runs) and write report-judged.md."""
+    if not args.env_file:
+        print("judge needs --env-file with OPENAI_API_KEY", file=sys.stderr)
+        return 2
+    key = load_api_keys(Path(args.env_file)).get("OPENAI_API_KEY")
+    if not key:
+        print("no OPENAI_API_KEY in --env-file", file=sys.stderr)
+        return 2
+    workdir = Path(args.workdir)
+    stopped = ""
+    try:
+        judged, spent = judge_workdir(
+            workdir, task_root, openai_call(key, args.judge_model), args.judge_model,
+            args.judge_budget_usd,
+        )
+    except (JudgeRateLimited, JudgeBudgetExhausted) as exc:
+        judged, spent, stopped = {}, float(getattr(exc, "spent", 0.0)), str(exc)
+    results = []
+    for path in sorted((workdir / "runs").glob("*/result.json")):
+        result = RunResult(**json.loads(path.read_text(encoding="utf-8")))
+        cache = path.parent / "judged.json"
+        if cache.is_file():
+            result.scores["point_recall_judged"] = json.loads(cache.read_text(encoding="utf-8"))[
+                "point_recall_judged"
+            ]
+        results.append(result)
+    metrics = tuple(
+        m for pair in ((m, "point_recall_judged") if m == "point_recall" else (m,) for m in METRICS)
+        for m in pair
+    )
+    target = Path(args.report) if args.report else workdir / "report-judged.md"
+    target.write_text(
+        render(
+            results,
+            {"Date": date.today().isoformat(), "Judge": f"{args.judge_model} (${spent:.4f} this call)"},
+            stopped,
+            metrics,
+        ),
+        encoding="utf-8",
+    )
+    print(f"judged {len(judged)} run(s) for ${spent:.4f}; report: {target}"
+          + (f" (stopped: {stopped})" if stopped else ""))
+    return 0 if not stopped else 1

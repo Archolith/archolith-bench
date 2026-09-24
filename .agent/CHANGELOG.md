@@ -1,5 +1,16 @@
 # archolith-bench Changelog
 
+## 2026-09-24 - Beacon eval: LLM judge for "why" points (owner decision)
+
+- `archolith_bench/beacon_eval/judge.py` (new), `cli.py`, `report.py`: `beacon-eval judge` adds
+  `point_recall_judged` beside the deterministic `point_recall` (which is unchanged). Per gold point,
+  a small OpenAI model (default `gpt-4o-mini`) sees the question, the point, its cited memory quotes
+  and the answer's findings and plan, never the condition or run. A "met" verdict counts only when
+  its evidence is copied from the answer. Verdicts are cached per run and answer; a 429 stops without
+  retry and `--judge-budget-usd` (default $0.10) is checked before each call. Writes
+  `report-judged.md`. Reason: word-set matching missed correct explanations worded differently.
+- `tests/test_beacon_eval.py`: grounded verdicts, cache reuse, rate-limit and cap stops.
+
 ## 2026-09-24 - Beacon eval: condition M (Menhir memory MCP)
 
 - `archolith_bench/beacon_eval/`: opt-in condition `M` gives the agent A's tools plus one remote

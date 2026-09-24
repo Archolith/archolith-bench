@@ -26,7 +26,10 @@ def _mean(values: list[float]) -> str:
     return f"{statistics.fmean(values):.2f}" if values else "-"
 
 
-def render(results: list[RunResult], header: dict[str, str], stopped: str = "") -> str:
+def render(
+    results: list[RunResult], header: dict[str, str], stopped: str = "",
+    metrics: tuple[str, ...] = METRICS,
+) -> str:
     by_condition: dict[str, list[RunResult]] = defaultdict(list)
     for result in results:
         by_condition[result.condition].append(result)
@@ -37,12 +40,12 @@ def render(results: list[RunResult], header: dict[str, str], stopped: str = "") 
     if stopped:
         lines += [f"- **Stopped early:** {stopped}"]
     lines += ["", "## By condition", ""]
-    lines += ["| Condition | Runs | " + " | ".join(METRICS) + " | median tokens | median cost |"]
-    lines += ["|---" * (len(METRICS) + 4) + "|"]
+    lines += ["| Condition | Runs | " + " | ".join(metrics) + " | median tokens | median cost |"]
+    lines += ["|---" * (len(metrics) + 4) + "|"]
     for condition in sorted(by_condition):
         runs = by_condition[condition]
         means = [
-            _mean([r.scores[m] for r in runs if m in r.scores]) for m in METRICS
+            _mean([r.scores[m] for r in runs if m in r.scores]) for m in metrics
         ]
         tokens = statistics.median([r.total_tokens for r in runs]) if runs else 0
         cost = statistics.median([r.cost_usd for r in runs]) if runs else 0.0
