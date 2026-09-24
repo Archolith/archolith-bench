@@ -41,6 +41,7 @@ def minimal_config(
     model: str,
     mcp: dict[str, Any] | None = None,
     builtin_provider: bool = False,
+    disabled_tools: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     """``$schema``, ``model`` and the model's provider only, plus *mcp* when given.
 
@@ -59,6 +60,9 @@ def minimal_config(
         config["$schema"] = real["$schema"]
     if mcp:
         config["mcp"] = mcp
+    if disabled_tools:
+        # Named, not "*": a wildcard would also hide the MCP server's tools.
+        config["tools"] = {name: False for name in disabled_tools}
     return config
 
 
@@ -100,9 +104,10 @@ def isolated_config_home(
     model: str,
     mcp: dict[str, Any] | None = None,
     builtin_provider: bool = False,
+    disabled_tools: tuple[str, ...] = (),
 ) -> Iterator[Path]:
     """Yield a temp ``XDG_CONFIG_HOME`` for one run; removed on exit."""
-    config = minimal_config(source_config, model, mcp, builtin_provider)
+    config = minimal_config(source_config, model, mcp, builtin_provider, disabled_tools)
     home = Path(tempfile.mkdtemp(prefix="beacon-eval-oc-"))
     try:
         (home / "opencode").mkdir()

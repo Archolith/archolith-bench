@@ -74,6 +74,8 @@ class RunResult:
     reported_total_tokens: int = 0
     #: OpenCode's reported cost, summed over steps.
     cost_usd: float = 0.0
+    #: Times the session was resumed after OpenCode exited following a tool-calls step.
+    resumes: int = 0
 
     @property
     def total_tokens(self) -> int:

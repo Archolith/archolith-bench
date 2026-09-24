@@ -54,6 +54,9 @@
   recomputes scores from saved answers with no model calls.
 - `scoring.py` (owner-approved): labelled entries ("Label: path") yield their path and grouped answers
   are flattened; t5 gold allows `--repository`; t3 gold drops its guardrails (its points cover them).
+- `runner.py`, `isolation.py`, `__init__.py`, `cli.py`, `models.py`: a session OpenCode ends right after a
+  tool-calls step (7/45 Luna runs) is resumed with `--session` up to twice (`resumes` recorded); new
+  opt-in condition D runs Beacon MCP with every built-in tool off.
 
 ## 2026-09-23 - Beacon agent-task evaluation harness (P3 step 1)
 

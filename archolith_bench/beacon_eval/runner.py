@@ -25,7 +25,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import IO, Any
 
-from archolith_bench.beacon_eval import CONDITIONS
+from archolith_bench.beacon_eval import CONDITIONS, DEFAULT_CONDITIONS
 from archolith_bench.beacon_eval.isolation import (
     beacon_server,
     default_config_source,
@@ -41,6 +41,15 @@ DEFAULT_MODEL = "openai/gpt-6-luna"
 DEFAULT_BUDGET_TOKENS = 20_000_000
 #: Tokens set aside for each run; a run that passes it is killed and stops the matrix.
 DEFAULT_RUN_RESERVE = 400_000
+
+#: OpenCode's built-in tools, switched off in condition D (Beacon MCP only).
+BUILTIN_TOOLS = (
+    "bash", "codesearch", "edit", "glob", "grep", "list", "lsp", "patch", "read", "skill",
+    "task", "todoread", "todowrite", "webfetch", "websearch", "write",
+)
+#: Resumes of a session that OpenCode ended right after a tool-calls step (see run_one).
+MAX_RESUMES = 2
+RESUME_PROMPT = "Continue. When you are done, give the final answer in the required JSON block."
 
 #: Same line for every condition, so the only intended difference is the added context.
 TOOL_NOTE = "Use whatever tools are available to you."
@@ -233,6 +242,8 @@ class EventLog:
     cost_usd: float = 0.0
     cost_events: int = 0
     tool_calls: int = 0
+    session_id: str = ""
+    last_step_reason: str = ""
     errors: list[str] = field(default_factory=list)
     unknown_types: set[str] = field(default_factory=set)
     rate_limited: bool = False
@@ -256,6 +267,8 @@ class EventLog:
         if not isinstance(event, dict):
             return
         kind = event.get("type")
+        if isinstance(event.get("sessionID"), str) and not self.session_id:
+            self.session_id = event["sessionID"]
         raw_part = event.get("part")
         part: dict[str, Any] = raw_part if isinstance(raw_part, dict) else {}
         if kind == "error" or "error" in event:
@@ -269,6 +282,7 @@ class EventLog:
             self.tool_calls += 1
         elif kind == "step_finish":
             self._add_usage(part.get("tokens"))
+            self.last_step_reason = str(part.get("reason") or "")
             if isinstance(part.get("cost"), int | float):
                 self.cost_usd += float(part["cost"])
                 self.cost_events += 1
@@ -333,13 +347,16 @@ def _pump(stream: IO[str], tag: str, sink: queue.Queue[tuple[str, str | None]]) 
 def stream_opencode(
     cmd: list[str], prompt: str, cwd: Path, env: dict[str, str], run_dir: Path,
     reserve: int | None, timeout_s: float, reserve_usd: float | None = None,
+    log: EventLog | None = None,
 ) -> tuple[EventLog, str, int | None]:
     """Run OpenCode, feeding events as they arrive; returns (log, stop reason, exit code).
 
     The raw streams are kept in ``events.jsonl`` and ``stderr.log``. Stop reasons:
-    "" (finished), "rate_limited", "over_reserve", "timeout".
+    "" (finished), "rate_limited", "over_reserve", "timeout". Passing *log* continues it
+    (a resumed session): limits apply to the run's running totals and the files are appended.
     """
-    log = EventLog()
+    mode = "a" if log is not None else "w"
+    log = log if log is not None else EventLog()
     proc = subprocess.Popen(
         cmd, cwd=cwd, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
         stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace",
@@ -355,9 +372,9 @@ def stream_opencode(
         threading.Thread(target=_pump, args=(stream, tag, lines), daemon=True).start()
     reason, open_streams = "", 2
     deadline = time.monotonic() + timeout_s
-    with (run_dir / "events.jsonl").open("w", encoding="utf-8") as events, (
+    with (run_dir / "events.jsonl").open(mode, encoding="utf-8") as events, (
         run_dir / "stderr.log"
-    ).open("w", encoding="utf-8") as errors:
+    ).open(mode, encoding="utf-8") as errors:
         while open_streams:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
@@ -406,7 +423,7 @@ def run_one(
     run_dir = (config.workdir / "runs" / f"{task.repo}-{task.task_id}-{condition}-{repeat}").resolve()
     checkout = export_commit(pin, run_dir / "checkout", config.workdir / "cache")
     seal_checkout(checkout)
-    manifest = build_beacon(config, pin).resolve() if condition in ("B", "C") else None
+    manifest = build_beacon(config, pin).resolve() if condition in ("B", "C", "D") else None
     prompt = build_prompt(
         task,
         condition,
@@ -415,26 +432,44 @@ def run_one(
     (run_dir / "prompt.txt").write_text(prompt, encoding="utf-8")
     mcp = (
         beacon_server(config.beacon_python, manifest, config.beacon_src)
-        if condition == "B" and manifest is not None
+        if condition in ("B", "D") and manifest is not None
         else None
     )
+    disabled = BUILTIN_TOOLS if condition == "D" else ()
     # --title skips OpenCode's title-generation request, whose tokens no event reports.
     cmd = [*config.opencode_cmd, "run", "--pure", "--print-logs", "--title", "beacon-eval",
            "-m", config.model, "--format", "json"]
     started = time.monotonic()
     keys = load_api_keys(config.env_file) if config.env_file else {}
     with isolated_config_home(
-        config.config_source or default_config_source(), config.model, mcp, builtin_provider=bool(keys)
+        config.config_source or default_config_source(), config.model, mcp,
+        builtin_provider=bool(keys), disabled_tools=disabled,
     ) as home:
         env = isolated_env(os.environ, home)
         env.update(keys)
         # An inherited PWD (Git Bash, MSYS, most shells) may root OpenCode in the
         # caller's repo instead of the checkout; the fake-provider check exercises this.
         env["PWD"] = str(checkout)
+        reserve_usd = config.run_reserve_usd if config.budget_usd is not None else None
         log, reason, code = stream_opencode(
             cmd, prompt, checkout, env, run_dir, config.run_reserve_tokens, config.timeout_s,
-            config.run_reserve_usd if config.budget_usd is not None else None,
+            reserve_usd,
         )
+        # OpenCode's run mode sometimes exits right after a tool-calls step, before the
+        # model's next turn (7/45 Luna runs). Resume the same session so no setup loses it.
+        resumes = 0
+        while (
+            not reason
+            and resumes < MAX_RESUMES
+            and log.last_step_reason == "tool-calls"
+            and log.session_id
+            and extract_answer("\n".join(log.texts)) is None
+        ):
+            resumes += 1
+            log, reason, code = stream_opencode(
+                [*cmd, "--session", log.session_id], RESUME_PROMPT, checkout, env, run_dir,
+                config.run_reserve_tokens, config.timeout_s, reserve_usd, log=log,
+            )
     text = "\n".join(log.texts)
     answer = extract_answer(text)
     error = reason or ("; ".join(log.errors) if log.errors else "")
@@ -453,6 +488,7 @@ def run_one(
         cache_write_tokens=log.cache_write_tokens,
         reported_total_tokens=log.reported_total_tokens,
         cost_usd=round(log.cost_usd, 6),
+        resumes=resumes,
         tool_calls=log.tool_calls,
         seconds=round(time.monotonic() - started, 1),
         error=error[:500],
@@ -525,7 +561,7 @@ def run_matrix(
     config: RunnerConfig,
     pins: dict[str, RepoPin],
     tasks: list[Task],
-    conditions: tuple[str, ...] = CONDITIONS,
+    conditions: tuple[str, ...] = DEFAULT_CONDITIONS,
     repeats: int = 1,
 ) -> tuple[list[RunResult], str]:
     """Run every task x condition x repeat; returns results and why it stopped ("" = done).

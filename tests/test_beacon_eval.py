@@ -212,6 +212,14 @@ def test_isolated_env_drops_opencode_overrides(tmp_path: Path) -> None:
 STUB = r"""
 import json, os, sys
 prompt = sys.stdin.read()
+resumed = "--session" in sys.argv
+if not resumed and "EARLY" in prompt:
+    open(".stub_early", "w").write("always" if "ALWAYS_EARLY" in prompt else "once")
+early_mode = open(".stub_early").read() if os.path.exists(".stub_early") else ""
+if (not resumed and early_mode) or (resumed and early_mode == "always"):
+    print(json.dumps({"type": "tool_use", "sessionID": "ses_1", "part": {"type": "tool", "tool": "read"}}))
+    print(json.dumps({"type": "step_finish", "sessionID": "ses_1", "part": {"reason": "tool-calls", "tokens": {"input": 500, "output": 10}, "cost": 0.01}}))
+    sys.exit(0)
 if "ECHO_KEY" in prompt:
     print("request failed for key " + os.environ.get("OPENAI_API_KEY", ""), file=sys.stderr)
 home = os.environ.get("XDG_CONFIG_HOME", "")
@@ -230,6 +238,8 @@ if "BIG" in prompt:
 record = {
     "mcp": sorted(config.get("mcp", {})),
     "has_openai_key": bool(os.environ.get("OPENAI_API_KEY")),
+    "tools_off": sorted(k for k, v in config.get("tools", {}).items() if v is False),
+    "resumed": resumed,
     "beacon_manifest": config.get("mcp", {}).get("beacon", {}).get("command", [""])[-1],
     "config_keys": sorted(config),
     "opencode_vars": sorted(k for k in os.environ if k.startswith("OPENCODE_")),
@@ -420,6 +430,43 @@ def test_rescore_recomputes_scores_from_saved_answers(harness) -> None:
     assert len(results) == 1 and results[0].scores["doc_recall"] == 1.0 != original["doc_recall"]
     assert json.loads(saved.read_text(encoding="utf-8"))["scores"] == results[0].scores
     assert len((config.workdir / "results.jsonl").read_text(encoding="utf-8").splitlines()) == 1
+
+
+def test_a_session_that_exits_after_tool_calls_is_resumed(harness) -> None:
+    config, pin = harness
+    task = Task(repo="demo", task_id="early", kind="k", prompt="Find docs. EARLY", gold=GOLD)
+    results, stopped = run_matrix(config, {"demo": pin}, [task], ("A",))
+    result = results[0]
+    assert stopped == "" and result.resumes == 1
+    assert result.answer is not None and result.answer["record"]["resumed"]
+    assert result.total_tokens == 1610 and result.tool_calls == 2  # both sessions counted
+    events = (config.workdir / "runs" / "demo-early-A-1" / "events.jsonl").read_text(encoding="utf-8")
+    assert events.count("step_finish") == 2  # the resumed session appended, not overwrote
+
+
+def test_resumes_stop_after_the_limit(harness) -> None:
+    config, pin = harness
+    task = Task(repo="demo", task_id="never", kind="k", prompt="EARLY ALWAYS_EARLY", gold=GOLD)
+    results, _ = run_matrix(config, {"demo": pin}, [task], ("A",))
+    assert results[0].resumes == 2 and results[0].answer is None
+
+
+def test_condition_d_has_beacon_and_no_builtin_tools(harness) -> None:
+    config, pin = harness
+    task = Task(repo="demo", task_id="d", kind="k", prompt="Find docs.", gold=GOLD)
+    results, stopped = run_matrix(config, {"demo": pin}, [task], ("A", "D"))
+    records = {r.condition: r.answer["record"] for r in results}
+    assert stopped == ""
+    assert records["D"]["mcp"] == ["beacon"] and records["A"]["mcp"] == []
+    assert records["A"]["tools_off"] == []
+    assert {"read", "grep", "glob", "bash", "write", "edit", "webfetch"} <= set(records["D"]["tools_off"])
+    assert not records["D"]["pasted"]
+
+
+def test_d_is_opt_in() -> None:
+    from archolith_bench.beacon_eval import CONDITIONS, DEFAULT_CONDITIONS
+
+    assert "D" in CONDITIONS and "D" not in DEFAULT_CONDITIONS
 
 
 def test_matrix_stops_at_the_budget(harness) -> None:

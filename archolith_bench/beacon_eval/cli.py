@@ -7,7 +7,7 @@ import sys
 from datetime import date
 from pathlib import Path
 
-from archolith_bench.beacon_eval import CONDITIONS
+from archolith_bench.beacon_eval import CONDITIONS, DEFAULT_CONDITIONS
 from archolith_bench.beacon_eval.models import load_repos, load_tasks
 from archolith_bench.beacon_eval.report import render
 from archolith_bench.beacon_eval.runner import (
@@ -29,7 +29,10 @@ def add_parser(subparsers: argparse._SubParsersAction) -> None:
     parser.add_argument("action", choices=("plan", "run", "rescore"))
     parser.add_argument("--repos", default="", help="Comma-separated repo names (default: all)")
     parser.add_argument("--tasks", default="", help="Comma-separated task ids (default: all)")
-    parser.add_argument("--conditions", default=",".join(CONDITIONS))
+    parser.add_argument(
+        "--conditions", default=",".join(DEFAULT_CONDITIONS),
+        help="A, B, C by default; D (Beacon MCP only, built-in tools off) is opt-in",
+    )
     parser.add_argument("--repeats", type=int, default=1)
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument(
