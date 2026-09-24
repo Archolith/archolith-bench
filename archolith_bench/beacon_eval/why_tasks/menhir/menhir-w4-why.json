@@ -21,19 +21,6 @@
         "latent API trap",
         "entity flag scope ignored",
         "flagging an entity does nothing"
-      ],
-      [
-        "entities become decay eligible",
-        "decay merge eligible",
-        "degrading recall on protected memories",
-        "lose decay protection",
-        "become eligible for merge"
-      ],
-      [
-        "propagate retention only",
-        "never propagate bootstrap_scope",
-        "retention without bootstrap scope",
-        "stop forwarding bootstrap_scope"
       ]
     ],
     "verdict": "",
@@ -61,19 +48,7 @@
       "episode_uuid": "bc95f6b6-05da-4bff-8d7a-85a4581eaeee",
       "created_at": "2026-08-20T22:25:14.102399Z",
       "quote": "label-filter reads to :Episodic only -- makes flag_memory(entity_uuid, bootstrap_scope=...) a silent no-op, a latent API trap"
-    },
-    {
-      "item": "entities become decay eligible",
-      "episode_uuid": "bc95f6b6-05da-4bff-8d7a-85a4581eaeee",
-      "created_at": "2026-08-20T22:25:14.102399Z",
-      "quote": "Stopping propagation entirely was rejected because entities from flagged episodes would become decay/merge eligible, degrading recall on protected memories."
-    },
-    {
-      "item": "propagate retention only",
-      "episode_uuid": "bc95f6b6-05da-4bff-8d7a-85a4581eaeee",
-      "created_at": "2026-08-20T22:25:14.102399Z",
-      "quote": "propagate retention only, never bootstrap_scope"
     }
   ],
-  "notes": "Repo search: the propagate_user_flag docstring (enrichment_steps.py:148-166) explains the chosen fix (retention only, bootstrap_scope not forwarded) but not the two rejected alternatives. grep for 'silent no-op' finds only unrelated files (dead-flag notes, config typo review, turn-evidence doc); grep for 'Option D', 'flag_source', 'label-filter', 'decay/merge', 'merge eligible' finds nothing about flag propagation. memory_types.py:119 and merge_eligibility.py read user_flagged, so an agent could infer point 2 from code, which is a weaker 'not in repo' case; point 1 has no repo trace. Point 3 (the chosen design) is stated in the docstring and is included only as the natural anchor of a correct answer. Follow-up episode acdd4fa0 (historical cleanup, same day) is consistent; no later change found."
+  "notes": "Repo search: the propagate_user_flag docstring (enrichment_steps.py:148-166) explains the chosen fix (retention only, bootstrap_scope not forwarded) but not the two rejected alternatives. grep for 'silent no-op' finds only unrelated files (dead-flag notes, config typo review, turn-evidence doc); grep for 'Option D', 'flag_source', 'label-filter', 'decay/merge', 'merge eligible' finds nothing about flag propagation. memory_types.py:119 and merge_eligibility.py read user_flagged, so an agent could infer point 2 from code, which is a weaker 'not in repo' case; point 1 has no repo trace. Point 3 (the chosen design) is stated in the docstring and is included only as the natural anchor of a correct answer. Follow-up episode acdd4fa0 (historical cleanup, same day) is consistent; no later change found. 2026-09-24 (owner decision): dropped points answerable from the repo (point 2 can be inferred from memory_types.py and merge_eligibility.py; point 3 is in the docstring)."
 }

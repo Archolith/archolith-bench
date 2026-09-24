@@ -1,5 +1,16 @@
 # archolith-bench Changelog
 
+## 2026-09-24 - Beacon eval: stricter judge and why-gold fixes (owner decisions)
+
+- `judge.py`: the judge credits only the specific recorded reason, fact, decision, incident or
+  number, not a general principle that would fit many projects; one answer passage credits one point
+  (overlapping evidence for a later point is not met); `JUDGE_PROMPT_VERSION` (2) is part of the cache
+  key. The first pass credited generic reasoning (e.g. a repo-only answer got the w6 delegate incident).
+- `why_tasks/menhir/`: w2 retired to `why_tasks_retired/` (the code answers it: `list_todos` falls
+  back to 'open'); w4 keeps only point 1 and w7 drops point 2 (both answerable from the repo). The
+  why set is 7 tasks; the remaining citations still verify against the graph copy.
+- `cli.py`: the judged report lists only runs of the current task set.
+
 ## 2026-09-24 - Beacon eval: resume a killed matrix
 
 - `runner.py`, `cli.py`: `beacon-eval run --resume` reuses saved runs that have an answer and no

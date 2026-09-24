@@ -132,7 +132,7 @@ def run(args: argparse.Namespace) -> int:
         print(f"rescored {len(rescored)} run(s); report: {target}")
         return 0
     if args.action == "judge":
-        return _judge(args, task_root)
+        return _judge(args, task_root, {(t.repo, t.task_id) for t in tasks})
     dollars = args.budget_usd is not None
     # In dollar mode token limits are off (None) unless given; placeholders would trip the check.
     budget_tokens = args.budget_tokens or (None if dollars else DEFAULT_BUDGET_TOKENS)
@@ -181,7 +181,7 @@ def run(args: argparse.Namespace) -> int:
     return 1 if stopped else 0
 
 
-def _judge(args: argparse.Namespace, task_root: Path) -> int:
+def _judge(args: argparse.Namespace, task_root: Path, task_keys: set[tuple[str, str]]) -> int:
     """Add ``point_recall_judged`` to saved runs (no agent runs) and write report-judged.md."""
     if not args.env_file:
         print("judge needs --env-file with OPENAI_API_KEY", file=sys.stderr)
@@ -202,6 +202,8 @@ def _judge(args: argparse.Namespace, task_root: Path) -> int:
     results = []
     for path in sorted((workdir / "runs").glob("*/result.json")):
         result = RunResult(**json.loads(path.read_text(encoding="utf-8")))
+        if (result.repo, result.task_id) not in task_keys:
+            continue  # e.g. a retired task
         cache = path.parent / "judged.json"
         if cache.is_file():
             result.scores["point_recall_judged"] = json.loads(cache.read_text(encoding="utf-8"))[

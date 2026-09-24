@@ -21,13 +21,6 @@
         "fails explicitly unlike Gemini"
       ],
       [
-        "Gemini was half-working",
-        "half-working provider",
-        "Gemini could not ingest",
-        "Gemini never backed extraction",
-        "only auxiliary LLMAdapter calls"
-      ],
-      [
         "do not remove without new reasons",
         "needs new reasons",
         "without new reasons",
@@ -61,17 +54,11 @@
       "quote": "owner judged a clearly unimplemented placeholder acceptable, unlike a half-working provider"
     },
     {
-      "item": "Gemini was half-working",
-      "episode_uuid": "6bc9e400-e063-44ff-bf87-1f17f83e489e",
-      "created_at": "2026-09-14T19:53:37.063887Z",
-      "quote": "because it could only back auxiliary LLMAdapter calls, never Graphiti extraction/embeddings"
-    },
-    {
       "item": "do not remove without new reasons",
       "episode_uuid": "6bc9e400-e063-44ff-bf87-1f17f83e489e",
       "created_at": "2026-09-14T19:53:37.063887Z",
       "quote": "Do not propose removing it again without new reasons."
     }
   ],
-  "notes": "Repo search: providers.py:323 docstring says only 'Placeholder backend for non-openai providers until SDK bridges are added.' .agent/architecture.md:79/271/277 say anthropic is 'scaffolded only' / 'not implemented yet' without a keep rationale; architecture.md:288 DOES explain the Gemini removal (so point 2 is in the repo and serves as context), while the owner's keep-judgement (points 1 and 3) is not written anywhere: grep for 'half-working', 'placeholder acceptable', 'new reasons' finds nothing. The archived dark-code audit calls it an 'unsupported-provider sentinel' but gives no decision rationale. No later memory on the Anthropic scaffold."
+  "notes": "Repo search: providers.py:323 docstring says only 'Placeholder backend for non-openai providers until SDK bridges are added.' .agent/architecture.md:79/271/277 say anthropic is 'scaffolded only' / 'not implemented yet' without a keep rationale; architecture.md:288 DOES explain the Gemini removal (so point 2 is in the repo and serves as context), while the owner's keep-judgement (points 1 and 3) is not written anywhere: grep for 'half-working', 'placeholder acceptable', 'new reasons' finds nothing. The archived dark-code audit calls it an 'unsupported-provider sentinel' but gives no decision rationale. No later memory on the Anthropic scaffold. 2026-09-24 (owner decision): dropped points answerable from the repo (point 2 is written in .agent/architecture.md)."
 }

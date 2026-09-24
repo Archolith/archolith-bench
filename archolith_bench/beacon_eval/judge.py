@@ -37,12 +37,18 @@ TEMPERATURE_MODELS = frozenset({"gpt-4o-mini"})
 CALL_RESERVE_USD = 0.002
 _MIN_EVIDENCE_CHARS = 8
 
+#: Bumped whenever the prompt or grading rules change; part of the cache key.
+JUDGE_PROMPT_VERSION = 2
+
 SYSTEM_PROMPT = (
     "You grade one point of an answer to a question about a software project. Decide whether "
-    "the ANSWER states the GOLD POINT: the same reason or fact, in any wording. Paraphrases, "
-    "synonyms and equivalent numbers count. A vaguer, partial or different reason does not. "
-    "The REFERENCE is the recorded source of the gold point, for context only; the answer "
-    "need not quote it. Reply with a JSON object: {\"met\": true or false, \"evidence\": "
+    "the ANSWER states the GOLD POINT: the same specific reason, fact, decision, incident or "
+    "number that the REFERENCE records, in any wording. Paraphrases, synonyms and equivalent "
+    "numbers count. It is NOT met by a general principle, a plausible rationale or a "
+    "recommendation that would fit many projects, unless it names the same specific thing; "
+    "nor by a vaguer, partial or different reason; nor by a passage that states another point. "
+    "The REFERENCE is the recorded source of the gold point; the answer need not quote it. "
+    "Reply with a JSON object: {\"met\": true or false, \"evidence\": "
     "\"the shortest passage copied exactly from the ANSWER that states the point, or empty\", "
     "\"reason\": \"one short sentence\"}."
 )
@@ -133,6 +139,21 @@ def judge_point(call: Call, question: str, point: dict[str, Any], lines: list[st
     return verdict, usage
 
 
+def _one_passage_per_point(verdicts: list[PointVerdict]) -> None:
+    """A passage credits one point only: a later met point whose evidence overlaps an earlier
+    met point's evidence (one contains the other) is not met."""
+    used: list[str] = []
+    for verdict in verdicts:
+        if not verdict.met:
+            continue
+        evidence = _norm(verdict.evidence)
+        if any(evidence in prior or prior in evidence for prior in used):
+            verdict.met = False
+            verdict.reason = ("evidence already credited to another point; " + verdict.reason)[:300]
+            continue
+        used.append(evidence)
+
+
 def call_cost(model: str, usage: dict[str, int]) -> float:
     price_in, price_out = PRICES_PER_M[model]
     return (usage.get("prompt_tokens", 0) * price_in + usage.get("completion_tokens", 0) * price_out) / 1e6
@@ -192,7 +213,9 @@ def judge_workdir(
         if ref is None or not ref["points"]:
             continue
         lines = answer_lines(result.get("answer"))
-        digest = hashlib.sha256(json.dumps(lines, ensure_ascii=False).encode("utf-8")).hexdigest()
+        digest = hashlib.sha256(
+            json.dumps([JUDGE_PROMPT_VERSION, lines], ensure_ascii=False).encode("utf-8")
+        ).hexdigest()
         cache = path.parent / "judged.json"
         if cache.is_file():
             cached = json.loads(cache.read_text(encoding="utf-8"))
@@ -217,6 +240,7 @@ def judge_workdir(
                 raise
             spent += call_cost(model, usage)
             verdicts.append(verdict)
+        _one_passage_per_point(verdicts)
         value = sum(v.met for v in verdicts) / len(verdicts)
         cache.write_text(
             json.dumps(

@@ -669,7 +669,8 @@ def test_why_task_set_loads_apart_and_gold_wordings_score(tmp_path: Path) -> Non
     root = Path(runner_mod.__file__).parent
     main = load_tasks(root / "tasks")
     why = load_tasks(root / "why_tasks")
-    assert len(why) == 8 and all(t.kind == "why" and t.reviewed for t in why)
+    assert len(why) == 7 and all(t.kind == "why" and t.reviewed for t in why)
+    assert "menhir-w2-why" not in {t.task_id for t in why}  # retired: the code answers it
     assert not {t.task_id for t in why} & {t.task_id for t in main}
     for task in why:
         findings = [p if isinstance(p, str) else p[0] for p in task.gold.points]
@@ -894,4 +895,34 @@ def test_resume_reuses_completed_runs_counts_their_spend_and_logs_once(
     logged = [json.loads(line)["condition"] for line in
               (tmp_path / "results.jsonl").read_text(encoding="utf-8").splitlines()]
     assert logged == ["A", "B"]
+
+
+def test_one_answer_passage_credits_only_one_point(tmp_path: Path) -> None:
+    from archolith_bench.beacon_eval.judge import judge_workdir
+
+    workdir, task_root = _judge_fixture(tmp_path, ["Check deployed configs before changing behavior."])
+    seen: list[str] = []
+    replies = [
+        {"met": True, "evidence": "Check deployed configs before changing behavior", "reason": "a"},
+        {"met": True, "evidence": "deployed configs before changing", "reason": "b"},
+    ]
+    scores, _ = judge_workdir(workdir, task_root, _fake_call(replies, seen))
+    assert scores == {"r-t-M-1": 0.5}
+    cached = json.loads((workdir / "runs" / "r-t-M-1" / "judged.json").read_text(encoding="utf-8"))
+    assert [p["met"] for p in cached["points"]] == [True, False]
+    assert cached["points"][1]["reason"].startswith("evidence already credited")
+
+
+def test_a_new_judge_prompt_version_invalidates_cached_verdicts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from archolith_bench.beacon_eval import judge as judge_mod
+
+    workdir, task_root = _judge_fixture(tmp_path, ["something specific happened"])
+    seen: list[str] = []
+    replies = [{"met": False, "evidence": "", "reason": ""}] * 4
+    judge_mod.judge_workdir(workdir, task_root, _fake_call(replies, seen))
+    monkeypatch.setattr(judge_mod, "JUDGE_PROMPT_VERSION", judge_mod.JUDGE_PROMPT_VERSION + 1)
+    judge_mod.judge_workdir(workdir, task_root, _fake_call(replies, seen))
+    assert len(seen) == 4
 
