@@ -212,6 +212,8 @@ def test_isolated_env_drops_opencode_overrides(tmp_path: Path) -> None:
 STUB = r"""
 import json, os, sys
 prompt = sys.stdin.read()
+if "ECHO_KEY" in prompt:
+    print("request failed for key " + os.environ.get("OPENAI_API_KEY", ""), file=sys.stderr)
 home = os.environ.get("XDG_CONFIG_HOME", "")
 config = json.load(open(os.path.join(home, "opencode", "opencode.json"), encoding="utf-8"))
 if "RATE_STDERR" in prompt:
@@ -227,6 +229,7 @@ if "BIG" in prompt:
     sys.exit(0)
 record = {
     "mcp": sorted(config.get("mcp", {})),
+    "has_openai_key": bool(os.environ.get("OPENAI_API_KEY")),
     "beacon_manifest": config.get("mcp", {}).get("beacon", {}).get("command", [""])[-1],
     "config_keys": sorted(config),
     "opencode_vars": sorted(k for k in os.environ if k.startswith("OPENCODE_")),
@@ -335,6 +338,23 @@ def test_a_relative_workdir_still_gives_an_absolute_pwd(harness, monkeypatch: py
     assert stopped == "" and all(r.answer["record"]["pwd_is_cwd"] for r in results)
     # B's Beacon server starts in the checkout, so its manifest path must be absolute.
     assert Path(results[1].answer["record"]["beacon_manifest"]).is_absolute()
+
+
+def test_env_file_keys_reach_opencode_only_and_are_redacted(harness, tmp_path: Path) -> None:
+    config, pin = harness
+    secret = "sk-test-0123456789abcdef"
+    env_file = tmp_path / "bench.env"
+    env_file.write_text(f'OTHER=1\nOPENAI_API_KEY="{secret}"\nEMPTY_API_KEY=\n', encoding="utf-8")
+    config.env_file = env_file
+    config.model = "openai/gpt-6-luna"  # not in the user's config: OpenCode's built-in provider
+    task = Task(repo="demo", task_id="key", kind="k", prompt="Find docs. ECHO_KEY", gold=GOLD)
+    results, stopped = run_matrix(config, {"demo": pin}, [task], ("A",))
+    record = results[0].answer["record"]
+    assert stopped == "" and record["has_openai_key"] and "provider" not in record["config_keys"]
+    run_dir = config.workdir / "runs" / "demo-key-A-1"
+    for name in ("events.jsonl", "stderr.log", "result.json"):
+        assert secret not in (run_dir / name).read_text(encoding="utf-8")
+    assert "<redacted>" in (run_dir / "stderr.log").read_text(encoding="utf-8")
 
 
 def test_matrix_stops_at_the_budget(harness) -> None:

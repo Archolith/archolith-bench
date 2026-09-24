@@ -41,6 +41,9 @@
   catalog no longer offers `deepseek-v4-flash`, so the first dry-run attempt stopped at 0 tokens.
 - `runner.py`: run directory and B's manifest path are absolute; a relative `--workdir` made OpenCode
   resolve `PWD` inside the checkout (second dry-run attempt stopped at 0 tokens).
+- `isolation.py`, `runner.py`, `cli.py`: `--env-file` passes `*_API_KEY` values to the OpenCode process
+  only, so built-in providers (e.g. `openai/gpt-6-luna`) work without a config block; any key value
+  echoed into a saved run file is redacted.
 
 ## 2026-09-23 - Beacon agent-task evaluation harness (P3 step 1)
 

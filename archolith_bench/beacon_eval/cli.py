@@ -47,6 +47,11 @@ def add_parser(subparsers: argparse._SubParsersAction) -> None:
         help="Also run tasks whose gold answer the owner has not approved (dry runs only)",
     )
     parser.add_argument("--report", default="", help="Markdown report path")
+    parser.add_argument(
+        "--env-file",
+        default="",
+        help=".env whose *_API_KEY values are passed to OpenCode only (for built-in providers)",
+    )
 
 
 def _split(value: str) -> tuple[str, ...]:
@@ -76,6 +81,7 @@ def run(args: argparse.Namespace) -> int:
         model=args.model,
         budget_tokens=args.budget_tokens,
         run_reserve_tokens=args.run_reserve_tokens,
+        env_file=Path(args.env_file) if args.env_file else None,
     )
     results, stopped = run_matrix(config, pins, tasks, conditions, args.repeats)
     report = render(

@@ -31,6 +31,7 @@ from archolith_bench.beacon_eval.isolation import (
     default_config_source,
     isolated_config_home,
     isolated_env,
+    load_api_keys,
 )
 from archolith_bench.beacon_eval.models import ANSWER_KEYS, RepoPin, RunResult, Task
 from archolith_bench.beacon_eval.scoring import extract_answer, score
@@ -94,6 +95,8 @@ class RunnerConfig:
     budget_tokens: int = DEFAULT_BUDGET_TOKENS
     run_reserve_tokens: int = DEFAULT_RUN_RESERVE
     timeout_s: float = 900.0
+    #: ``.env`` whose ``*_API_KEY`` values reach only the OpenCode process (built-in providers).
+    env_file: Path | None = None
 
 
 @dataclass
@@ -400,8 +403,12 @@ def run_one(
     cmd = [*config.opencode_cmd, "run", "--pure", "--print-logs", "--title", "beacon-eval",
            "-m", config.model, "--format", "json"]
     started = time.monotonic()
-    with isolated_config_home(config.config_source or default_config_source(), config.model, mcp) as home:
+    keys = load_api_keys(config.env_file) if config.env_file else {}
+    with isolated_config_home(
+        config.config_source or default_config_source(), config.model, mcp, builtin_provider=bool(keys)
+    ) as home:
         env = isolated_env(os.environ, home)
+        env.update(keys)
         # An inherited PWD (Git Bash, MSYS, most shells) may root OpenCode in the
         # caller's repo instead of the checkout; the fake-provider check exercises this.
         env["PWD"] = str(checkout)
@@ -431,6 +438,7 @@ def run_one(
     )
     result.scores = score(answer, task.gold, checkout)
     (run_dir / "result.json").write_text(json.dumps(asdict(result), indent=2), encoding="utf-8")
+    _redact(run_dir, keys.values())
     if reason == "rate_limited":
         raise RateLimited(f"rate limited during {run_dir.name}; stopping, not retrying")
     if reason == "over_reserve":
@@ -440,6 +448,23 @@ def run_one(
     if log.usage_events == 0:
         raise AccountingError(f"{run_dir.name} reported no token usage; stopping")
     return result
+
+
+def _redact(run_dir: Path, secrets: Any) -> None:
+    """Replace any key value that reached a saved file (logs can echo request errors)."""
+    values = [value for value in secrets if len(value) >= 8]
+    if not values:
+        return
+    for name in ("events.jsonl", "stderr.log", "result.json", "prompt.txt"):
+        path = run_dir / name
+        if not path.is_file():
+            continue
+        text = path.read_text(encoding="utf-8")
+        cleaned = text
+        for value in values:
+            cleaned = cleaned.replace(value, "<redacted>")
+        if cleaned != text:
+            path.write_text(cleaned, encoding="utf-8")
 
 
 def run_matrix(

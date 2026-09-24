@@ -36,14 +36,25 @@ def default_config_source() -> Path:
     return Path.home() / ".config" / "opencode" / "opencode.json"
 
 
-def minimal_config(source_config: Path, model: str, mcp: dict[str, Any] | None = None) -> dict[str, Any]:
-    """``$schema``, ``model`` and the model's provider only, plus *mcp* when given."""
+def minimal_config(
+    source_config: Path,
+    model: str,
+    mcp: dict[str, Any] | None = None,
+    builtin_provider: bool = False,
+) -> dict[str, Any]:
+    """``$schema``, ``model`` and the model's provider only, plus *mcp* when given.
+
+    With *builtin_provider*, a provider missing from the user's config is left to
+    OpenCode's built-in catalog, with its key supplied through the environment.
+    """
     real = json.loads(source_config.read_text(encoding="utf-8"))
     provider_id = model.split("/", 1)[0]
     providers = real.get("provider") or {}
-    if provider_id not in providers:
+    config: dict[str, Any] = {"model": model}
+    if provider_id in providers:
+        config["provider"] = {provider_id: providers[provider_id]}
+    elif not builtin_provider:
         raise IsolationError(f"provider {provider_id!r} is not defined in {source_config}")
-    config: dict[str, Any] = {"model": model, "provider": {provider_id: providers[provider_id]}}
     if "$schema" in real:
         config["$schema"] = real["$schema"]
     if mcp:
@@ -71,12 +82,27 @@ def isolated_env(base: Mapping[str, str], config_home: Path) -> dict[str, str]:
     return env
 
 
+def load_api_keys(env_file: Path) -> dict[str, str]:
+    """``*_API_KEY`` entries of a ``.env`` file, for the OpenCode process only (never logged)."""
+    keys: dict[str, str] = {}
+    for line in env_file.read_text(encoding="utf-8").splitlines():
+        name, sep, value = line.strip().partition("=")
+        name = name.removeprefix("export ").strip()
+        value = value.strip().strip('"').strip("'")
+        if sep and name.endswith("_API_KEY") and value:
+            keys[name] = value
+    return keys
+
+
 @contextmanager
 def isolated_config_home(
-    source_config: Path, model: str, mcp: dict[str, Any] | None = None
+    source_config: Path,
+    model: str,
+    mcp: dict[str, Any] | None = None,
+    builtin_provider: bool = False,
 ) -> Iterator[Path]:
     """Yield a temp ``XDG_CONFIG_HOME`` for one run; removed on exit."""
-    config = minimal_config(source_config, model, mcp)
+    config = minimal_config(source_config, model, mcp, builtin_provider)
     home = Path(tempfile.mkdtemp(prefix="beacon-eval-oc-"))
     try:
         (home / "opencode").mkdir()
