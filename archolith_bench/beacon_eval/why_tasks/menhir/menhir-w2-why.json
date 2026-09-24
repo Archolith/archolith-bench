@@ -1,0 +1,66 @@
+{
+  "repo": "menhir",
+  "task_id": "menhir-w2-why",
+  "kind": "why",
+  "prompt": "TodoRepository.supersede_todo closes the old todo with status 'closed' and records the replacement only through a SUPERSEDED_BY edge; _VALID_STATUSES is just {'open', 'closed'}. A newcomer wants to add a third status value 'superseded' so a superseded todo is marked directly. Why was the status deliberately left as 'closed'?",
+  "reviewed": true,
+  "gold": {
+    "docs": [],
+    "files": [
+      "src/menhir/infrastructure/todo_repository.py"
+    ],
+    "acceptable_files": [],
+    "commands": [],
+    "allowed_flags": [],
+    "guardrails": [],
+    "points": [
+      [
+        "list_todos coerces unknown status",
+        "unknown status coerced to open",
+        "invalid status falls back open",
+        "status coercion to open",
+        "coerces any other status"
+      ],
+      [
+        "silently relabel as open",
+        "superseded todo shown as open",
+        "missed todo appears open",
+        "relabeled as open",
+        "would show as open"
+      ]
+    ],
+    "verdict": "",
+    "risky": []
+  },
+  "gold_citations": [
+    {
+      "item": "src/menhir/infrastructure/todo_repository.py",
+      "path": "src/menhir/infrastructure/todo_repository.py",
+      "line_start": 34,
+      "line_end": 34,
+      "quote": "_VALID_STATUSES = frozenset({\"open\", \"closed\"})"
+    },
+    {
+      "item": "src/menhir/infrastructure/todo_repository.py",
+      "path": "src/menhir/infrastructure/todo_repository.py",
+      "line_start": 775,
+      "line_end": 775,
+      "quote": "safe_status = status if status in _VALID_STATUSES else \"open\""
+    }
+  ],
+  "memory_citations": [
+    {
+      "item": "list_todos coerces unknown status",
+      "episode_uuid": "f53f1535-753e-4663-8653-097b4b630bce",
+      "created_at": "2026-09-03T21:25:40.472280Z",
+      "quote": "status stays 'closed' rather than adding a third 'superseded' status -- the disqualifier is list_todos' coercion"
+    },
+    {
+      "item": "silently relabel as open",
+      "episode_uuid": "f53f1535-753e-4663-8653-097b4b630bce",
+      "created_at": "2026-09-03T21:25:40.472280Z",
+      "quote": "which would silently relabel a missed superseded todo as OPEN"
+    }
+  ],
+  "notes": "Repo search: todo_repository.py supersede_todo docstring (lines 532-575) explains refusals, cycle guards and namespace rules, not the status choice; line 775 performs the coercion with no comment linking it to supersession. grep for 'third status', 'superseded status', 'relabel', 'status stays' across src/, .agent/ (incl. plans/menhir-artifact-semantic-model.md, endpoints.md, concept-ids.yaml) and docs/ finds nothing. The plan with the rationale (.agent/plans/menhir-todo-supersession.md) lives in the root workspace, not in the menhir repo. The later review episode 9b375c5a (same day) adds a supersedes_count listing marker but does not revisit the status decision. Note the answer about why the edge is allowed at all ('identity fact') IS in the repo (todo_repository.py:99) and is deliberately not a gold point."
+}

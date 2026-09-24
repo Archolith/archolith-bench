@@ -1,0 +1,92 @@
+{
+  "repo": "menhir",
+  "task_id": "menhir-w1-why",
+  "kind": "why",
+  "prompt": "src/menhir/infrastructure/operation_owner.py still parses MENHIR_HOST_PID_NAMESPACE_VERIFIABLE and MENHIR_SAGA_ALL_WRITERS_GATE_AWARE with its own _TRUTHY set that accepts \"on\", even though config/settings_helpers.parse_bool_env is the canonical parser and deliberately rejects \"on\". A newcomer wants to route both flags through parse_bool_env in a quick cleanup. Why has that change not been made yet, and what has to happen before it lands?",
+  "reviewed": true,
+  "gold": {
+    "docs": [],
+    "files": [
+      "src/menhir/infrastructure/operation_owner.py",
+      "src/menhir/config/settings_helpers.py"
+    ],
+    "acceptable_files": [],
+    "commands": [],
+    "allowed_flags": [],
+    "guardrails": [],
+    "points": [
+      [
+        "compatibility not correctness",
+        "blocker is rollout compatibility",
+        "deployed config compatibility",
+        "rollout compatibility not proven",
+        "change is correct but compatibility"
+      ],
+      [
+        "would stop booting",
+        "startup outage",
+        "cleanup becomes startup outage",
+        "hosts using on stop booting",
+        "fail to boot"
+      ],
+      [
+        "inspect deployed configured values",
+        "check deployed environments first",
+        "normalize deployment config to true",
+        "check what deployments set",
+        "verify deployed values first"
+      ]
+    ],
+    "verdict": "",
+    "risky": []
+  },
+  "gold_citations": [
+    {
+      "item": "src/menhir/infrastructure/operation_owner.py",
+      "path": "src/menhir/infrastructure/operation_owner.py",
+      "line_start": 223,
+      "line_end": 223,
+      "quote": "_TRUTHY = frozenset({\"1\", \"true\", \"yes\", \"on\"})"
+    },
+    {
+      "item": "src/menhir/config/settings_helpers.py",
+      "path": "src/menhir/config/settings_helpers.py",
+      "line_start": 107,
+      "line_end": 107,
+      "quote": "``on`` is intentionally not truthy: no flag in this codebase"
+    }
+  ],
+  "memory_citations": [
+    {
+      "item": "compatibility not correctness",
+      "episode_uuid": "7b785e66-35f4-4fdb-8788-d0cae974cbd4",
+      "created_at": "2026-08-20T19:00:20.378931Z",
+      "quote": "The blocker is COMPATIBILITY, not correctness"
+    },
+    {
+      "item": "would stop booting",
+      "episode_uuid": "7b785e66-35f4-4fdb-8788-d0cae974cbd4",
+      "created_at": "2026-08-20T19:00:20.378931Z",
+      "quote": "would stop booting the moment the parser tightened"
+    },
+    {
+      "item": "would stop booting",
+      "episode_uuid": "7b785e66-35f4-4fdb-8788-d0cae974cbd4",
+      "created_at": "2026-08-20T19:00:20.378931Z",
+      "quote": "turning a correctness cleanup into a startup outage"
+    },
+    {
+      "item": "inspect deployed configured values",
+      "episode_uuid": "7b785e66-35f4-4fdb-8788-d0cae974cbd4",
+      "created_at": "2026-08-20T19:00:20.378931Z",
+      "quote": "inspect actual configured values for MENHIR_HOST_PID_NAMESPACE_VERIFIABLE and MENHIR_SAGA_ALL_WRITERS_GATE_AWARE across deployed environments"
+    },
+    {
+      "item": "inspect deployed configured values",
+      "episode_uuid": "7b785e66-35f4-4fdb-8788-d0cae974cbd4",
+      "created_at": "2026-08-20T19:00:20.378931Z",
+      "quote": "Do not land the parser change until rollout compatibility is proven."
+    }
+  ],
+  "notes": "Repo search: grep for CF-19 finds only .agent/reviews/REGISTER-SNAPSHOT.md:912 (describes the two-parser divergence and proposes the fix, says nothing about deferral), src/menhir/infrastructure/audit_trail.py:42 and consolidation_audit.py:40 (the fixed half). Searched 'rollout', 'compatibility', 'stop booting', 'deployed environments', 'parse_bool_env' comments in src/, .agent/, docs/ and deploy/: nothing explains why operation_owner.py keeps its own table. The operation_owner.py docstrings explain what the flags mean, not why their parser was left alone. Latest memory on CF-19 (2026-09-13 GH consolidation, 2026-09-11 ledger re-verify) does not change the deferral; the deferral episode is the latest recorded reasoning. The episode also says not to hand this to a delegate lane; not included as a gold point."
+}

@@ -1,0 +1,60 @@
+{
+  "repo": "menhir",
+  "task_id": "menhir-w6-why",
+  "kind": "why",
+  "prompt": "In Menhir remediation work, existing test files are treated as immutable unless a path is explicitly authorized: new regression tests go in a new test file, and a fix that changes a test's expectations lands as two commits. A newcomer finds this clumsy and wants to allow append-only edits to existing test files and to update expectations in the same commit as the fix. Why is the rule this strict?",
+  "reviewed": true,
+  "gold": {
+    "docs": [],
+    "files": [],
+    "acceptable_files": [],
+    "commands": [],
+    "allowed_flags": [],
+    "guardrails": [],
+    "points": [
+      [
+        "skip marker neuters test",
+        "adding skip neuters test",
+        "insertion neuters a test",
+        "skip is a pure insertion",
+        "append can disable test"
+      ],
+      [
+        "delegate edited existing tests",
+        "edited tests until green",
+        "destroying the evidence",
+        "edited tests to pass"
+      ],
+      [
+        "regression recorded against unchanged suite",
+        "commit against unchanged suite",
+        "expectations in separate commit",
+        "separate authorized commit"
+      ]
+    ],
+    "verdict": "",
+    "risky": []
+  },
+  "gold_citations": [],
+  "memory_citations": [
+    {
+      "item": "skip marker neuters test",
+      "episode_uuid": "af8b14bc-7eac-460f-b532-37aafad0451a",
+      "created_at": "2026-08-17T03:27:03.194710Z",
+      "quote": "append-only exemptions were rejected because adding @pytest.mark.skip above a failing test is a pure insertion that neuters it invisibly"
+    },
+    {
+      "item": "delegate edited existing tests",
+      "episode_uuid": "af8b14bc-7eac-460f-b532-37aafad0451a",
+      "created_at": "2026-08-17T03:27:03.194710Z",
+      "quote": "EDITED THE EXISTING TESTS until its patch turned green (destroying the evidence)"
+    },
+    {
+      "item": "regression recorded against unchanged suite",
+      "episode_uuid": "af8b14bc-7eac-460f-b532-37aafad0451a",
+      "created_at": "2026-08-17T03:27:03.194710Z",
+      "quote": "first commit the implementation with the regression recorded against the UNCHANGED suite, then change the expectations in a SEPARATE authorized commit"
+    }
+  ],
+  "notes": "Repo search: AGENTS.md Verification section and .agent/workflows/run_and_test.md cover test selection and CI ownership; run_and_test.md:32 even says 'Add or modify a direct regression test'. grep for 'protected', 'check-protected', 'append-only' (test context), 'pytest.mark.skip above', 'separate commit', 'existing test files' finds nothing on this rule. The guard script check-protected-tests.sh lives in the root workspace .agent/bin/, not in the menhir repo, so no gold file is cited. Uncertain: this is a workspace remediation policy recorded once (2026-08-17, CF-129 episode); no later episode restates or revokes it, and it partly conflicts with run_and_test.md's 'add or modify' wording. The prompt scopes it to remediation work to match the memory."
+}

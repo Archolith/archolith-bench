@@ -1,5 +1,13 @@
 # archolith-bench Changelog
 
+## 2026-09-24 - Beacon eval: Menhir "why" tasks
+
+- `archolith_bench/beacon_eval/why_tasks/menhir/` (new): eight owner-approved "why" tasks (kind `why`)
+  whose answers are in Menhir's recorded memory but not in the repository at `9432a60d`. Each gold
+  point cites an episode uuid and a verbatim quote (`memory_citations`), verified against a read-only
+  copy of the restored graph. Kept outside `tasks/` so the default 20-task matrix is unchanged; the
+  harness does not run them yet.
+
 ## 2026-09-24 - Beacon eval gold for Beacon, llm and smolagents
 
 - `archolith_bench/beacon_eval/tasks/{beacon,llm,smolagents}/` (new): five grounded tasks per repository
