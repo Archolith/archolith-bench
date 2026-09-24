@@ -1,5 +1,11 @@
 # archolith-bench Changelog
 
+## 2026-09-23 - Beacon eval: Menhir pinned to the canonical-docs merge
+
+- `archolith_bench/beacon_eval/repos.json`: Menhir pin `9100d0db` -> `9432a60d` (Menhir #140: Beacon
+  can search 25 orientation docs). Only `beacon.yaml` and the changelogs changed; all five Menhir gold
+  tasks still ground cleanly at the new commit.
+
 ## 2026-09-23 - Beacon eval harness: isolation, stops and accounting fixes from review
 
 - `archolith_bench/beacon_eval/isolation.py`: each run gets a temp `XDG_CONFIG_HOME` holding only
