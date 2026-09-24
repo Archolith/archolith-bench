@@ -30,6 +30,10 @@ def add_parser(subparsers: argparse._SubParsersAction) -> None:
     parser.add_argument("--repos", default="", help="Comma-separated repo names (default: all)")
     parser.add_argument("--tasks", default="", help="Comma-separated task ids (default: all)")
     parser.add_argument(
+        "--task-set", choices=("main", "why"), default="main",
+        help="main: the 20 orientation tasks (tasks/); why: memory-only \"why\" tasks (why_tasks/)",
+    )
+    parser.add_argument(
         "--conditions", default=",".join(DEFAULT_CONDITIONS),
         help="A, B, C by default; D (Beacon MCP only, built-in tools off) is opt-in",
     )
@@ -74,7 +78,8 @@ def _split(value: str) -> tuple[str, ...]:
 
 def run(args: argparse.Namespace) -> int:
     pins = load_repos(HERE / "repos.json")
-    tasks = load_tasks(HERE / "tasks", _split(args.repos), _split(args.tasks))
+    task_root = HERE / ("why_tasks" if args.task_set == "why" else "tasks")
+    tasks = load_tasks(task_root, _split(args.repos), _split(args.tasks))
     if not args.include_unreviewed:
         tasks = [task for task in tasks if task.reviewed]
     conditions = _split(args.conditions)

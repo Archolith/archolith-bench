@@ -661,3 +661,18 @@ def test_grounding_takes_the_first_wording_as_the_cited_guardrail(tmp_path: Path
                             "line_end": 1, "quote": "Online tests are opt-in."}],
     }), encoding="utf-8")
     assert check_task_file(task, tmp_path) == []
+
+
+def test_why_task_set_loads_apart_and_gold_wordings_score(tmp_path: Path) -> None:
+    from archolith_bench.beacon_eval.models import load_tasks
+
+    root = Path(runner_mod.__file__).parent
+    main = load_tasks(root / "tasks")
+    why = load_tasks(root / "why_tasks")
+    assert len(why) == 8 and all(t.kind == "why" and t.reviewed for t in why)
+    assert not {t.task_id for t in why} & {t.task_id for t in main}
+    for task in why:
+        findings = [p if isinstance(p, str) else p[0] for p in task.gold.points]
+        scores = score({"findings": findings, "files": list(task.gold.files)}, task.gold, tmp_path)
+        assert scores["point_recall"] == 1.0, task.task_id
+        assert scores.get("risky_false_positive", 0.0) == 0.0, task.task_id
