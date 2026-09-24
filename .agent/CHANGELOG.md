@@ -39,6 +39,8 @@
   archive destination, index, changelog and staging steps. t4 unchanged. All five ground at 9100d0db.
 - `runner.py` (owner decision): default model `deepseek/deepseek-flash` (V4.1 Flash); OpenCode 1.18.31's
   catalog no longer offers `deepseek-v4-flash`, so the first dry-run attempt stopped at 0 tokens.
+- `runner.py`: run directory and B's manifest path are absolute; a relative `--workdir` made OpenCode
+  resolve `PWD` inside the checkout (second dry-run attempt stopped at 0 tokens).
 
 ## 2026-09-23 - Beacon agent-task evaluation harness (P3 step 1)
 

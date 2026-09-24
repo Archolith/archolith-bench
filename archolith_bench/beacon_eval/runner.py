@@ -380,10 +380,11 @@ def run_one(
     """One run. Raises RateLimited, BudgetExhausted or AccountingError after saving it."""
     if condition not in CONDITIONS:
         raise ValueError(f"unknown condition {condition!r}")
-    run_dir = config.workdir / "runs" / f"{task.repo}-{task.task_id}-{condition}-{repeat}"
+    # Absolute paths: PWD and B's --manifest are resolved by processes running in the checkout.
+    run_dir = (config.workdir / "runs" / f"{task.repo}-{task.task_id}-{condition}-{repeat}").resolve()
     checkout = export_commit(pin, run_dir / "checkout", config.workdir / "cache")
     seal_checkout(checkout)
-    manifest = build_beacon(config, pin) if condition in ("B", "C") else None
+    manifest = build_beacon(config, pin).resolve() if condition in ("B", "C") else None
     prompt = build_prompt(
         task,
         condition,

@@ -227,6 +227,7 @@ if "BIG" in prompt:
     sys.exit(0)
 record = {
     "mcp": sorted(config.get("mcp", {})),
+    "beacon_manifest": config.get("mcp", {}).get("beacon", {}).get("command", [""])[-1],
     "config_keys": sorted(config),
     "opencode_vars": sorted(k for k in os.environ if k.startswith("OPENCODE_")),
     "own_git_root": os.path.isdir(".git"),
@@ -323,6 +324,17 @@ def test_a_run_without_usage_stops_the_matrix(harness) -> None:
     task = Task(repo="demo", task_id="nu", kind="k", prompt="NOUSAGE", gold=GOLD)
     results, stopped = run_matrix(config, {"demo": pin}, [task, task], ("A",))
     assert "no token usage" in stopped and len(results) == 1
+
+
+def test_a_relative_workdir_still_gives_an_absolute_pwd(harness, monkeypatch: pytest.MonkeyPatch) -> None:
+    config, pin = harness
+    monkeypatch.chdir(config.workdir.parent)
+    config.workdir = Path(config.workdir.name)  # relative, as the CLI passes it
+    task = Task(repo="demo", task_id="rel", kind="k", prompt="Find docs.", gold=GOLD)
+    results, stopped = run_matrix(config, {"demo": pin}, [task], ("A", "B"))
+    assert stopped == "" and all(r.answer["record"]["pwd_is_cwd"] for r in results)
+    # B's Beacon server starts in the checkout, so its manifest path must be absolute.
+    assert Path(results[1].answer["record"]["beacon_manifest"]).is_absolute()
 
 
 def test_matrix_stops_at_the_budget(harness) -> None:
