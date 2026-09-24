@@ -5,7 +5,7 @@ suits short rules but misses explanations worded differently ("deduplication" fo
 "PyTorch" for "torch", numbers). For ``why`` tasks this module adds ``point_recall_judged``
 beside the deterministic ``point_recall``; it replaces nothing.
 
-For each gold point a small model sees the question, the point with its accepted wordings, the
+For each gold point the judge model sees the question, the point with its accepted wordings, the
 cited memory quotes as reference, and the answer's ``findings`` and ``plan``. It never sees the
 condition, run name or other runs. A "met" verdict counts only when its evidence is copied from
 the answer (whitespace and case aside); otherwise the point is not met and ``raw_met`` records
@@ -27,9 +27,12 @@ from typing import Any
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
-DEFAULT_JUDGE_MODEL = "gpt-4o-mini"
-#: Dollars per million (input, output) tokens; a model without a price cannot keep the cap.
-PRICES_PER_M = {"gpt-4o-mini": (0.15, 0.60)}
+DEFAULT_JUDGE_MODEL = "gpt-6-luna"  # owner decision 2026-09-24
+#: Dollars per million (input, output) tokens (OpenCode's models.dev catalog, 2026-09-24);
+#: a model without a price cannot keep the cap. Luna's reasoning tokens bill as output.
+PRICES_PER_M = {"gpt-6-luna": (0.10, 0.50), "gpt-4o-mini": (0.15, 0.60)}
+#: Reasoning models reject a temperature; only these get temperature 0.
+TEMPERATURE_MODELS = frozenset({"gpt-4o-mini"})
 #: Dollars set aside for the next call when checking the cap.
 CALL_RESERVE_USD = 0.002
 _MIN_EVIDENCE_CHARS = 8
@@ -136,13 +139,15 @@ def call_cost(model: str, usage: dict[str, int]) -> float:
 
 
 def openai_call(api_key: str, model: str, timeout_s: float = 60.0) -> Call:
-    """A chat-completions caller (temperature 0, JSON output). 429 raises, never retries."""
+    """A chat-completions caller (JSON output; temperature 0 where supported). 429 raises, never retries."""
 
     def call(messages: list[dict[str, str]]) -> tuple[str, dict[str, int]]:
-        body = json.dumps(
-            {"model": model, "messages": messages, "temperature": 0,
-             "response_format": {"type": "json_object"}}
-        ).encode("utf-8")
+        payload: dict[str, Any] = {
+            "model": model, "messages": messages, "response_format": {"type": "json_object"},
+        }
+        if model in TEMPERATURE_MODELS:
+            payload["temperature"] = 0
+        body = json.dumps(payload).encode("utf-8")
         request = Request(
             "https://api.openai.com/v1/chat/completions",
             data=body,

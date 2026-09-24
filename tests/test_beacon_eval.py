@@ -835,3 +835,24 @@ def test_judge_stops_on_rate_limit_and_before_passing_the_cap(tmp_path: Path) ->
     with pytest.raises(JudgeBudgetExhausted):
         judge_workdir(workdir, task_root, _fake_call([], seen), budget_usd=0.001)
     assert seen == []
+
+
+def test_judge_call_omits_temperature_for_reasoning_models(monkeypatch: pytest.MonkeyPatch) -> None:
+    import io
+
+    from archolith_bench.beacon_eval import judge as judge_mod
+
+    sent: list[dict] = []
+
+    def fake_urlopen(request, timeout):
+        sent.append(json.loads(request.data.decode("utf-8")))
+        body = {"choices": [{"message": {"content": "{}"}}],
+                "usage": {"prompt_tokens": 3, "completion_tokens": 4}}
+        return io.BytesIO(json.dumps(body).encode("utf-8"))
+
+    monkeypatch.setattr(judge_mod, "urlopen", fake_urlopen)
+    text, usage = judge_mod.openai_call("k" * 12, "gpt-6-luna")([{"role": "user", "content": "x"}])
+    judge_mod.openai_call("k" * 12, "gpt-4o-mini")([{"role": "user", "content": "x"}])
+    assert "temperature" not in sent[0] and sent[1]["temperature"] == 0
+    assert sent[0]["model"] == "gpt-6-luna" and usage == {"prompt_tokens": 3, "completion_tokens": 4}
+
