@@ -272,6 +272,7 @@ def harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         workdir=tmp_path / "work",
         beacon_python="py",
         opencode_cmd=[sys.executable, str(stub)],
+        model="deepseek/deepseek-v4-flash",  # the provider _user_config defines; independent of the default
         config_source=_user_config(tmp_path),
         budget_tokens=10_000_000,
         run_reserve_tokens=80_000,
