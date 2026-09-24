@@ -47,6 +47,8 @@
 - `runner.py`, `models.py`, `report.py`, `cli.py`: `--budget-usd` / `--run-reserve-usd` cap spend from
   OpenCode's per-step cost (a run with no cost stops the matrix; token limits are off unless given);
   the report shows total and median cost. Default model `openai/gpt-6-luna` (owner decision).
+- `runner.py`, `cli.py`: token limits can be off (None); dollar mode no longer uses a huge placeholder
+  that tripped the cap check after the first run.
 
 ## 2026-09-23 - Beacon agent-task evaluation harness (P3 step 1)
 

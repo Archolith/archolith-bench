@@ -84,10 +84,10 @@ def run(args: argparse.Namespace) -> int:
         print(f"  {task.repo}/{task.task_id} ({task.kind}){'' if task.reviewed else ' [unreviewed]'}")
     if args.action == "plan" or not tasks:
         return 0
-    unlimited = 10**15
     dollars = args.budget_usd is not None
-    budget_tokens = args.budget_tokens or (unlimited if dollars else DEFAULT_BUDGET_TOKENS)
-    reserve_tokens = args.run_reserve_tokens or (unlimited if dollars else DEFAULT_RUN_RESERVE)
+    # In dollar mode token limits are off (None) unless given; placeholders would trip the check.
+    budget_tokens = args.budget_tokens or (None if dollars else DEFAULT_BUDGET_TOKENS)
+    reserve_tokens = args.run_reserve_tokens or (None if dollars else DEFAULT_RUN_RESERVE)
     config = RunnerConfig(
         workdir=Path(args.workdir),
         beacon_python=args.beacon_python,
@@ -110,7 +110,7 @@ def run(args: argparse.Namespace) -> int:
             "Budget": (
                 f"${args.budget_usd:.2f} (${args.run_reserve_usd:.2f} reserved per run)"
                 if dollars
-                else f"{budget_tokens:,} tokens ({reserve_tokens:,} reserved per run)"
+                else f"{budget_tokens or 0:,} tokens ({reserve_tokens or 0:,} reserved per run)"
             ),
             "Pins": "; ".join(f"{name} {pin.commit[:10]}" for name, pin in pins.items()),
         },

@@ -92,8 +92,9 @@ class RunnerConfig:
     model: str = DEFAULT_MODEL
     #: The user's ``opencode.json``; only the model's provider block is taken from it.
     config_source: Path | None = None
-    budget_tokens: int = DEFAULT_BUDGET_TOKENS
-    run_reserve_tokens: int = DEFAULT_RUN_RESERVE
+    #: None switches a token limit off (dollar mode uses budget_usd instead).
+    budget_tokens: int | None = DEFAULT_BUDGET_TOKENS
+    run_reserve_tokens: int | None = DEFAULT_RUN_RESERVE
     timeout_s: float = 900.0
     #: ``.env`` whose ``*_API_KEY`` values reach only the OpenCode process (built-in providers).
     env_file: Path | None = None
@@ -104,15 +105,15 @@ class RunnerConfig:
 
 @dataclass
 class Budget:
-    cap: int
-    reserve: int = DEFAULT_RUN_RESERVE
+    cap: int | None
+    reserve: int | None = DEFAULT_RUN_RESERVE
     used: int = 0
     cap_usd: float | None = None
     reserve_usd: float = 0.0
     used_usd: float = 0.0
 
     def check(self) -> None:
-        if self.used + self.reserve > self.cap:
+        if self.cap is not None and self.used + (self.reserve or 0) > self.cap:
             raise BudgetExhausted(
                 f"the next run's {self.reserve:,}-token reserve would exceed the "
                 f"{self.cap:,}-token cap ({self.used:,} used)"
@@ -331,7 +332,7 @@ def _pump(stream: IO[str], tag: str, sink: queue.Queue[tuple[str, str | None]]) 
 
 def stream_opencode(
     cmd: list[str], prompt: str, cwd: Path, env: dict[str, str], run_dir: Path,
-    reserve: int, timeout_s: float, reserve_usd: float | None = None,
+    reserve: int | None, timeout_s: float, reserve_usd: float | None = None,
 ) -> tuple[EventLog, str, int | None]:
     """Run OpenCode, feeding events as they arrive; returns (log, stop reason, exit code).
 
@@ -378,7 +379,8 @@ def stream_opencode(
             if log.rate_limited:
                 reason = "rate_limited"
                 break
-            if log.total_tokens > reserve or (reserve_usd is not None and log.cost_usd > reserve_usd):
+            over_tokens = reserve is not None and log.total_tokens > reserve
+            if over_tokens or (reserve_usd is not None and log.cost_usd > reserve_usd):
                 reason = "over_reserve"
                 break
     _kill_tree(proc)
@@ -462,8 +464,15 @@ def run_one(
         raise RateLimited(f"rate limited during {run_dir.name}; stopping, not retrying")
     if reason == "over_reserve":
         raise BudgetExhausted(
-            f"{run_dir.name} passed its reserve ({config.run_reserve_tokens:,} tokens"
-            + (f" / ${config.run_reserve_usd:.2f}" if config.budget_usd is not None else "")
+            f"{run_dir.name} passed its reserve ("
+            + " / ".join(
+                part
+                for part in (
+                    f"{config.run_reserve_tokens:,} tokens" if config.run_reserve_tokens else "",
+                    f"${config.run_reserve_usd:.2f}" if config.budget_usd is not None else "",
+                )
+                if part
+            )
             + ") and was killed"
         )
     if log.usage_events == 0:

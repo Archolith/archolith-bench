@@ -377,6 +377,16 @@ def test_dollar_cap_admits_runs_only_while_the_reserve_fits(harness) -> None:
     assert "Total cost:** $0.0600" in render(results, {"Model": "stub"}, stopped)
 
 
+def test_dollar_mode_with_token_limits_off_runs_everything(harness) -> None:
+    config, pin = harness
+    # What the CLI builds for --budget-usd without token options.
+    config.budget_usd, config.run_reserve_usd = 1.0, 0.10
+    config.budget_tokens = config.run_reserve_tokens = None
+    tasks = [Task(repo="demo", task_id=f"u{i}", kind="k", prompt="fine", gold=GOLD) for i in range(2)]
+    results, stopped = run_matrix(config, {"demo": pin}, tasks, ("A", "B", "C"))
+    assert stopped == "" and len(results) == 6
+
+
 def test_a_run_past_its_dollar_reserve_is_killed(harness) -> None:
     config, pin = harness
     config.budget_usd, config.run_reserve_usd = 5.0, 0.10
