@@ -1,0 +1,165 @@
+{
+  "repo": "beacon",
+  "task_id": "beacon-t3-decision",
+  "kind": "decision",
+  "prompt": "A contributor proposes that `beacon build` also pick up guardrails and commands from `CLAUDE.md` and `.cursor/rules`, and that `beacon init` copy the values it discovers (license, CI test command, README description) straight into the generated beacon.yaml. What settled decision currently governs which project files Beacon reads and what `beacon init` writes, what does it rule out, and which docs, source files and tests state or enforce it?",
+  "reviewed": true,
+  "gold": {
+    "docs": [
+      "docs/beacon-open-standard.md",
+      ".agent/CHANGELOG.md"
+    ],
+    "files": [
+      "src/beacon/sources/declared.py",
+      "src/beacon/sources/conventions.py",
+      "src/beacon/core/scaffold.py",
+      "tests/test_declared_sources.py",
+      "tests/test_conventions.py",
+      "tests/test_init_core.py"
+    ],
+    "acceptable_files": [
+      ".agent/data_models.md",
+      "README.md",
+      "src/beacon/build/policy.py",
+      "tests/test_build_intent_and_gaps.py"
+    ],
+    "commands": [],
+    "allowed_flags": [],
+    "guardrails": [],
+    "points": [
+      [
+        "never reads agent-vendor files",
+        "vendor files never read",
+        "never read CLAUDE.md",
+        "CLAUDE.md never read",
+        "CLAUDE.md is not read"
+      ],
+      [
+        "only point to AGENTS.md",
+        "point to AGENTS.md",
+        "should point to AGENTS.md"
+      ],
+      [
+        "AGENTS.md CONTRIBUTING.md SECURITY.md declared",
+        "AGENTS.md CONTRIBUTING.md SECURITY.md declared sources",
+        "reads AGENTS.md CONTRIBUTING.md SECURITY.md"
+      ],
+      [
+        "init writes only judgment fields",
+        "only the judgment fields",
+        "init writes only maintainer fields",
+        "init writes only fields maintainer must answer"
+      ],
+      [
+        "discovered values read at build time",
+        "read at build time",
+        "never copied into beacon.yaml",
+        "not copied into beacon.yaml",
+        "never frozen into beacon.yaml"
+      ]
+    ],
+    "verdict": "",
+    "risky": []
+  },
+  "gold_citations": [
+    {
+      "item": "docs/beacon-open-standard.md",
+      "path": "docs/beacon-open-standard.md",
+      "line_start": 141,
+      "line_end": 148,
+      "quote": "**Declared sources (2026-09-23).** A beacon reads `AGENTS.md`, `CONTRIBUTING.md` and `SECURITY.md` as `declared` sources"
+    },
+    {
+      "item": ".agent/CHANGELOG.md",
+      "path": ".agent/CHANGELOG.md",
+      "line_start": 90,
+      "line_end": 91,
+      "quote": "`docs/beacon-open-standard.md` (catalogue 1.1, settled decision on declared sources)"
+    },
+    {
+      "item": "src/beacon/sources/declared.py",
+      "path": "src/beacon/sources/declared.py",
+      "line_start": 4,
+      "line_end": 6,
+      "quote": "reads them on every run instead of copying them into ``beacon.yaml``, so they cannot go stale there."
+    },
+    {
+      "item": "src/beacon/sources/conventions.py",
+      "path": "src/beacon/sources/conventions.py",
+      "line_start": 20,
+      "line_end": 21,
+      "quote": "Agent-vendor files (``CLAUDE.md``, ``.cursor/rules``) are never read."
+    },
+    {
+      "item": "src/beacon/core/scaffold.py",
+      "path": ".agent/CHANGELOG.md",
+      "line_start": 80,
+      "line_end": 81,
+      "quote": "`src/beacon/core/scaffold.py`: `beacon init` writes only the judgment fields, empty; discovered values stay in the init report and are never frozen into `beacon.yaml`."
+    },
+    {
+      "item": "tests/test_declared_sources.py",
+      "path": "tests/test_declared_sources.py",
+      "line_start": 149,
+      "line_end": 150,
+      "quote": "# Agent-vendor files such as CLAUDE.md are never read."
+    },
+    {
+      "item": "tests/test_conventions.py",
+      "path": "tests/test_conventions.py",
+      "line_start": 96,
+      "line_end": 96,
+      "quote": "def test_vendor_files_are_never_read(tmp_path: Path) -> None:"
+    },
+    {
+      "item": "never reads agent-vendor files",
+      "path": "docs/beacon-open-standard.md",
+      "line_start": 145,
+      "line_end": 146,
+      "quote": "It never reads agent-vendor files (`CLAUDE.md`, `.cursor/rules` and similar); those should only point to `AGENTS.md`."
+    },
+    {
+      "item": "never reads agent-vendor files",
+      "path": ".agent/CHANGELOG.md",
+      "line_start": 73,
+      "line_end": 73,
+      "quote": "Agent-vendor files (`CLAUDE.md`, `.cursor/rules`) are never read."
+    },
+    {
+      "item": "only point to AGENTS.md",
+      "path": "docs/beacon-open-standard.md",
+      "line_start": 146,
+      "line_end": 146,
+      "quote": "those should only point to `AGENTS.md`."
+    },
+    {
+      "item": "tests/test_init_core.py",
+      "path": "tests/test_init_core.py",
+      "line_start": 736,
+      "line_end": 736,
+      "quote": "Discovered facts are reported, never frozen into beacon.yaml as intent."
+    },
+    {
+      "item": "AGENTS.md CONTRIBUTING.md SECURITY.md declared",
+      "path": "docs/beacon-open-standard.md",
+      "line_start": 143,
+      "line_end": 144,
+      "quote": "A beacon reads `AGENTS.md`, `CONTRIBUTING.md` and `SECURITY.md` as `declared` sources"
+    },
+    {
+      "item": "init writes only judgment fields",
+      "path": "docs/beacon-open-standard.md",
+      "line_start": 146,
+      "line_end": 147,
+      "quote": "`beacon init` writes only the fields a maintainer must answer"
+    },
+    {
+      "item": "discovered values read at build time",
+      "path": "docs/beacon-open-standard.md",
+      "line_start": 147,
+      "line_end": 148,
+      "quote": "everything a project's files state is read at build time, never copied into `beacon.yaml`"
+    }
+  ],
+  "notes": "The decision is recorded in docs/beacon-open-standard.md section 10 'Settled decisions' and implemented in the 2026-09-23 near-zero authoring P0 change (.agent/CHANGELOG.md). What it ruled out: reading agent-vendor files and freezing discovered values into beacon.yaml (previously init rendered discovered values into the starter manifest; the scaffold.py module docstring still describes rendering a DiscoveryResult into beacon.yaml, so the CHANGELOG is the clearer statement for scaffold.py). The 'declared sources' point is loose on purpose; reviewers may want to tighten it."
+}

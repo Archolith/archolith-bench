@@ -1,0 +1,149 @@
+{
+  "repo": "llm",
+  "task_id": "llm-t2-commands",
+  "kind": "commands_and_guardrails",
+  "prompt": "You are fixing a bug in the OpenAI Responses API code path in `llm/default_plugins/openai_models.py` and adding a new test to `tests/test_openai_responses.py` that exercises the real OpenAI API through a recorded interaction. What exact commands does the project prescribe to run the tests, to record the new API interaction, and to run the formatting, lint and type checks before you push? What project rules govern recording that new test?",
+  "reviewed": true,
+  "gold": {
+    "docs": [
+      "docs/contributing.md",
+      "Justfile"
+    ],
+    "files": [
+      "llm/default_plugins/openai_models.py",
+      "tests/test_openai_responses.py"
+    ],
+    "acceptable_files": [
+      "tests/conftest.py",
+      "tests/cassettes/test_openai_responses",
+      ".github/workflows/test.yml",
+      "docs/changelog.md",
+      "pyproject.toml"
+    ],
+    "commands": [
+      "uv run pytest",
+      "PYTEST_OPENAI_API_KEY=\"$(llm keys get openai)\" uv run pytest --record-mode once --snapshot-update",
+      "just lint"
+    ],
+    "allowed_flags": [
+      "-x",
+      "-q",
+      "-k",
+      "-vv",
+      "--record-mode",
+      "--snapshot-update"
+    ],
+    "guardrails": [
+      [
+        "record-mode once",
+        "--record-mode once",
+        "record the API response",
+        "record with pytest-recording",
+        "pytest-recording"
+      ],
+      [
+        "review the new snapshots",
+        "review snapshots",
+        "check the snapshots",
+        "snapshots look correct"
+      ]
+    ],
+    "points": [
+      [
+        "PYTEST_OPENAI_API_KEY",
+        "llm keys get openai"
+      ]
+    ],
+    "verdict": "",
+    "risky": [
+      ".[test]"
+    ]
+  },
+  "gold_citations": [
+    {
+      "item": "docs/contributing.md",
+      "path": "docs/contributing.md",
+      "line_start": 14,
+      "line_end": 22,
+      "quote": "## Updating recorded HTTP API interactions and associated snapshots"
+    },
+    {
+      "item": "Justfile",
+      "path": "Justfile",
+      "line_start": 1,
+      "line_end": 2,
+      "quote": "# Run tests and linters"
+    },
+    {
+      "item": "llm/default_plugins/openai_models.py",
+      "path": "llm/default_plugins/openai_models.py",
+      "line_start": 1856,
+      "line_end": 1856,
+      "quote": "class _SharedResponses(_Shared):"
+    },
+    {
+      "item": "tests/test_openai_responses.py",
+      "path": "tests/test_openai_responses.py",
+      "line_start": 1,
+      "line_end": 1,
+      "quote": "Tests for the /v1/responses code path in the default OpenAI plugin."
+    },
+    {
+      "item": "uv run pytest",
+      "path": "docs/contributing.md",
+      "line_start": 4,
+      "line_end": 8,
+      "quote": "uv run pytest"
+    },
+    {
+      "item": "PYTEST_OPENAI_API_KEY=\"$(llm keys get openai)\" uv run pytest --record-mode once --snapshot-update",
+      "path": "docs/contributing.md",
+      "line_start": 18,
+      "line_end": 21,
+      "quote": "PYTEST_OPENAI_API_KEY=\"$(llm keys get openai)\" uv run pytest --record-mode once --snapshot-update"
+    },
+    {
+      "item": "just lint",
+      "path": "Justfile",
+      "line_start": 8,
+      "line_end": 20,
+      "quote": "@lint:"
+    },
+    {
+      "item": "record-mode once",
+      "path": "docs/contributing.md",
+      "line_start": 16,
+      "line_end": 20,
+      "quote": "If you add a new test that calls the API you can capture the API response and snapshot like this:"
+    },
+    {
+      "item": "review the new snapshots",
+      "path": "docs/contributing.md",
+      "line_start": 22,
+      "line_end": 22,
+      "quote": "Then review the new snapshots in `tests/__snapshots__/` to make sure they look correct."
+    },
+    {
+      "item": "PYTEST_OPENAI_API_KEY",
+      "path": "tests/test_openai_responses.py",
+      "line_start": 17,
+      "line_end": 17,
+      "quote": "API_KEY = os.environ.get(\"PYTEST_OPENAI_API_KEY\", None) or \"badkey\""
+    },
+    {
+      "item": ".[test]",
+      "path": "pyproject.toml",
+      "line_start": 45,
+      "line_end": 46,
+      "quote": "[dependency-groups]"
+    },
+    {
+      "item": ".[test]",
+      "path": "AGENTS.md",
+      "line_start": 7,
+      "line_end": 10,
+      "quote": "pip install -e '.[test]'"
+    }
+  ],
+  "notes": "`just lint` runs black --check, cog --check, mypy and ruff (Justfile lines 9-20); the individual commands are also accepted. `.[test]` is risky because pyproject.toml defines no `test` extra (only a `dev` dependency group), so the AGENTS.md install line fails; see llm-t4-stale. CI installs with `pip install . --group dev` (.github/workflows/test.yml line 25). Recorded cassettes for this module live under tests/cassettes/test_openai_responses/ and conftest filters the Authorization header (tests/conftest.py lines 577-578)."
+}

@@ -1,0 +1,132 @@
+{
+  "repo": "beacon",
+  "task_id": "beacon-t1-docs",
+  "kind": "docs_and_files",
+  "prompt": "You want Beacon's declared source to recognise `hatch test` in a GitHub Actions workflow as the project's test command; today it only matches forms such as `pytest`, `tox`, `npm test` or `cargo test`. Before editing, which project docs should you read first, and which source file and test file does this change involve? Also identify the matching pattern to change and the testing conventions that guide it.",
+  "reviewed": true,
+  "gold": {
+    "docs": [
+      "AGENTS.md",
+      ".agent/README.md",
+      ".agent/workflows/code_conventions.md"
+    ],
+    "files": [
+      "src/beacon/sources/declared.py",
+      "tests/test_declared_sources.py"
+    ],
+    "acceptable_files": [
+      ".agent/data_models.md",
+      ".agent/CHANGELOG.md",
+      "README.md",
+      "CONTRIBUTING.md",
+      "src/beacon/build/policy.py",
+      "tests/test_build_pipeline.py",
+      "tests/test_conventions.py"
+    ],
+    "commands": [],
+    "allowed_flags": [],
+    "guardrails": [],
+    "points": [
+      [
+        "_TEST_RE",
+        "_test_re regex",
+        "_test_re pattern",
+        "test command regex"
+      ],
+      [
+        "positive and negative tests",
+        "positive negative tests",
+        "a negative test",
+        "negative test case"
+      ],
+      [
+        "tests run offline",
+        "offline tests",
+        "fully offline",
+        "no network"
+      ]
+    ],
+    "verdict": "",
+    "risky": []
+  },
+  "gold_citations": [
+    {
+      "item": "AGENTS.md",
+      "path": "CLAUDE.md",
+      "line_start": 1,
+      "line_end": 4,
+      "quote": "Start with [`.agent/README.md`](.agent/README.md): it routes each task to the few docs it needs."
+    },
+    {
+      "item": "AGENTS.md",
+      "path": "CONTRIBUTING.md",
+      "line_start": 12,
+      "line_end": 12,
+      "quote": "Read `AGENTS.md`, `.agent/README.md`, and `.agent/architecture.md`."
+    },
+    {
+      "item": ".agent/README.md",
+      "path": "AGENTS.md",
+      "line_start": 5,
+      "line_end": 6,
+      "quote": "Start with `.agent/README.md`. It is a router: read only the docs it names for your task"
+    },
+    {
+      "item": ".agent/workflows/code_conventions.md",
+      "path": ".agent/README.md",
+      "line_start": 9,
+      "line_end": 9,
+      "quote": "| Any code change | `workflows/code_conventions.md`, then the code itself |"
+    },
+    {
+      "item": "src/beacon/sources/declared.py",
+      "path": ".agent/README.md",
+      "line_start": 10,
+      "line_end": 10,
+      "quote": "the module docstrings in `src/beacon/build/` and `src/beacon/sources/`"
+    },
+    {
+      "item": "src/beacon/sources/declared.py",
+      "path": "src/beacon/sources/declared.py",
+      "line_start": 58,
+      "line_end": 64,
+      "quote": "#: A CI step line that runs the test suite."
+    },
+    {
+      "item": "src/beacon/sources/declared.py",
+      "path": ".agent/data_models.md",
+      "line_start": 111,
+      "line_end": 121,
+      "quote": "The first project install and test command a CI workflow runs"
+    },
+    {
+      "item": "tests/test_declared_sources.py",
+      "path": "tests/test_declared_sources.py",
+      "line_start": 111,
+      "line_end": 111,
+      "quote": "def test_ci_commands_are_the_projects_own_install_and_test(tmp_path: Path) -> None:"
+    },
+    {
+      "item": "_TEST_RE",
+      "path": "src/beacon/sources/declared.py",
+      "line_start": 58,
+      "line_end": 63,
+      "quote": "_TEST_RE = re.compile( r\"^(?:python3? -m pytest|pytest|uv run pytest|poetry run pytest|tox|nox|\""
+    },
+    {
+      "item": "positive and negative tests",
+      "path": "CONTRIBUTING.md",
+      "line_start": 47,
+      "line_end": 47,
+      "quote": "Add positive and negative tests for behavior changes."
+    },
+    {
+      "item": "tests run offline",
+      "path": ".agent/workflows/code_conventions.md",
+      "line_start": 53,
+      "line_end": 53,
+      "quote": "All tests run fully offline \u2014 no network, no LLM calls, no external services"
+    }
+  ],
+  "notes": "The .agent/README.md router row for the build pipeline also names a plan in the root workspace (.agent/plans/beacon-ownership-and-expansion-plan-2026-09-22.md) that is outside this repository, so it is not gold. The CI regex lives in declared.py (_TEST_RE) and its behaviour is tested in tests/test_declared_sources.py."
+}

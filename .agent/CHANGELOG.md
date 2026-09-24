@@ -1,5 +1,14 @@
 # archolith-bench Changelog
 
+## 2026-09-24 - Beacon eval gold for Beacon, llm and smolagents
+
+- `archolith_bench/beacon_eval/tasks/{beacon,llm,smolagents}/` (new): five grounded tasks per repository
+  (docs and files, commands and rules, a decision, a stale document, a first plan), drafted by fresh
+  agents with no Beacon context from exports without `beacon.yaml`, peer-reviewed by Codex (11
+  findings applied with owner approval) and owner-approved. Beacon is pinned to `27e2fad`. Every task
+  grounds cleanly at its pin; changed wordings were checked to accept a correct answer and reject a
+  wrong one. With Menhir's five, the evaluation has 20 tasks.
+
 ## 2026-09-23 - Beacon eval: Menhir pinned to the canonical-docs merge
 
 - `archolith_bench/beacon_eval/repos.json`: Menhir pin `9100d0db` -> `9432a60d` (Menhir #140: Beacon

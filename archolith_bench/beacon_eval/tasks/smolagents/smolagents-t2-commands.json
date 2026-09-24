@@ -1,0 +1,187 @@
+{
+  "repo": "smolagents",
+  "task_id": "smolagents-t2-commands",
+  "kind": "commands_and_guardrails",
+  "prompt": "You plan to add support for Python `match` statements (`ast.Match`) to the `LocalPythonExecutor` in `src/smolagents/local_python_executor.py`, with tests. What exact commands does the project prescribe to install the dev environment, check lint and formatting, auto-fix style, and run the tests? And which project rules govern this change, both for contributing it and for how the executor must treat unsupported code?",
+  "reviewed": true,
+  "gold": {
+    "docs": [
+      "CONTRIBUTING.md",
+      "AGENTS.md",
+      "docs/source/en/tutorials/secure_code_execution.md"
+    ],
+    "files": [
+      "src/smolagents/local_python_executor.py",
+      "tests/test_local_python_executor.py"
+    ],
+    "acceptable_files": [
+      "Makefile",
+      "pyproject.toml",
+      "docs/source/en/reference/python_executors.md"
+    ],
+    "commands": [
+      "pip install -e \".[dev]\"",
+      "make quality",
+      "make style",
+      "make test"
+    ],
+    "allowed_flags": [],
+    "guardrails": [
+      [
+        "open an issue first",
+        "accepted issue",
+        "issue labelled accepted",
+        "wait for status accepted"
+      ],
+      [
+        "write unit tests",
+        "add unit tests",
+        "unit tests for new functionality",
+        "add a unit test"
+      ],
+      [
+        "disclose AI assistant",
+        "used an AI assistant",
+        "tell us AI assistant",
+        "mention AI assistant"
+      ],
+      [
+        "not explicitly defined raise error",
+        "unsupported operations raise error",
+        "anything else is refused",
+        "raise InterpreterError unsupported"
+      ]
+    ],
+    "points": [
+      [
+        "evaluate_ast",
+        "branch in evaluate_ast",
+        "dispatch in evaluate_ast"
+      ]
+    ],
+    "verdict": "",
+    "risky": []
+  },
+  "gold_citations": [
+    {
+      "item": "CONTRIBUTING.md",
+      "path": "CONTRIBUTING.md",
+      "line_start": 131,
+      "line_end": 133,
+      "quote": "To install dev dependencies, run:"
+    },
+    {
+      "item": "AGENTS.md",
+      "path": "AGENTS.md",
+      "line_start": 1,
+      "line_end": 4,
+      "quote": "# Contributor Guidelines"
+    },
+    {
+      "item": "docs/source/en/tutorials/secure_code_execution.md",
+      "path": "docs/source/en/tutorials/secure_code_execution.md",
+      "line_start": 51,
+      "line_end": 52,
+      "quote": "We have re-built a more secure `LocalPythonExecutor` from the ground up."
+    },
+    {
+      "item": "src/smolagents/local_python_executor.py",
+      "path": "src/smolagents/local_python_executor.py",
+      "line_start": 1567,
+      "line_end": 1569,
+      "quote": "raise InterpreterError(f\"{expression.__class__.__name__} is not supported.\")"
+    },
+    {
+      "item": "tests/test_local_python_executor.py",
+      "path": "tests/test_local_python_executor.py",
+      "line_start": 52,
+      "line_end": 52,
+      "quote": "class TestEvaluatePythonCode:"
+    },
+    {
+      "item": "pip install -e \".[dev]\"",
+      "path": "CONTRIBUTING.md",
+      "line_start": 137,
+      "line_end": 139,
+      "quote": "pip install -e \".[dev]\""
+    },
+    {
+      "item": "make quality",
+      "path": "CONTRIBUTING.md",
+      "line_start": 151,
+      "line_end": 155,
+      "quote": "make quality"
+    },
+    {
+      "item": "make quality",
+      "path": "Makefile",
+      "line_start": 6,
+      "line_end": 8,
+      "quote": "ruff format --check $(check_dirs)"
+    },
+    {
+      "item": "make style",
+      "path": "CONTRIBUTING.md",
+      "line_start": 157,
+      "line_end": 160,
+      "quote": "make style"
+    },
+    {
+      "item": "make test",
+      "path": "CONTRIBUTING.md",
+      "line_start": 164,
+      "line_end": 167,
+      "quote": "make test"
+    },
+    {
+      "item": "make test",
+      "path": "Makefile",
+      "line_start": 16,
+      "line_end": 17,
+      "quote": "pytest ./tests/"
+    },
+    {
+      "item": "open an issue first",
+      "path": "CONTRIBUTING.md",
+      "line_start": 39,
+      "line_end": 42,
+      "quote": "**Open an issue first.** For anything larger than a typo or a broken link, open an issue"
+    },
+    {
+      "item": "write unit tests",
+      "path": "AGENTS.md",
+      "line_start": 4,
+      "line_end": 4,
+      "quote": "Write unit tests for new functionality"
+    },
+    {
+      "item": "disclose AI assistant",
+      "path": "CONTRIBUTING.md",
+      "line_start": 47,
+      "line_end": 50,
+      "quote": "**Tell us if you used an AI assistant, and stand behind the diff.**"
+    },
+    {
+      "item": "not explicitly defined raise error",
+      "path": "docs/source/en/tutorials/secure_code_execution.md",
+      "line_start": 59,
+      "line_end": 59,
+      "quote": "- Any operation that has not been explicitly defined in our custom interpreter will raise an error."
+    },
+    {
+      "item": "not explicitly defined raise error",
+      "path": "src/smolagents/local_python_executor.py",
+      "line_start": 1568,
+      "line_end": 1568,
+      "quote": "# For now we refuse anything else. Let's add things as we need them."
+    },
+    {
+      "item": "evaluate_ast",
+      "path": "src/smolagents/local_python_executor.py",
+      "line_start": 1417,
+      "line_end": 1417,
+      "quote": "def evaluate_ast("
+    }
+  ],
+  "notes": "CONTRIBUTING.md also gives a uv alternative (uv pip install -e \"smolagents[dev] @ .\"); answers using it are reasonable. CI (.github/workflows/quality.yml, tests.yml) runs the same ruff checks and pytest ./tests/."
+}

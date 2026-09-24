@@ -1,0 +1,153 @@
+{
+  "repo": "smolagents",
+  "task_id": "smolagents-t5-plan",
+  "kind": "first_plan",
+  "prompt": "`docs/README.md` tells contributors to link new pages in `docs/source/_toctree.yml` (and links to that path on GitHub) and to add files under `./source`, but each language has its own table of contents, e.g. `docs/source/en/_toctree.yml`. Before touching anything, write a safe first-step plan to fix these instructions: which project documents to read, which files the change touches, what check to run before committing, and what the contribution rules say about issues, pull requests and recording the change.",
+  "reviewed": true,
+  "gold": {
+    "docs": [
+      "CONTRIBUTING.md",
+      "docs/README.md"
+    ],
+    "files": [
+      "docs/README.md"
+    ],
+    "acceptable_files": [
+      "docs/source/en/_toctree.yml"
+    ],
+    "commands": [],
+    "allowed_flags": [],
+    "guardrails": [
+      [
+        "do not commit built documentation",
+        "don't commit built docs",
+        "not commit the build output",
+        "build output not committed"
+      ],
+      [
+        "disclose AI assistant",
+        "used an AI assistant",
+        "tell us AI assistant",
+        "mention AI assistant"
+      ]
+    ],
+    "points": [
+      [
+        "docs/source/en/_toctree.yml",
+        "en/_toctree.yml",
+        "per-language toctree",
+        "per-language _toctree.yml"
+      ],
+      [
+        "typos and broken links exempt",
+        "broken-link fixes need no issue",
+        "broken link no issue",
+        "no issue needed for broken links"
+      ],
+      [
+        "larger changes need accepted issue",
+        "substantive changes need accepted issue",
+        "larger than a typo open an issue",
+        "status:accepted issue for larger changes"
+      ],
+      [
+        "one open PR until first lands",
+        "one pull request at a time",
+        "one open pull request at a time"
+      ],
+      [
+        "doc-builder build smolagents docs/source/en/",
+        "doc-builder preview smolagents docs/source/en/"
+      ]
+    ],
+    "verdict": "",
+    "risky": []
+  },
+  "gold_citations": [
+    {
+      "item": "CONTRIBUTING.md",
+      "path": "CONTRIBUTING.md",
+      "line_start": 32,
+      "line_end": 37,
+      "quote": "Please read them\nbefore you start writing code"
+    },
+    {
+      "item": "docs/README.md",
+      "path": "docs/README.md",
+      "line_start": 78,
+      "line_end": 79,
+      "quote": "the filename without the extension in the [`_toctree.yml`](https://github.com/huggingface/smolagents/blob/main/docs/source/_toctree.yml) file."
+    },
+    {
+      "item": "docs/README.md",
+      "path": "docs/README.md",
+      "line_start": 117,
+      "line_end": 118,
+      "quote": "- Link that file in `./source/_toctree.yml` on the correct toc-tree."
+    },
+    {
+      "item": "--build_dir",
+      "path": "docs/README.md",
+      "line_start": 51,
+      "line_end": 51,
+      "quote": "You can adapt the `--build_dir` to set any temporary folder that you prefer."
+    },
+    {
+      "item": "do not commit built documentation",
+      "path": "docs/README.md",
+      "line_start": 37,
+      "line_end": 38,
+      "quote": "You don't have to commit the built documentation."
+    },
+    {
+      "item": "disclose AI assistant",
+      "path": "CONTRIBUTING.md",
+      "line_start": 47,
+      "line_end": 50,
+      "quote": "**Tell us if you used an AI assistant, and stand behind the diff.**"
+    },
+    {
+      "item": "docs/source/en/_toctree.yml",
+      "path": "docs/source/en/_toctree.yml",
+      "line_start": 33,
+      "line_end": 33,
+      "quote": "- local: examples/multiagents"
+    },
+    {
+      "item": "docs/source/en/_toctree.yml",
+      "path": "docs/README.md",
+      "line_start": 69,
+      "line_end": 70,
+      "quote": "`_toctree.yml` & restart `preview` command"
+    },
+    {
+      "item": "typos and broken links exempt",
+      "path": "CONTRIBUTING.md",
+      "line_start": 39,
+      "line_end": 39,
+      "quote": "For anything larger than a typo or a broken link, open an issue"
+    },
+    {
+      "item": "larger changes need accepted issue",
+      "path": "CONTRIBUTING.md",
+      "line_start": 40,
+      "line_end": 40,
+      "quote": "and wait for a maintainer to label it `status:accepted` before you write the patch."
+    },
+    {
+      "item": "one open PR until first lands",
+      "path": "CONTRIBUTING.md",
+      "line_start": 44,
+      "line_end": 44,
+      "quote": "One open pull request at a time, until your first one lands."
+    },
+    {
+      "item": "doc-builder build smolagents docs/source/en/",
+      "path": "docs/README.md",
+      "line_start": 48,
+      "line_end": 48,
+      "quote": "doc-builder build smolagents docs/source/en/ --build_dir ~/tmp/test-build"
+    }
+  ],
+  "notes": "The repository has no CHANGELOG and no staging rule, so recording means a PR with AI-assistant disclosure; CONTRIBUTING.md exempts typo/broken-link fixes from the accepted-issue requirement, and the GitHub link on docs/README.md line 79 points at a non-existent docs/source/_toctree.yml. A reviewer may judge the ./source wording fix on line 117-118 as slightly beyond a pure broken-link fix; if so, 'open an issue first' would also be acceptable. doc-builder preview smolagents docs/source/en/ is a reasonable alternative check."
+}
