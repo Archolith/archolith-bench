@@ -29,6 +29,8 @@ from archolith_bench.beacon_eval.runner import (
 )
 
 HERE = Path(__file__).parent
+#: --task-set name -> task folder under HERE.
+TASK_SETS = {"main": "tasks", "why": "why_tasks", "adr": "why_tasks_adr"}
 
 
 def add_parser(subparsers: argparse._SubParsersAction) -> None:
@@ -39,8 +41,11 @@ def add_parser(subparsers: argparse._SubParsersAction) -> None:
     parser.add_argument("--repos", default="", help="Comma-separated repo names (default: all)")
     parser.add_argument("--tasks", default="", help="Comma-separated task ids (default: all)")
     parser.add_argument(
-        "--task-set", choices=("main", "why"), default="main",
-        help="main: the 20 orientation tasks (tasks/); why: memory-only \"why\" tasks (why_tasks/)",
+        "--task-set", choices=tuple(TASK_SETS), default="main",
+        help=(
+            "main: the 20 orientation tasks (tasks/); why: memory-only \"why\" tasks (why_tasks/); "
+            "adr: \"why\" tasks answered by the repository's ADRs (why_tasks_adr/, repo menhir-adr)"
+        ),
     )
     parser.add_argument(
         "--conditions", default=",".join(DEFAULT_CONDITIONS),
@@ -120,7 +125,7 @@ def _split(value: str) -> tuple[str, ...]:
 
 def run(args: argparse.Namespace) -> int:
     pins = load_repos(HERE / "repos.json")
-    task_root = HERE / ("why_tasks" if args.task_set == "why" else "tasks")
+    task_root = HERE / TASK_SETS[args.task_set]
     tasks = load_tasks(task_root, _split(args.repos), _split(args.tasks))
     if not args.include_unreviewed:
         tasks = [task for task in tasks if task.reviewed]

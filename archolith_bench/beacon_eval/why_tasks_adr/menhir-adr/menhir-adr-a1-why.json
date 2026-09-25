@@ -1,0 +1,51 @@
+{
+ "repo": "menhir-adr",
+ "task_id": "menhir-adr-a1-why",
+ "kind": "why",
+ "prompt": "Menhir's stdio MCP server refuses to start unless MENHIR_BACKEND_URL points at a running, ready backend. A contributor proposes that when the backend is down, the stdio process should bootstrap its own memory runtime locally so agents keep working. Why doesn't Menhir do that?",
+ "reviewed": false,
+ "gold": {
+  "docs": [
+   ".agent/adr/0004-single-runtime-owner-and-backend-first-access.md"
+  ],
+  "files": [],
+  "acceptable_files": [],
+  "commands": [],
+  "allowed_flags": [],
+  "guardrails": [],
+  "points": [
+   [
+    "one runtime owner",
+    "multiplies schedulers and queue recovery owners",
+    "second runtime owner",
+    "duplicate schedulers and queue recovery"
+   ],
+   [
+    "split-brain runtime",
+    "availability problem becomes split brain",
+    "silently becomes a second runtime",
+    "fail visibly instead"
+   ]
+  ],
+  "verdict": "",
+  "risky": []
+ },
+ "gold_citations": [
+  {
+   "item": "one runtime owner",
+   "path": ".agent/adr/0004-single-runtime-owner-and-backend-first-access.md",
+   "line_start": 59,
+   "line_end": 59,
+   "quote": "It multiplies schedulers, queue recovery owners, connection pools, and process-scoped"
+  },
+  {
+   "item": "split-brain runtime",
+   "path": ".agent/adr/0004-single-runtime-owner-and-backend-first-access.md",
+   "line_start": 73,
+   "line_end": 73,
+   "quote": "Rejected. An availability problem would silently become a split-brain runtime."
+  }
+ ],
+ "memory_citations": [],
+ "notes": "Answer is written in .agent/adr/0004-single-runtime-owner-and-backend-first-access.md at Menhir fdaf56bf (ADR merged in #133, 2026-09-24). Gold points and quotes are verbatim from the ADR; drafted by Claude from the ADR text only, pending owner review."
+}

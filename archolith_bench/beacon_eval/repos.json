@@ -6,6 +6,11 @@
       "commit": "9432a60db62d34a069cccb96298364c2163a2ce1"
     },
     {
+      "name": "menhir-adr",
+      "url": "https://github.com/Archolith/menhir.git",
+      "commit": "fdaf56bf7c71adec57115be210e83b76f4515a7a"
+    },
+    {
       "name": "beacon",
       "url": "https://github.com/Archolith/beacon.git",
       "commit": "27e2fad115273e765851d6c45a0a2ee2640300a3"

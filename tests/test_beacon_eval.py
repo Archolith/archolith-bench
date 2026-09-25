@@ -679,6 +679,26 @@ def test_why_task_set_loads_apart_and_gold_wordings_score(tmp_path: Path) -> Non
         assert scores.get("risky_false_positive", 0.0) == 0.0, task.task_id
 
 
+def test_adr_task_set_loads_apart_on_its_own_pin(tmp_path: Path) -> None:
+    from archolith_bench.beacon_eval.cli import TASK_SETS
+    from archolith_bench.beacon_eval.models import load_repos, load_tasks
+
+    root = Path(runner_mod.__file__).parent
+    assert TASK_SETS["adr"] == "why_tasks_adr"
+    adr = load_tasks(root / TASK_SETS["adr"])
+    others = load_tasks(root / "tasks") + load_tasks(root / "why_tasks")
+    pins = load_repos(root / "repos.json")
+    assert len(adr) == 6 and all(t.kind == "why" and t.repo == "menhir-adr" for t in adr)
+    assert not {t.task_id for t in adr} & {t.task_id for t in others}
+    # Its own pin: the older menhir pin that the other task sets use is unchanged.
+    assert pins["menhir-adr"].commit != pins["menhir"].commit
+    for task in adr:
+        assert task.gold.docs and all(d.startswith(".agent/adr/") for d in task.gold.docs)
+        findings = [p if isinstance(p, str) else p[0] for p in task.gold.points]
+        scores = score({"findings": findings, "docs": list(task.gold.docs)}, task.gold, tmp_path)
+        assert scores["point_recall"] == 1.0, task.task_id
+
+
 def _ready_server(body: dict):
     import http.server
     import threading
