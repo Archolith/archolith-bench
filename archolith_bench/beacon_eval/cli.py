@@ -89,6 +89,13 @@ def add_parser(subparsers: argparse._SubParsersAction) -> None:
         help="run: reuse saved runs that have an answer and no error (after a killed matrix)",
     )
     parser.add_argument(
+        "--workers", type=int, default=1,
+        help=(
+            "run: runs in flight at once (default 1). Each in-flight run holds its reserve "
+            "against the budget, and the first stop admits no new run."
+        ),
+    )
+    parser.add_argument(
         "--judge-model", default=DEFAULT_JUDGE_MODEL,
         help="judge: OpenAI model grading each gold point of saved answers (key from --env-file)",
     )
@@ -178,7 +185,12 @@ def run(args: argparse.Namespace) -> int:
     if "M" in conditions and not (config.memory_url and config.memory_key):
         print("condition M needs --memory-url and --memory-key-file", file=sys.stderr)
         return 2
-    results, stopped = run_matrix(config, pins, tasks, conditions, args.repeats, resume=args.resume)
+    if args.workers < 1:
+        print("--workers must be at least 1", file=sys.stderr)
+        return 2
+    results, stopped = run_matrix(
+        config, pins, tasks, conditions, args.repeats, resume=args.resume, workers=args.workers
+    )
     report = render(
         results,
         {

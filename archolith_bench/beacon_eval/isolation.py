@@ -7,6 +7,9 @@ plugins through. Each run instead gets ``XDG_CONFIG_HOME`` pointing at a fresh t
 directory whose ``opencode/opencode.json`` holds only ``$schema``, ``model`` and the
 one provider the model needs, plus the Beacon MCP server in condition B. The caller's
 ``OPENCODE_*`` variables are dropped and the Claude Code fallbacks are disabled.
+OpenCode's data and state (its sessions database) also go in that temp directory, so runs
+never write into the user's own OpenCode history and parallel runs never share a database;
+only the downloaded ripgrep is copied in, so a run need not fetch it.
 
 OpenCode also searches parent directories for project config up to the git root, so
 the agent's checkout is made its own git repository (see ``runner.seal_checkout``).
@@ -19,6 +22,7 @@ reads a credential field, prints or logs one.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import sys
 import tempfile
@@ -115,12 +119,40 @@ def memory_server(url: str) -> dict[str, Any]:
     }
 
 
+#: Per-run OpenCode data and state (sessions database, logs), inside the run's temp home.
+DATA_DIR = ".data"
+STATE_DIR = ".state"
+
+
 def isolated_env(base: Mapping[str, str], config_home: Path) -> dict[str, str]:
-    """*base* without ``OPENCODE_*`` overrides, pointed at *config_home*."""
+    """*base* without ``OPENCODE_*`` overrides, pointed at *config_home*.
+
+    Data and state also live under *config_home*: runs never write into the user's own
+    OpenCode sessions database, and concurrent runs never share one.
+    """
     env = {key: value for key, value in base.items() if not key.upper().startswith("OPENCODE_")}
     env["XDG_CONFIG_HOME"] = str(config_home)
+    env["XDG_DATA_HOME"] = str(config_home / DATA_DIR)
+    env["XDG_STATE_HOME"] = str(config_home / STATE_DIR)
     env["OPENCODE_DISABLE_CLAUDE_CODE"] = "1"
     return env
+
+
+def _seed_tools(data_home: Path, source_data_home: Path) -> None:
+    """Copy OpenCode's downloaded ripgrep into a fresh data home, so a run doesn't fetch it."""
+    source_bin = source_data_home / "opencode" / "bin"
+    target_bin = data_home / "opencode" / "bin"
+    target_bin.mkdir(parents=True, exist_ok=True)
+    for name in ("rg.exe", "rg"):
+        found = source_bin / name
+        if found.is_file():
+            shutil.copy2(found, target_bin / name)
+
+
+def default_data_source() -> Path:
+    """The user's OpenCode data home (read only: tools are copied from it)."""
+    xdg = os.environ.get("XDG_DATA_HOME")
+    return Path(xdg) if xdg else Path.home() / ".local" / "share"
 
 
 def load_api_keys(env_file: Path) -> dict[str, str]:
@@ -149,6 +181,8 @@ def isolated_config_home(
     try:
         (home / "opencode").mkdir()
         (home / "opencode" / "opencode.json").write_text(json.dumps(config, indent=2), encoding="utf-8")
+        (home / STATE_DIR).mkdir()
+        _seed_tools(home / DATA_DIR, default_data_source())
         yield home
     finally:
         shutil.rmtree(home, ignore_errors=True)
