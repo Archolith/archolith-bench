@@ -3,7 +3,7 @@
  "task_id": "menhir-adr-a1-why",
  "kind": "why",
  "prompt": "Menhir's stdio MCP server refuses to start unless MENHIR_BACKEND_URL points at a running, ready backend. A contributor proposes that when the backend is down, the stdio process should bootstrap its own memory runtime locally so agents keep working. Why doesn't Menhir do that?",
- "reviewed": false,
+ "reviewed": true,
  "gold": {
   "docs": [
    ".agent/adr/0004-single-runtime-owner-and-backend-first-access.md"
@@ -47,5 +47,5 @@
   }
  ],
  "memory_citations": [],
- "notes": "Answer is written in .agent/adr/0004-single-runtime-owner-and-backend-first-access.md at Menhir fdaf56bf (ADR merged in #133, 2026-09-24). Gold points and quotes are verbatim from the ADR; drafted by Claude from the ADR text only, pending owner review."
+ "notes": "Answer is written in .agent/adr/0004-single-runtime-owner-and-backend-first-access.md at Menhir fdaf56bf (ADR merged in #133, 2026-09-24). Gold points and quotes are verbatim from the ADR; drafted by Claude from the ADR text only, approved by the owner 2026-09-25."
 }

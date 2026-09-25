@@ -3,7 +3,7 @@
  "task_id": "menhir-adr-a5-why",
  "kind": "why",
  "prompt": "Several Menhir retrieval and consolidation features are fully built and tested but still ship off by default. A contributor wants a feature's default flipped to on automatically as soon as it passes its benchmark threshold. Why doesn't Menhir do that, and would the same rule hold back a fix for a known correctness defect?",
- "reviewed": false,
+ "reviewed": true,
  "gold": {
   "docs": [
    ".agent/adr/0007-evidence-gated-default-off-feature-activation.md"
@@ -57,5 +57,5 @@
   }
  ],
  "memory_citations": [],
- "notes": "Answer is written in .agent/adr/0007-evidence-gated-default-off-feature-activation.md at Menhir fdaf56bf (ADR merged in #133, 2026-09-24). Gold points and quotes are verbatim from the ADR; drafted by Claude from the ADR text only, pending owner review."
+ "notes": "Answer is written in .agent/adr/0007-evidence-gated-default-off-feature-activation.md at Menhir fdaf56bf (ADR merged in #133, 2026-09-24). Gold points and quotes are verbatim from the ADR; drafted by Claude from the ADR text only, approved by the owner 2026-09-25."
 }

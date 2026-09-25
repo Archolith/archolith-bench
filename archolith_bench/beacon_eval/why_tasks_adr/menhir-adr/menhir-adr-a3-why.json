@@ -3,7 +3,7 @@
  "task_id": "menhir-adr-a3-why",
  "kind": "why",
  "prompt": "Menhir's destructive graph operations (merge, unmerge, delete, erasure) first write a PREPARED row with recovery material to the SQLite sidecar, then mutate Neo4j, verify, and mark the row COMMITTED. A newcomer asks why Menhir doesn't simply mutate the graph and write telemetry afterwards. Why not?",
- "reviewed": false,
+ "reviewed": true,
  "gold": {
   "docs": [
    ".agent/adr/0006-recoverable-sagas-for-cross-store-mutations.md"
@@ -58,5 +58,5 @@
   }
  ],
  "memory_citations": [],
- "notes": "Answer is written in .agent/adr/0006-recoverable-sagas-for-cross-store-mutations.md at Menhir fdaf56bf (ADR merged in #133, 2026-09-24). Gold points and quotes are verbatim from the ADR; drafted by Claude from the ADR text only, pending owner review."
+ "notes": "Answer is written in .agent/adr/0006-recoverable-sagas-for-cross-store-mutations.md at Menhir fdaf56bf (ADR merged in #133, 2026-09-24). Gold points and quotes are verbatim from the ADR; drafted by Claude from the ADR text only, approved by the owner 2026-09-25."
 }

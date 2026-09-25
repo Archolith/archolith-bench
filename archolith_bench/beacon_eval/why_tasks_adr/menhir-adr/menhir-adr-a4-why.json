@@ -3,7 +3,7 @@
  "task_id": "menhir-adr-a4-why",
  "kind": "why",
  "prompt": "To answer questions like 'how many movies are on my watch list', a contributor proposes skipping Menhir's fold and View machinery and having the LLM count the matching memories at recall time. Why does Menhir fold events into Views instead?",
- "reviewed": false,
+ "reviewed": true,
  "gold": {
   "docs": [
    ".agent/adr/0003-event-fold-view-projection-boundary.md"
@@ -58,5 +58,5 @@
   }
  ],
  "memory_citations": [],
- "notes": "Answer is written in .agent/adr/0003-event-fold-view-projection-boundary.md at Menhir fdaf56bf (ADR merged in #133, 2026-09-24). Gold points and quotes are verbatim from the ADR; drafted by Claude from the ADR text only, pending owner review."
+ "notes": "Answer is written in .agent/adr/0003-event-fold-view-projection-boundary.md at Menhir fdaf56bf (ADR merged in #133, 2026-09-24). Gold points and quotes are verbatim from the ADR; drafted by Claude from the ADR text only, approved by the owner 2026-09-25."
 }
