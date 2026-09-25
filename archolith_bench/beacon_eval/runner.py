@@ -21,6 +21,8 @@ import sys
 import tarfile
 import threading
 import time
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
+from contextlib import nullcontext
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import IO, Any
@@ -134,17 +136,21 @@ class Budget:
     cap_usd: float | None = None
     reserve_usd: float = 0.0
     used_usd: float = 0.0
+    #: Runs admitted but not finished; each still holds its reserve (parallel matrix).
+    in_flight: int = 0
 
     def check(self) -> None:
-        if self.cap is not None and self.used + (self.reserve or 0) > self.cap:
+        held = self.in_flight + 1
+        flying = f", {self.in_flight} run(s) in flight" if self.in_flight else ""
+        if self.cap is not None and self.used + (self.reserve or 0) * held > self.cap:
             raise BudgetExhausted(
                 f"the next run's {self.reserve:,}-token reserve would exceed the "
-                f"{self.cap:,}-token cap ({self.used:,} used)"
+                f"{self.cap:,}-token cap ({self.used:,} used{flying})"
             )
-        if self.cap_usd is not None and self.used_usd + self.reserve_usd > self.cap_usd:
+        if self.cap_usd is not None and self.used_usd + self.reserve_usd * held > self.cap_usd:
             raise BudgetExhausted(
                 f"the next run's ${self.reserve_usd:.2f} reserve would exceed the "
-                f"${self.cap_usd:.2f} cap (${self.used_usd:.4f} spent)"
+                f"${self.cap_usd:.2f} cap (${self.used_usd:.4f} spent{flying})"
             )
 
     def spend(self, tokens: int, usd: float = 0.0) -> None:
@@ -157,19 +163,32 @@ class Budget:
 # ---------------------------------------------------------------------------
 
 
-def export_commit(pin: RepoPin, dest: Path, cache: Path) -> Path:
-    """Write the tree of *pin* at its commit into *dest* (no .git)."""
+def _ensure_source(pin: RepoPin, cache: Path) -> Path:
+    """The local repository holding *pin*'s commit: cloned into *cache* once, and fetched
+    only when the commit is missing, so concurrent exports never write to it."""
     source = Path(pin.local_path) if pin.local_path else cache / pin.name
     if not pin.local_path and not (source / ".git").exists():
         subprocess.run(
             ["git", "clone", "--quiet", "--filter=blob:none", pin.url, str(source)],
             check=True,
         )
-    subprocess.run(
-        ["git", "-C", str(source), "fetch", "--quiet", "origin", pin.commit],
+    present = subprocess.run(
+        ["git", "-C", str(source), "cat-file", "-e", f"{pin.commit}^{{commit}}"],
         check=False,
         capture_output=True,
     )
+    if present.returncode != 0:
+        subprocess.run(
+            ["git", "-C", str(source), "fetch", "--quiet", "origin", pin.commit],
+            check=False,
+            capture_output=True,
+        )
+    return source
+
+
+def export_commit(pin: RepoPin, dest: Path, cache: Path) -> Path:
+    """Write the tree of *pin* at its commit into *dest* (no .git)."""
+    source = _ensure_source(pin, cache)
     archive = subprocess.run(
         ["git", "-C", str(source), "archive", "--format=tar", pin.commit],
         check=True,
@@ -614,12 +633,14 @@ def run_matrix(
     conditions: tuple[str, ...] = DEFAULT_CONDITIONS,
     repeats: int = 1,
     resume: bool = False,
+    workers: int = 1,
 ) -> tuple[list[RunResult], str]:
     """Run every task x condition x repeat; returns results and why it stopped ("" = done).
 
     A run that stops the matrix is still recorded and counted against the budget. With
     *resume*, a run whose saved ``result.json`` has an answer and no error is reused (after a
-    killed matrix); a folder without one is run again from scratch.
+    killed matrix); a folder without one is run again from scratch. With *workers* > 1, up to
+    that many runs execute at once (see :func:`_run_parallel`).
     """
     budget = Budget(
         config.budget_tokens, config.run_reserve_tokens,
@@ -639,6 +660,10 @@ def run_matrix(
             if line.strip():
                 row = json.loads(line)
                 logged.add((row["repo"], row["task_id"], row["condition"], int(row["repeat"])))
+    if workers > 1:
+        return _run_parallel(
+            config, pins, tasks, conditions, repeats, resume, workers, budget, log, logged
+        )
     try:
         for repeat in range(1, repeats + 1):
             for task in tasks:
@@ -668,6 +693,104 @@ def run_matrix(
     return results, ""
 
 
+def _run_parallel(
+    config: RunnerConfig,
+    pins: dict[str, RepoPin],
+    tasks: list[Task],
+    conditions: tuple[str, ...],
+    repeats: int,
+    resume: bool,
+    workers: int,
+    budget: Budget,
+    log: Path,
+    logged: set[tuple[str, str, str, int]],
+) -> tuple[list[RunResult], str]:
+    """The matrix with up to *workers* runs in flight.
+
+    Admission holds a reserve for every run in flight (``Budget.in_flight``), so the cap is
+    never passed by more than what those runs overshoot their own reserve. The first stop
+    (rate limit, over-reserve run, missing cost data, or the budget) admits no new run; runs
+    already in flight finish, are recorded and counted. Shared state that runs would otherwise
+    race to create -- the clone cache and the beacons -- is prepared once, up front. Results
+    come back in matrix order, whatever order the runs finished in.
+    """
+    jobs = [
+        (repeat, task, condition)
+        for repeat in range(1, repeats + 1)
+        for task in tasks
+        for condition in conditions
+    ]
+    order = {(t.repo, t.task_id, c, r): index for index, (r, t, c) in enumerate(jobs)}
+    cache = config.workdir / "cache"
+    for pin in {pins[t.repo].name: pins[t.repo] for t in tasks}.values():
+        _ensure_source(pin, cache)
+        if set(conditions) & {"B", "C", "D"}:
+            build_beacon(config, pin)
+
+    lock = threading.Lock()
+    results: list[RunResult] = []
+    stop = ""
+
+    def record(result: RunResult) -> None:
+        with lock:
+            budget.spend(result.total_tokens, result.cost_usd)
+            results.append(result)
+            with log.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(asdict(result)) + "\n")
+
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="beacon-eval") as pool:
+        pending: dict[Future[RunResult], tuple[int, Task, str]] = {}
+        queue_ = iter(jobs)
+        unexpected: BaseException | None = None
+        while True:
+            while not stop and len(pending) < workers:
+                job = next(queue_, None)
+                if job is None:
+                    break
+                repeat, task, condition = job
+                if resume:
+                    saved = _completed_run(config, task, condition, repeat)
+                    if saved is not None:
+                        key = (saved.repo, saved.task_id, saved.condition, saved.repeat)
+                        if key in logged:
+                            with lock:
+                                budget.spend(saved.total_tokens, saved.cost_usd)
+                                results.append(saved)
+                        else:
+                            record(saved)
+                        continue
+                with lock:
+                    try:
+                        budget.check()
+                    except BudgetExhausted as exc:
+                        stop = str(exc)
+                        break
+                    budget.in_flight += 1
+                pending[pool.submit(run_one, config, pins[task.repo], task, condition, repeat)] = job
+            if not pending:
+                break
+            done, _ = wait(pending, return_when=FIRST_COMPLETED)
+            for future in done:
+                repeat, task, condition = pending.pop(future)
+                with lock:
+                    budget.in_flight -= 1
+                try:
+                    result = future.result()
+                except (RateLimited, BudgetExhausted, AccountingError) as exc:
+                    _record_stopped(config, task, condition, repeat, budget, results, log, lock)
+                    stop = stop or str(exc)
+                    continue
+                except BaseException as exc:  # noqa: BLE001 - re-raised once in-flight runs end
+                    unexpected = unexpected or exc
+                    stop = stop or f"{type(exc).__name__}: {exc}"
+                    continue
+                record(result)
+        if unexpected is not None:
+            raise unexpected
+    results.sort(key=lambda r: order.get((r.repo, r.task_id, r.condition, r.repeat), len(order)))
+    return results, stop
+
+
 def _completed_run(config: RunnerConfig, task: Task, condition: str, repeat: int) -> RunResult | None:
     saved = config.workdir / "runs" / f"{task.repo}-{task.task_id}-{condition}-{repeat}" / "result.json"
     if not saved.is_file():
@@ -678,17 +801,18 @@ def _completed_run(config: RunnerConfig, task: Task, condition: str, repeat: int
 
 def _record_stopped(
     config: RunnerConfig, task: Task, condition: str, repeat: int, budget: Budget,
-    results: list[RunResult], log: Path,
+    results: list[RunResult], log: Path, lock: threading.Lock | None = None,
 ) -> None:
     saved = config.workdir / "runs" / f"{task.repo}-{task.task_id}-{condition}-{repeat}" / "result.json"
     if not saved.is_file():
         return
     data = json.loads(saved.read_text(encoding="utf-8"))
     result = RunResult(**data)
-    budget.spend(result.total_tokens, result.cost_usd)
-    results.append(result)
-    with log.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(data) + "\n")
+    with lock if lock is not None else nullcontext():
+        budget.spend(result.total_tokens, result.cost_usd)
+        results.append(result)
+        with log.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(data) + "\n")
 
 
 __all__ = [

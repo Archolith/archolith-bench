@@ -202,7 +202,13 @@ def test_a_missing_provider_fails_before_any_run(tmp_path: Path) -> None:
 
 def test_isolated_env_drops_opencode_overrides(tmp_path: Path) -> None:
     env = isolated_env({"PATH": "p", "OPENCODE_CONFIG": "x", "OPENCODE_CONFIG_DIR": "y"}, tmp_path)
-    assert env == {"PATH": "p", "XDG_CONFIG_HOME": str(tmp_path), "OPENCODE_DISABLE_CLAUDE_CODE": "1"}
+    assert env == {
+        "PATH": "p",
+        "XDG_CONFIG_HOME": str(tmp_path),
+        "XDG_DATA_HOME": str(tmp_path / ".data"),
+        "XDG_STATE_HOME": str(tmp_path / ".state"),
+        "OPENCODE_DISABLE_CLAUDE_CODE": "1",
+    }
 
 
 # ---------------------------------------------------------------------------
