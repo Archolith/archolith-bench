@@ -24,6 +24,7 @@ from archolith_bench.beacon_eval.runner import (
     rescore,
     run_matrix,
     seal_checkout,
+    seal_repo,
 )
 
 STUB = r"""
@@ -44,21 +45,45 @@ def _git(root: Path, *args: str) -> str:
     return subprocess.run(["git", "-C", str(root), *args], check=True, capture_output=True, text=True).stdout
 
 
-def _repo(tmp_path: Path, attributes: str = "") -> RepoPin:
+def _gitb(root: Path, *args: str) -> bytes:
+    return subprocess.run(["git", "-C", str(root), *args], check=True, capture_output=True).stdout
+
+
+def _commit(root: Path, message: str) -> str:
+    _git(root, "add", "--all")
+    _git(root, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", message)
+    return _git(root, "rev-parse", "HEAD").strip()
+
+
+def _repo(tmp_path: Path, attributes: str = "", ignored_tracked: bool = False) -> RepoPin:
     root = tmp_path / "repo"
     (root / "src").mkdir(parents=True)
-    (root / "AGENTS.md").write_text("# Agents\nNever commit secrets.\n", encoding="utf-8")
-    (root / "src" / "app.py").write_text("print('hi')\n", encoding="utf-8")
+    # Bytes, not text mode: Windows text mode would write CRLF into the blobs.
+    (root / "AGENTS.md").write_bytes(b"# Agents\nNever commit secrets.\n")
+    (root / "src" / "app.py").write_bytes(b"print('hi')\n")
     if attributes:
         (root / ".gitattributes").write_text(attributes, encoding="utf-8")
     _git(root, "init", "-q")
-    _git(root, "add", ".")
-    _git(root, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init")
-    return RepoPin(name="demo", url="", commit=_git(root, "rev-parse", "HEAD").strip(), local_path=str(root))
+    _git(root, "config", "core.autocrlf", "false")
+    if ignored_tracked:
+        (root / ".gitignore").write_bytes(b"*.log\n")
+        (root / "tracked.log").write_bytes(b"kept\n")
+        _git(root, "add", "-f", "tracked.log")
+    commit = _commit(root, "init")
+    return RepoPin(name="demo", url="", commit=commit, local_path=str(root))
 
 
-def _git_files(checkout: Path) -> int:
-    return sum(len(files) for _, _, files in os.walk(checkout / ".git"))
+def _old_seal(pin: RepoPin, tmp_path: Path, name: str) -> Path:
+    """The seal every earlier run used: export, then add --all + commit in the checkout."""
+    checkout = export_commit(pin, tmp_path / name / "checkout", tmp_path / "cache")
+    assert seal_checkout(checkout) == "copied"
+    return checkout
+
+
+def _new_seal(pin: RepoPin, tmp_path: Path, name: str) -> Path:
+    checkout = export_commit(pin, tmp_path / name / "checkout", tmp_path / "cache")
+    assert seal_checkout(checkout, seal_repo(pin, tmp_path / "work")) == "alternates"
+    return checkout
 
 
 def test_alternates_seal_is_a_clean_single_commit_root_with_few_files(tmp_path: Path) -> None:
@@ -68,38 +93,91 @@ def test_alternates_seal_is_a_clean_single_commit_root_with_few_files(tmp_path: 
     outer.mkdir()
     _git(outer, "init", "-q")
     checkout = export_commit(pin, outer / "run" / "checkout", tmp_path / "cache")
-    assert seal_checkout(checkout, Path(pin.local_path), pin.commit) == "alternates"
+    assert seal_checkout(checkout, seal_repo(pin, tmp_path / "work")) == "alternates"
     assert Path(_git(checkout, "rev-parse", "--show-toplevel").strip()).resolve() == checkout.resolve()
     assert _git(checkout, "status", "--porcelain") == ""
     assert len(_git(checkout, "log", "--oneline").splitlines()) == 1
-    assert _git(checkout, "rev-parse", "HEAD^{tree}").strip() == _git(Path(pin.local_path), "rev-parse", f"{pin.commit}^{{tree}}").strip()
     assert _git(checkout, "cat-file", "-p", "HEAD:AGENTS.md").startswith("# Agents")
-    assert _git(checkout, "count-objects").startswith("1 objects")  # the commit only
+    # At most the run's own commit (none when it matches the seal repo's to the second).
+    assert int(_git(checkout, "count-objects").split()[0]) <= 1
+    assert sum(len(files) for _, _, files in os.walk(checkout / ".git")) < 40
 
 
 @pytest.mark.parametrize("autocrlf", ["true", "false"])
-def test_alternates_seal_follows_the_line_endings_git_archive_wrote(tmp_path: Path, autocrlf: str) -> None:
+def test_the_agent_sees_exactly_what_the_old_seal_gave_it(tmp_path: Path, autocrlf: str) -> None:
+    # Tracked-but-ignored files and CRLF exports are where a pin-tree seal would differ.
+    pin = _repo(tmp_path, ignored_tracked=True)
+    _git(Path(pin.local_path), "config", "core.autocrlf", autocrlf)
+    old = _old_seal(pin, tmp_path, "old")
+    new = _new_seal(pin, tmp_path, "new")
+    assert (b"\r\n" in (new / "AGENTS.md").read_bytes()) == (autocrlf == "true")
+    for args in (
+        ("rev-parse", "HEAD^{tree}"),
+        ("ls-files", "-s"),
+        ("ls-files", "--others", "--ignored", "--exclude-standard"),
+        ("status", "--porcelain", "--ignored"),
+        ("cat-file", "-p", "HEAD:AGENTS.md"),
+        ("config", "--local", "--list"),
+        ("log", "--all", "--format=%an %ae %s"),
+    ):
+        assert _gitb(new, *args) == _gitb(old, *args), args
+    assert b"tracked.log" not in _gitb(new, "ls-files")
+
+
+def test_later_history_of_the_repository_is_not_reachable(tmp_path: Path) -> None:
     pin = _repo(tmp_path)
-    _git(Path(pin.local_path), "config", "core.autocrlf", autocrlf)  # local: wins over any global
+    root = Path(pin.local_path)
+    (root / "LATER.md").write_text("the answer\n", encoding="utf-8")
+    later = _commit(root, "later")
+    later_blob = _git(root, "rev-parse", "HEAD:LATER.md").strip()
+    checkout = _new_seal(pin, tmp_path, "run")
+    listed = _git(checkout, "cat-file", "--batch-all-objects", "--batch-check")
+    assert later not in listed and later_blob not in listed
+    probe = subprocess.run(["git", "-C", str(checkout), "cat-file", "-e", later_blob], capture_output=True)
+    assert probe.returncode != 0
+
+
+def test_a_checkout_that_does_not_match_the_seal_falls_back_to_a_packed_copy(tmp_path: Path) -> None:
+    pin = _repo(tmp_path)
     checkout = export_commit(pin, tmp_path / "run" / "checkout", tmp_path / "cache")
-    crlf = b"\r\n" in (checkout / "AGENTS.md").read_bytes()
-    assert crlf == (autocrlf == "true")
-    assert seal_checkout(checkout, Path(pin.local_path), pin.commit) == "alternates"
-    # The agent's own git (no -c overrides) sees a clean tree.
+    (checkout / "AGENTS.md").write_text("drifted\n", encoding="utf-8")
+    assert seal_checkout(checkout, seal_repo(pin, tmp_path / "work")) == "copied"
     assert _git(checkout, "status", "--porcelain") == ""
+    assert len(_git(checkout, "log", "--oneline").splitlines()) == 1
+    assert _git(checkout, "count-objects").startswith("0 objects")  # all packed
+    assert not (checkout / ".git" / "objects" / "info" / "alternates").exists()
+
+
+def test_the_seal_repo_is_built_once_and_holds_no_working_files(tmp_path: Path) -> None:
+    pin = _repo(tmp_path)
+    first = seal_repo(pin, tmp_path / "work")
+    stamp = (first / "tree").stat().st_mtime_ns
+    assert seal_repo(pin, tmp_path / "work") == first and (first / "tree").stat().st_mtime_ns == stamp
+    assert sorted(p.name for p in first.iterdir()) == [".git", "tree"]
+    assert [p.name for p in first.parent.iterdir() if ".staging-" in p.name] == []
+
+
+def _sealed(pin: RepoPin, tmp_path: Path) -> tuple[Path, Path, dict[str, int]]:
+    run_dir = tmp_path / "run"
+    checkout = export_commit(pin, run_dir / "checkout", tmp_path / "cache")
+    baseline = runner_mod.file_times(checkout)
+    seal_checkout(checkout, seal_repo(pin, tmp_path / "work"))
+    return run_dir, checkout, baseline
+
+
+def _write_pin(run_dir: Path, pin: RepoPin) -> None:
+    (run_dir / "pin.json").write_text(json.dumps({"name": pin.name, "url": pin.url, "commit": pin.commit,
+                                                  "local_path": pin.local_path, "seal": "alternates"}), encoding="utf-8")
 
 
 def test_saved_changes_rebuild_new_changed_and_deleted_files(tmp_path: Path) -> None:
     pin = _repo(tmp_path)
-    run_dir = tmp_path / "run"
-    checkout = export_commit(pin, run_dir / "checkout", tmp_path / "cache")
-    seal_checkout(checkout, Path(pin.local_path), pin.commit)
+    run_dir, checkout, baseline = _sealed(pin, tmp_path)
     (checkout / "NEW.md").write_bytes(b"new\r\nfile\n")
     (checkout / "AGENTS.md").write_bytes(b"changed\n")
     (checkout / "src" / "app.py").unlink()
-    runner_mod.save_changes(checkout, run_dir)
-    (run_dir / "pin.json").write_text(json.dumps({"name": pin.name, "url": pin.url, "commit": pin.commit,
-                                                  "local_path": pin.local_path, "seal": "alternates"}), encoding="utf-8")
+    runner_mod.save_changes(checkout, run_dir, baseline)
+    _write_pin(run_dir, pin)
     rebuilt = runner_mod.rebuild_checkout(run_dir, tmp_path / "rebuilt", tmp_path / "cache")
     assert (rebuilt / "NEW.md").read_bytes() == b"new\r\nfile\n"
     assert (rebuilt / "AGENTS.md").read_bytes() == b"changed\n"
@@ -107,16 +185,18 @@ def test_saved_changes_rebuild_new_changed_and_deleted_files(tmp_path: Path) -> 
     assert json.loads((run_dir / "changes.deleted.json").read_text(encoding="utf-8")) == ["src/app.py"]
 
 
-def test_a_tree_that_does_not_match_the_export_falls_back_to_a_packed_copy(tmp_path: Path) -> None:
-    # export-ignore drops a tracked file from the export, so the pin's tree no longer fits.
-    pin = _repo(tmp_path, attributes="src/app.py export-ignore\n")
-    checkout = export_commit(pin, tmp_path / "run" / "checkout", tmp_path / "cache")
-    assert not (checkout / "src" / "app.py").exists()
-    assert seal_checkout(checkout, Path(pin.local_path), pin.commit) == "copied"
-    assert _git(checkout, "status", "--porcelain") == ""
-    assert len(_git(checkout, "log", "--oneline").splitlines()) == 1
-    assert _git(checkout, "count-objects").startswith("0 objects")  # all packed
-    assert not (checkout / ".git" / "objects" / "info" / "alternates").exists()
+def test_committed_and_ignored_agent_files_are_saved(tmp_path: Path) -> None:
+    pin = _repo(tmp_path, ignored_tracked=True)
+    run_dir, checkout, baseline = _sealed(pin, tmp_path)
+    (checkout / "AGENTS.md").write_text("committed by the agent\n", encoding="utf-8")
+    _git(checkout, "-c", "user.email=a@a", "-c", "user.name=a", "commit", "-qam", "agent")
+    (checkout / "notes.log").write_text("ignored but cited\n", encoding="utf-8")
+    assert _git(checkout, "status", "--porcelain") == ""  # git alone would miss both
+    runner_mod.save_changes(checkout, run_dir, baseline)
+    _write_pin(run_dir, pin)
+    rebuilt = runner_mod.rebuild_checkout(run_dir, tmp_path / "rebuilt", tmp_path / "cache")
+    assert (rebuilt / "AGENTS.md").read_text(encoding="utf-8") == "committed by the agent\n"
+    assert (rebuilt / "notes.log").read_text(encoding="utf-8") == "ignored but cited\n"
 
 
 @pytest.fixture
@@ -190,6 +270,43 @@ def test_rescore_refuses_a_run_with_neither_checkout_nor_pin(stub_config) -> Non
     (config.workdir / "runs" / "demo-t-A-1" / "pin.json").unlink()
     with pytest.raises(FileNotFoundError, match="no checkout and no pin.json"):
         rescore(config.workdir, [task])
+
+
+def test_a_rerun_does_not_inherit_the_earlier_attempts_changes(stub_config) -> None:
+    config, pin = stub_config
+    writer = Task(repo="demo", task_id="r", kind="k", prompt="WRITE a file", gold=GOLD)
+    reader = Task(repo="demo", task_id="r", kind="k", prompt="read only", gold=GOLD)
+    runner_mod.run_one(config, pin, writer, "A", 1)
+    run_dir = config.workdir / "runs" / "demo-r-A-1"
+    assert (run_dir / "changes.tar").is_file()
+    second = runner_mod.run_one(config, pin, reader, "A", 1)  # same folder, as --resume reruns it
+    assert not (run_dir / "changes.tar").exists() and not (run_dir / "changes.deleted.json").exists()
+    assert second.scores["citation_location_validity"] == 0.5
+    assert rescore(config.workdir, [reader])[0].scores == second.scores
+
+
+def test_a_checkout_that_cannot_be_deleted_still_records_the_run_and_is_rebuilt(
+    stub_config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config, pin = stub_config
+    real = runner_mod._rmtree
+
+    def held(path: Path) -> None:
+        if path.name == "checkout" and path.exists():
+            (path / "AGENTS.md").unlink()  # partly deleted, then a held file stops it
+            raise PermissionError("file in use")
+        real(path)
+
+    monkeypatch.setattr(runner_mod, "_rmtree", held)
+    task = Task(repo="demo", task_id="h", kind="k", prompt="WRITE a file", gold=GOLD)
+    results, stopped = run_matrix(config, {"demo": pin}, [task], ("A",))
+    assert stopped == "" and len(results) == 1
+    run_dir = config.workdir / "runs" / "demo-h-A-1"
+    assert (run_dir / "checkout.partial").is_file()
+    assert len((config.workdir / "results.jsonl").read_text(encoding="utf-8").splitlines()) == 1
+    monkeypatch.setattr(runner_mod, "_rmtree", real)
+    # Scored against a rebuilt checkout, not the half-deleted one (which lacks AGENTS.md).
+    assert rescore(config.workdir, [task])[0].scores == results[0].scores
 
 
 Usage = namedtuple("Usage", "total used free")
@@ -270,6 +387,34 @@ def test_an_existing_template_is_not_replaced(tmp_path: Path) -> None:
         _install(home / "opencode")
     assert marker.read_text(encoding="utf-8") == "first"
     assert [p.name for p in tmp_path.iterdir() if p.name.startswith("deps.staging-")] == []
+
+
+def test_a_damaged_template_is_not_linked(tmp_path: Path) -> None:
+    template = tmp_path / "deps"
+    with isolated_config_home(_user_config(tmp_path), "x/m", deps_template=template) as home:
+        _install(home / "opencode")
+    (template / "node_modules" / "@opencode-ai" / "plugin" / "package.json").unlink()
+    with isolated_config_home(_user_config(tmp_path), "x/m", deps_template=template) as home:
+        assert not (home / "opencode" / "node_modules").exists()
+
+
+def test_a_full_temp_dir_while_keeping_the_install_still_removes_the_home(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from archolith_bench.beacon_eval import isolation
+
+    real = isolation.tempfile.mkdtemp
+
+    def full(*args, **kwargs):  # noqa: ANN002, ANN003
+        if ".staging-" in str(kwargs.get("prefix", "")):
+            raise OSError(28, "No space left on device")
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(isolation.tempfile, "mkdtemp", full)
+    template = tmp_path / "deps"
+    with isolated_config_home(_user_config(tmp_path), "x/m", deps_template=template) as home:
+        _install(home / "opencode")
+    assert not home.exists() and not template.exists()
 
 
 def test_the_run_home_is_removed_even_with_read_only_git_objects(tmp_path: Path) -> None:

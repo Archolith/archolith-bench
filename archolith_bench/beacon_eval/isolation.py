@@ -142,8 +142,11 @@ def isolated_env(base: Mapping[str, str], config_home: Path) -> dict[str, str]:
 def remove_tree(path: Path) -> None:
     """Remove *path*, including read-only files (git objects), which Windows refuses to delete."""
     def clear_readonly(func: Any, target: str, _exc: Any) -> None:
-        os.chmod(target, 0o700)
-        func(target)
+        try:
+            os.chmod(target, 0o700)
+            func(target)
+        except FileNotFoundError:
+            pass  # already gone
 
     if not path.exists():
         return
@@ -201,9 +204,16 @@ def _link_dir(target: Path, link: Path) -> None:
         os.symlink(target, link, target_is_directory=True)
 
 
+def _complete_install(root: Path) -> bool:
+    """npm writes the lock file last; the plugin's manifest shows the package landed."""
+    return (root / "package-lock.json").is_file() and (
+        root / "node_modules" / "@opencode-ai" / "plugin" / "package.json"
+    ).is_file()
+
+
 def _use_deps(opencode_dir: Path, template: Path) -> bool:
-    """Point *opencode_dir* at the shared install; False when there is none yet."""
-    if not (template / "node_modules").is_dir():
+    """Point *opencode_dir* at the shared install; False when there is no whole one."""
+    if not _complete_install(template):
         return False
     for name in DEP_MANIFESTS:
         if (template / name).is_file():
@@ -222,21 +232,21 @@ def _keep_deps(opencode_dir: Path, template: Path) -> None:
     in one atomic rename, so a concurrent run sees either no template or a whole one.
     """
     installed = opencode_dir / "node_modules"
-    if template.exists() or not (opencode_dir / "package-lock.json").is_file():
+    if template.exists() or not _complete_install(opencode_dir):
         return
-    if not (installed / "@opencode-ai" / "plugin" / "package.json").is_file():
-        return
-    staging = Path(tempfile.mkdtemp(prefix=template.name + ".staging-", dir=template.parent))
+    staging: Path | None = None
     try:
+        staging = Path(tempfile.mkdtemp(prefix=template.name + ".staging-", dir=template.parent))
         os.rename(installed, staging / "node_modules")
         for name in DEP_MANIFESTS:
             if (opencode_dir / name).is_file():
                 shutil.copy2(opencode_dir / name, staging / name)
         os.rename(staging, template)
     except OSError:
-        pass  # another run kept its install first; this one is removed with the home
+        pass  # another run kept its install first (or temp is full); removed with the home
     finally:
-        shutil.rmtree(staging, ignore_errors=True)
+        if staging is not None:
+            shutil.rmtree(staging, ignore_errors=True)
 
 
 def default_data_source() -> Path:

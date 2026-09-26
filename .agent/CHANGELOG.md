@@ -1,5 +1,33 @@
 # archolith-bench Changelog
 
+## 2026-09-25 - Beacon eval: churn fix, review follow-up
+
+Fixes from an independent review of e46aba7.
+
+- `runner.py`, seal:
+  - Checkouts now borrow objects from a per-pin seal repo (`<workdir>/seals/<name>-<commit12>`),
+    built once with the original `add --all` + commit (`core.autocrlf=false`) and packed. The
+    earlier version borrowed from the clone cache.
+  - The agent sees the same tree, index, `git status`, local config and log as the old seal,
+    checked on the real menhir-adr pin. Only the pin's objects are reachable; the earlier
+    version exposed later commits through the cache.
+- `runner.py`, change capture:
+  - Agent changes are detected by comparing file mtimes against the export (`git archive`
+    stamps every file with the commit time), so committed and gitignored files are captured.
+  - A rerun clears the earlier attempt's `changes.*` files.
+  - Saving changes and deleting the checkout no longer raise. A checkout that can't be fully
+    deleted gets a `checkout.partial` marker, and `rescore` rebuilds it.
+  - Git output is decoded as UTF-8, and a seal failure of any kind falls back to the copy seal.
+- `isolation.py`:
+  - A template is linked only when it holds a complete install.
+  - `mkdtemp` failures during template promotion no longer leak the run's home.
+  - The read-only removal handler tolerates files that are already gone.
+- Known limits:
+  - `rescore` fetches or clones when the cache lacks the pin.
+  - The disk floor checks only the workdir's volume, at admission.
+  - `extractall(filter=)` needs Python 3.11.4+.
+  - A kept checkout needs its seal repo.
+
 ## 2026-09-25 - Beacon eval: cut per-run file churn
 
 - `runner.py`:

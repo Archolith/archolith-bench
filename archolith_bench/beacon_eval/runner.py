@@ -19,6 +19,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import tempfile
 import threading
 import time
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
@@ -207,9 +208,9 @@ def _ensure_source(pin: RepoPin, cache: Path) -> Path:
     return source
 
 
-def export_commit(pin: RepoPin, dest: Path, cache: Path) -> Path:
-    """Write the tree of *pin* at its commit into *dest* (no .git)."""
-    source = _ensure_source(pin, cache)
+def export_commit(pin: RepoPin, dest: Path, cache: Path, source: Path | None = None) -> Path:
+    """Write the tree of *pin* at its commit into *dest* (no .git), from *source* if given."""
+    source = source if source is not None else _ensure_source(pin, cache)
     archive = subprocess.run(
         ["git", "-C", str(source), "archive", "--format=tar", pin.commit],
         check=True,
@@ -230,118 +231,176 @@ def _checkout_git(checkout: Path, autocrlf_off: bool = True) -> list[str]:
     return [*git, "-c", "core.autocrlf=false"] if autocrlf_off else git
 
 
-#: Settings that decide how ``git archive`` wrote line endings into the export.
-_EOL_SETTINGS = ("core.autocrlf", "core.eol")
+def _git_out(cmd: list[str]) -> str:
+    # UTF-8 explicitly: git prints paths as UTF-8 whatever the console code page.
+    return subprocess.run(
+        cmd, check=True, capture_output=True, encoding="utf-8", errors="surrogateescape"
+    ).stdout.strip()
 
 
-def _seal_via_alternates(checkout: Path, source: Path, commit: str) -> None:
-    """Commit the pin's own tree, borrowing its objects from *source* (no object copies).
+def _copy_seal(checkout: Path, pack: bool) -> None:
+    """The original seal: add every file, commit (``core.autocrlf=false``), optionally pack."""
+    git = _checkout_git(checkout)
+    subprocess.run([*git, "add", "--all"], check=True, capture_output=True)
+    subprocess.run([*git, "commit", "--quiet", "--allow-empty", "-m", "pinned export"],
+                   check=True, capture_output=True)
+    if pack:
+        subprocess.run([*git, "repack", "-a", "-d", "-q"], check=True, capture_output=True)
+        subprocess.run([*git, "prune"], check=True, capture_output=True)
 
-    The checkout gets the source's line-ending settings, so files ``git archive`` wrote
-    with converted endings (e.g. ``core.autocrlf=true`` on Windows) still match the tree,
-    for this check and for the agent's own ``git status``. Raises CalledProcessError when
-    the tree does not match the files on disk or an object is missing from *source*; the
-    caller then falls back.
+
+def seal_repo(pin: RepoPin, workdir: Path, source: Path | None = None) -> Path:
+    """A packed repository holding only the tree the original seal made for *pin*.
+
+    Built once per pin in ``<workdir>/seals/`` from its own export with the original
+    ``add --all`` + ``commit`` (same ignore rules, same bytes, ``core.autocrlf=false``),
+    packed, working files dropped. Run checkouts borrow its objects, so the agent sees
+    exactly the old seal's tree and no other history of the repository. Built in a
+    staging folder and renamed into place, so a concurrent reader never sees half of one.
     """
-    def out(cmd: list[str]) -> str:
-        return subprocess.run(cmd, check=True, capture_output=True, text=True).stdout.strip()
+    final = workdir / "seals" / f"{pin.name}-{pin.commit[:12]}"
+    if (final / "tree").is_file():
+        return final
+    final.parent.mkdir(parents=True, exist_ok=True)
+    staging = Path(tempfile.mkdtemp(prefix=final.name + ".staging-", dir=final.parent))
+    try:
+        export_commit(pin, staging, workdir / "cache", source)
+        subprocess.run([*_checkout_git(staging), "init", "--quiet"], check=True, capture_output=True)
+        _copy_seal(staging, pack=True)
+        tree = _git_out([*_checkout_git(staging), "rev-parse", "HEAD^{tree}"])
+        for entry in staging.iterdir():
+            if entry.name != ".git":
+                remove_tree(entry) if entry.is_dir() else entry.unlink()
+        (staging / "tree").write_text(tree + "\n", encoding="utf-8")
+        try:
+            os.rename(staging, final)
+        except OSError:
+            if not (final / "tree").is_file():
+                raise
+    finally:
+        remove_tree(staging)
+    return final
 
-    git = _checkout_git(checkout, autocrlf_off=False)
-    for key in _EOL_SETTINGS:
-        value = subprocess.run(["git", "-C", str(source), "config", "--get", key],
-                               check=False, capture_output=True, text=True).stdout.strip()
-        if value:
-            subprocess.run([*git, "config", key, value], check=True, capture_output=True)
-    objects = out(["git", "-C", str(source), "rev-parse", "--path-format=absolute", "--git-path", "objects"])
-    tree = out(["git", "-C", str(source), "rev-parse", f"{commit}^{{tree}}"])
+
+def _seal_via_alternates(checkout: Path, seal: Path) -> None:
+    """Commit the seal repo's tree in *checkout*, borrowing its objects (none copied).
+
+    Raises CalledProcessError when the files on disk do not match that tree or an object
+    is missing; the caller then falls back to the copy seal.
+    """
+    git = _checkout_git(checkout)
+    tree = (seal / "tree").read_text(encoding="utf-8").strip()
+    objects = (seal / ".git" / "objects").resolve()
     (checkout / ".git" / "objects" / "info").mkdir(parents=True, exist_ok=True)
     # LF only: git would read a CRLF line as a path ending in "\r".
-    (checkout / ".git" / "objects" / "info" / "alternates").write_bytes(objects.encode() + b"\n")
+    (checkout / ".git" / "objects" / "info" / "alternates").write_bytes(
+        objects.as_posix().encode("utf-8") + b"\n"
+    )
     subprocess.run([*git, "read-tree", tree], check=True, capture_output=True)
-    # Non-zero when any file differs from the tree (export-ignore, eol attributes).
+    # Non-zero when any indexed file differs from the tree on disk.
     subprocess.run([*git, "update-index", "--refresh", "-q"], check=True, capture_output=True)
-    new = subprocess.run([*git, "commit-tree", tree, "-m", "pinned export"],
-                         check=True, capture_output=True, text=True).stdout.strip()
+    new = _git_out([*git, "commit-tree", tree, "-m", "pinned export"])
     subprocess.run([*git, "update-ref", "HEAD", new], check=True, capture_output=True)
-    missing = out([*git, "rev-list", "--objects", "--missing=print", "HEAD"])
+    missing = _git_out([*git, "rev-list", "--objects", "--missing=print", "HEAD"])
     if any(line.startswith("?") for line in missing.splitlines()):
-        raise subprocess.CalledProcessError(1, "rev-list", "objects missing from the source")
+        raise subprocess.CalledProcessError(1, "rev-list", "objects missing from the seal repo")
 
 
-def seal_checkout(checkout: Path, source: Path | None = None, commit: str = "") -> str:
+def seal_checkout(checkout: Path, seal: Path | None = None) -> str:
     """Make *checkout* its own git root with one commit; returns how ("alternates" or "copied").
 
     OpenCode searches parent directories for project config and instructions up to the
     git root; without this a checkout under the results tree picks up the enclosing
     repositories' ``AGENTS.md`` and ``opencode.json``.
 
-    With *source* and *commit*, the commit reuses the pin's tree through git alternates, so
-    only ~20 files are written instead of one loose object per file. Otherwise, or if that
-    fails, the files are added and committed as before, then packed.
+    With *seal* (see :func:`seal_repo`) the commit reuses its tree through git alternates:
+    ~20 files instead of one loose object per file, and the same tree, index and config
+    the copy seal gives. Otherwise, or if that fails, the files are added and committed
+    as before (packed when a seal repo was expected).
     """
     git = _checkout_git(checkout)
     subprocess.run([*git, "init", "--quiet"], check=True, capture_output=True)
-    if source is not None and commit:
+    if seal is not None:
         try:
-            _seal_via_alternates(checkout, source, commit)
+            _seal_via_alternates(checkout, seal)
             return "alternates"
-        except subprocess.CalledProcessError:
+        except (subprocess.CalledProcessError, OSError, UnicodeError):
             _rmtree(checkout / ".git")
             subprocess.run([*git, "init", "--quiet"], check=True, capture_output=True)
-    subprocess.run([*git, "add", "--all"], check=True, capture_output=True)
-    subprocess.run([*git, "commit", "--quiet", "--allow-empty", "-m", "pinned export"],
-                   check=True, capture_output=True)
-    if source is not None:
-        subprocess.run([*git, "repack", "-a", "-d", "-q"], check=True, capture_output=True)
-        subprocess.run([*git, "prune"], check=True, capture_output=True)
+    _copy_seal(checkout, pack=seal is not None)
     return "copied"
 
 
 _rmtree = remove_tree
 
-
-def _changed_paths(checkout: Path) -> list[str]:
-    """Paths ``git status`` reports in the checkout, as the agent's own git would see them."""
-    raw = subprocess.run(
-        [*_checkout_git(checkout, autocrlf_off=False), "status", "--porcelain", "-z", "--untracked-files=all"],
-        check=True, capture_output=True,
-    ).stdout.decode("utf-8", errors="surrogateescape")
-    fields = raw.split("\0")
-    paths: list[str] = []
-    index = 0
-    while index < len(fields):
-        entry = fields[index]
-        index += 1
-        if len(entry) < 4:
-            continue
-        paths.append(entry[3:])
-        if entry[0] in "RC" and index < len(fields):  # the original path follows as its own field
-            paths.append(fields[index])
-            index += 1
-    return paths
+#: What save_changes writes; cleared first so a rerun never inherits an earlier attempt's.
+CHANGE_FILES = ("changes.status", "changes.tar", "changes.deleted.json")
 
 
-def save_changes(checkout: Path, run_dir: Path) -> None:
-    """Record what the agent changed in the sealed checkout (usually nothing).
+def file_times(root: Path) -> dict[str, int]:
+    """``{relative posix path: mtime_ns}`` for every file under *root*, skipping its ``.git``."""
+    times: dict[str, int] = {}
+    for dirpath, dirnames, filenames in os.walk(root):
+        if Path(dirpath) == root and ".git" in dirnames:
+            dirnames.remove(".git")
+        for name in filenames:
+            path = Path(dirpath) / name
+            times[path.relative_to(root).as_posix()] = path.stat().st_mtime_ns
+    return times
 
-    ``changes.status`` is ``git status --porcelain``. When anything changed,
-    ``changes.tar`` holds the changed and new files as they are on disk and
-    ``changes.deleted.json`` lists the removed ones: exact bytes, whatever the line endings.
+
+def save_changes(checkout: Path, run_dir: Path, baseline: dict[str, int]) -> None:
+    """Record what the agent changed in the checkout (usually nothing).
+
+    *baseline* is :func:`file_times` of the fresh export (``git archive`` stamps every file
+    with the commit time), so any file created, rewritten or deleted since shows up, git
+    ignored or committed alike: scoring reads the files, not git. ``changes.status`` is the
+    agent's ``git status --porcelain`` (for reading). When anything changed, ``changes.tar``
+    holds the new and changed files as they are on disk and ``changes.deleted.json`` lists
+    the removed ones.
     """
+    for name in CHANGE_FILES:
+        (run_dir / name).unlink(missing_ok=True)
     status = subprocess.run(
         [*_checkout_git(checkout, autocrlf_off=False), "status", "--porcelain", "--untracked-files=all"],
         check=True, capture_output=True,
     ).stdout
     (run_dir / "changes.status").write_bytes(status)
-    paths = _changed_paths(checkout)
-    if not paths:
+    now = file_times(checkout)
+    present = sorted(rel for rel, mtime in now.items() if baseline.get(rel) != mtime)
+    deleted = sorted(rel for rel in baseline if rel not in now)
+    if not present and not deleted:
         return
-    present = sorted({p for p in paths if (checkout / p).is_file()})
-    deleted = sorted({p for p in paths if not (checkout / p).exists()})
     with tarfile.open(run_dir / "changes.tar", "w") as tar:
         for rel in present:
             tar.add(checkout / rel, arcname=rel)
     (run_dir / "changes.deleted.json").write_text(json.dumps(deleted), encoding="utf-8")
+
+
+#: Left in a run folder whose checkout could not be fully deleted; rescore then rebuilds it.
+PARTIAL_MARKER = "checkout.partial"
+
+
+def _retire_checkout(checkout: Path, run_dir: Path, baseline: dict[str, int], keep: bool) -> None:
+    """Save the agent's changes, then delete the checkout unless *keep*. Never raises.
+
+    The run's result is already saved and must still reach the matrix (its spend, its
+    stop reason), so failures here only warn. If the changes cannot be saved the checkout
+    is kept whole; if it cannot be fully deleted (a process the agent started may hold a
+    file), a marker tells rescore to rebuild it rather than score what is left.
+    """
+    try:
+        save_changes(checkout, run_dir, baseline)
+    except (OSError, subprocess.CalledProcessError) as exc:
+        print(f"warning: could not save changes of {run_dir.name}; keeping its checkout ({exc})", file=sys.stderr)
+        return
+    if keep:
+        return
+    try:
+        _rmtree(checkout)
+    except OSError as exc:
+        (run_dir / PARTIAL_MARKER).write_text(str(exc), encoding="utf-8")
+        print(f"warning: could not delete the checkout of {run_dir.name} ({exc})", file=sys.stderr)
 
 
 def _has_changes(run_dir: Path) -> bool:
@@ -349,7 +408,11 @@ def _has_changes(run_dir: Path) -> bool:
 
 
 def rebuild_checkout(run_dir: Path, dest: Path, cache: Path) -> Path:
-    """Re-create a deleted checkout at *dest* from ``pin.json`` plus the saved changes."""
+    """Re-create a deleted checkout at *dest* from ``pin.json`` plus the saved changes.
+
+    Uses the clone cache (or the pin's ``local_path``); if either lacks the commit, this
+    fetches it, like a run would.
+    """
     pin = RepoPin(**{k: v for k, v in json.loads((run_dir / "pin.json").read_text(encoding="utf-8")).items()
                      if k in RepoPin.__dataclass_fields__})
     export_commit(pin, dest, cache)
@@ -603,9 +666,18 @@ def run_one(
     # Absolute paths: PWD and B's --manifest are resolved by processes running in the checkout.
     run_dir = (config.workdir / "runs" / f"{task.repo}-{task.task_id}-{condition}-{repeat}").resolve()
     cache = config.workdir / "cache"
-    _rmtree(run_dir / "checkout")  # a rerun (--resume) starts from a clean export
+    # A rerun (--resume) starts from a clean export and inherits nothing of the last attempt.
+    _rmtree(run_dir / "checkout")
+    for name in (*CHANGE_FILES, PARTIAL_MARKER):
+        (run_dir / name).unlink(missing_ok=True)
     checkout = export_commit(pin, run_dir / "checkout", cache)
-    seal = seal_checkout(checkout, _ensure_source(pin, cache), pin.commit)
+    baseline = file_times(checkout)
+    try:
+        repo = seal_repo(pin, config.workdir)
+    except (subprocess.CalledProcessError, OSError, UnicodeError) as exc:
+        print(f"warning: no seal repo for {pin.name} ({exc}); sealing by copy", file=sys.stderr)
+        repo = None
+    seal = seal_checkout(checkout, repo)
     # Lets rescore rebuild the checkout once it is deleted.
     (run_dir / "pin.json").write_text(json.dumps({**asdict(pin), "seal": seal}, indent=2), encoding="utf-8")
     manifest = build_beacon(config, pin).resolve() if condition in ("B", "C", "D") else None
@@ -691,9 +763,7 @@ def run_one(
     result.scores = score(answer, task.gold, checkout)
     (run_dir / "result.json").write_text(json.dumps(asdict(result), indent=2), encoding="utf-8")
     _redact(run_dir, [*keys.values(), *([config.memory_key] if config.memory_key else [])])
-    save_changes(checkout, run_dir)
-    if not config.keep_checkouts:
-        _rmtree(checkout)
+    _retire_checkout(checkout, run_dir, baseline, config.keep_checkouts)
     if reason == "rate_limited":
         raise RateLimited(f"rate limited during {run_dir.name}; stopping, not retrying")
     if reason == "over_reserve":
@@ -738,7 +808,7 @@ def rescore(workdir: Path, tasks: list[Task]) -> list[RunResult]:
             run_dir = path.parent
             checkout = run_dir / "checkout"
             rebuilt: Path | None = None
-            if not checkout.is_dir():
+            if not checkout.is_dir() or (run_dir / PARTIAL_MARKER).is_file():
                 if not (run_dir / "pin.json").is_file():
                     raise FileNotFoundError(f"{run_dir.name}: no checkout and no pin.json to rebuild one")
                 if _has_changes(run_dir):
@@ -903,7 +973,12 @@ def _run_parallel(
     order = {(t.repo, t.task_id, c, r): index for index, (r, t, c) in enumerate(jobs)}
     cache = config.workdir / "cache"
     for pin in {pins[t.repo].name: pins[t.repo] for t in tasks}.values():
-        _ensure_source(pin, cache)
+        source = _ensure_source(pin, cache)
+        if source is not None:
+            try:
+                seal_repo(pin, config.workdir, source)
+            except (subprocess.CalledProcessError, OSError, UnicodeError):
+                pass  # each run warns and seals by copy
         if set(conditions) & {"B", "C", "D"}:
             build_beacon(config, pin)
 
@@ -1015,5 +1090,6 @@ __all__ = [
     "run_one",
     "save_changes",
     "seal_checkout",
+    "seal_repo",
     "stream_opencode",
 ]
