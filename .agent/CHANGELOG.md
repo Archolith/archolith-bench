@@ -1,5 +1,59 @@
 # archolith-bench Changelog
 
+## 2026-09-26 - Beacon eval: conditions H (HTTP JSON via webfetch) and R (Beacon MCP over Streamable HTTP)
+
+Two opt-in, no-checkout conditions for Beacon issue #26 phase 5 (`CONDITIONS` is now
+`A, B, C, D, H, M, R`; `DEFAULT_CONDITIONS` stays `A, B, C`):
+
+- **H** — Beacon HTTP JSON only: no MCP block, no checkout access. Every built-in tool is
+  disabled except `webfetch` (`websearch` stays off), and only H's prompt gains one paragraph:
+  "Project knowledge is served over HTTP at http://127.0.0.1:<P>. Start with GET
+  http://127.0.0.1:<P>/.well-known/archolith-beacon, which lists the routes and a recommended
+  flow." `TOOL_NOTE` and the answer instructions are unchanged. The saved `prompt.txt` shows
+  the run's real port; scoring and reports never see it.
+- **R** — Beacon MCP over Streamable HTTP only: `mcp` is
+  `{"beacon": {"type": "remote", "url": "http://127.0.0.1:<P>/mcp", "enabled": True}}`
+  (`memory_server`'s shape without headers) and `disabled` is every built-in tool, like D.
+
+- `runner.py`:
+  - `beacon_http_process(cmd, log_path, ready_line, env, timeout_s=30)` starts the managed
+    server on a port picked by binding `127.0.0.1:0` (`pick_free_port`, so parallel
+    `--workers` never collide), waits for the ready line or an accepting port, streams its
+    stderr into `beacon-server.log` in the run dir, and always kills the process tree
+    (`_kill_tree`, as `stream_opencode` does for OpenCode) — on success, error, timeout,
+    budget stop or rate-limit stop. On early exit or timeout the run fails with
+    `ServerNotReady` carrying the server's stderr tail; the failed run is still recorded and
+    stops the matrix, like an accounting error. Bind host is hardcoded to `127.0.0.1`.
+  - H's server: `beacon serve-http --manifest <beacons/<pin>/beacon.generated.yaml>
+    --docs-root <beacons/<pin>>`; ready line `Beacon HTTP ready`. R's: `beacon serve
+    --snapshot <beacons/<pin>/beacon.snapshot.json> --transport http`; ready line
+    `MCP http listening`. A gate refusal (publication/acknowledgement) surfaces as that
+    ServerNotReady error — pass nothing by default; if a pin's beacon is blocked, the tail
+    names the codes and `--acknowledge CODE=REASON` is the Beacon-side remedy.
+  - `export_beacon_snapshot` runs `beacon export --docs-root <beacons/<pin>>` once per pin
+    (atomic staging rename, pre-built for `--workers` like the manifest).
+  - `build_prompt` takes `http_url` and refuses condition H without one; `disabled_tools`
+    replaces the inline D expression; `_mcp_block` collects the per-condition `mcp` config.
+- `isolation.py`: `beacon_remote_server(url)` builds R's `mcp` block.
+- `cli.py`: `--conditions` help names the opt-ins; run with e.g.
+  `archolith-bench beacon-eval run --conditions H,R --beacon-python <python with Beacon's
+  deps> --beacon-src <Beacon source>`. The Beacon source must be a build with
+  `/v1/search` and MCP HTTP transport (Beacon #26 phases 1-3). The real-Beacon
+  integration test runs only when `BEACON_EVAL_BEACON_SRC` (and optionally
+  `BEACON_EVAL_BEACON_PYTHON`) point at such a build; otherwise it is skipped.
+- Verified, no model spend: a fake local chat provider (scripted `webfetch` tool call) drove
+  real OpenCode 1.18.31 through condition H end to end against a real `serve-http` on a
+  random loopback port. `webfetch` fetched `http://127.0.0.1:<P>/.well-known/archolith-beacon`
+  with no permission prompt and no private-address refusal and returned the discovery JSON
+  (including `recommended_flow`) to the model; no permission setting was needed.
+- `tests/test_beacon_eval_http_conditions.py` (new): opt-in status, tool lists, R's remote
+  block, H's paragraph (only H), port selection under concurrency, lifecycle kill on body
+  error and ready-timeout stderr tail (stand-in server script, not Beacon), loopback-only
+  commands, a stub end-to-end of H/R wiring plus report/rescore with a server log present,
+  and one real-Beacon integration test (serve-http discovery GET and MCP `list_tools` via
+  `fastmcp.Client`), skipped — not passed — when Beacon is not importable from the
+  configured source.
+
 ## 2026-09-25 - Beacon eval: citation paths on case-sensitive file systems
 
 - `scoring.py`: `citation_location_validity` used to look up the lower-cased cited path, so every
