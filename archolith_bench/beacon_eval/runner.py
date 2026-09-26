@@ -2,10 +2,18 @@
 
 Every run gets a fresh export of the repository at its pinned commit, sealed as its own
 git repository (condition A never sees a beacon), a private OpenCode config home, and a
-fixed prompt on stdin. OpenCode's events are streamed: a run is killed as soon as its
-tokens pass the per-run reserve or a rate-limit error appears on stdout or stderr. The
-matrix admits a run only while the reserve still fits under the cap, and stops at the
-first rate limit (never retrying), an over-reserve run, or a run with no usage data.
+fixed prompt on stdin. Conditions H and R additionally get a managed Beacon server (HTTP
+JSON for H, MCP over Streamable HTTP for R), started before OpenCode and stopped
+afterwards whatever the outcome; H and R also run OpenCode from a fresh empty directory
+outside every git repository, so the checkout's instructions cannot be auto-loaded. The
+server is ready when its own stderr prints the ready line; H lets the OS pick the port
+(``--port 0``), R retries a picked port whose bind fails. H's ``webfetch`` calls are
+audited afterwards: OpenCode cannot restrict that tool by URL, so a fetch of anything but
+the managed origin fails the run. OpenCode's events are streamed: a run is killed as soon
+as its tokens pass the per-run reserve or a rate-limit error appears on stdout or stderr.
+The matrix admits a run only while the reserve still fits under the cap, and stops at the
+first rate limit (never retrying), an over-reserve run, a run with no usage data, or a
+server that never became ready.
 """
 
 from __future__ import annotations
@@ -16,14 +24,17 @@ import os
 import queue
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import tarfile
 import tempfile
 import threading
 import time
+from collections import deque
+from collections.abc import Iterator
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
-from contextlib import nullcontext
+from contextlib import AbstractContextManager, contextmanager, nullcontext
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import IO, Any
@@ -33,7 +44,9 @@ from urllib.request import urlopen
 from archolith_bench.beacon_eval import CONDITIONS, DEFAULT_CONDITIONS
 from archolith_bench.beacon_eval.isolation import (
     MEMORY_KEY_ENV,
+    beacon_remote_server,
     beacon_server,
+    empty_cwd,
     memory_stdio_server,
     default_config_source,
     deps_template_dir,
@@ -90,6 +103,170 @@ class BudgetExhausted(RuntimeError):
 
 class AccountingError(RuntimeError):
     """A run reported no token usage, so the budget can no longer be trusted."""
+
+
+class ServerNotReady(RuntimeError):
+    """A managed Beacon server (H or R) never became ready; the run fails."""
+
+
+def pick_free_port() -> int:
+    """A free loopback port: the OS assigns one to a ``127.0.0.1:0`` socket.
+
+    Only servers that cannot ask the OS at bind time use this (condition R refuses
+    port 0); between this probe and the server's bind another process can still take
+    the port, so :func:`beacon_http_process` retries on a fresh one.
+    """
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.bind(("127.0.0.1", 0))
+        return int(probe.getsockname()[1])
+
+
+def _port_accepts(port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.settimeout(0.5)
+        return probe.connect_ex(("127.0.0.1", port)) == 0
+
+
+#: Seconds a managed server has to bind and print its ready line.
+SERVER_READY_TIMEOUT_S = 30.0
+#: How much of a failed server's stderr the ServerNotReady message carries.
+SERVER_TAIL_CHARS = 400
+#: Starts a port-picking server (condition R) gets, each on a fresh port, before the run
+#: fails: the probe-to-bind window can lose a port to another process under --workers.
+SERVER_BIND_ATTEMPTS = 3
+#: Beacon's stable failure code when its loopback bind fails; condition R retries on it.
+HTTP_BIND_FAILED = "http_bind_failed"
+#: The ``url=http://127.0.0.1:<port>`` a server that picked its own port (condition H's
+#: ``--port 0``) reports in its ready line, read here so the port need not be guessed.
+_READY_URL_PORT = re.compile(r"url=http://127\.0\.0\.1:(\d+)")
+
+
+def _server_error(what: str, ready_line: str, tail: deque[str]) -> str:
+    return (
+        f"the beacon server {what} without reporting {ready_line!r}; "
+        f"its stderr ends with: {''.join(tail).strip()[-SERVER_TAIL_CHARS:]}"
+    )
+
+
+def _port_from_ready_line(ready_line: str, tail: deque[str]) -> int:
+    """The port a server that chose its own (``--port 0``) reported on its ready line."""
+    for line in tail:
+        if ready_line in line:
+            found = _READY_URL_PORT.search(line)
+            if found:
+                return int(found.group(1))
+    raise ServerNotReady(
+        f"the beacon server printed {ready_line!r} without a url=http://127.0.0.1:<port> "
+        "to read its port from"
+    )
+
+
+@contextmanager
+def beacon_http_process(
+    cmd: list[str],
+    log_path: Path,
+    ready_line: str,
+    env: dict[str, str] | None = None,
+    timeout_s: float = SERVER_READY_TIMEOUT_S,
+) -> Iterator[int]:
+    """Start *cmd*, yield its loopback port, and always stop it.
+
+    A ``{port}`` placeholder in *cmd*'s arguments is replaced with a port picked here;
+    when such a server exits with ``http_bind_failed`` it is started again on a fresh
+    port, up to ``SERVER_BIND_ATTEMPTS`` starts, before the run fails. Without the
+    placeholder the command asks the OS itself (condition H passes ``--port 0``) and the
+    port is read from the ready line's ``url=http://127.0.0.1:<port>``.
+
+    The server is ready only when its own stderr prints *ready_line* while the child is
+    still alive -- never because something else holds the port. On early exit (after the
+    bind retries), a stderr-pump failure, or *timeout_s*, the run fails with
+    :class:`ServerNotReady`, carrying the server's stderr tail. stderr streams into
+    *log_path* (``beacon-server.log`` in the run dir); the log file is opened before the
+    pump thread starts. The process tree is killed on every way out of the body --
+    success, error, timeout, budget stop, rate-limit stop -- the way ``stream_opencode``
+    stops OpenCode.
+    """
+    picked = "{port}" in cmd
+    proc: subprocess.Popen[str] | None = None
+    pump_thread: threading.Thread | None = None
+    try:
+        for attempt in range(SERVER_BIND_ATTEMPTS if picked else 1):
+            port = pick_free_port()
+            argv = [part.replace("{port}", str(port)) for part in cmd] if picked else list(cmd)
+            # Opened here, not on the pump thread: a failure to open must fail the run.
+            # Bind retries append, so the log keeps the failed attempts' diagnostics.
+            sink = log_path.open("w" if attempt == 0 else "a", encoding="utf-8")
+            tail: deque[str] = deque(maxlen=20)
+            ready = threading.Event()
+            pump_done = threading.Event()
+            pump_error: list[BaseException] = []
+
+            def pump(sink: IO[str], proc: subprocess.Popen[str]) -> None:
+                try:
+                    with sink:
+                        for line in proc.stderr:
+                            sink.write(line)
+                            sink.flush()
+                            tail.append(line)
+                            if ready_line in line:
+                                ready.set()
+                except BaseException as exc:  # noqa: BLE001 - surfaced below, never lost
+                    pump_error.append(exc)
+                finally:
+                    pump_done.set()
+
+            try:
+                proc = subprocess.Popen(
+                    argv, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace",
+                )
+            except OSError:
+                sink.close()
+                raise
+            assert proc.stderr is not None
+            pump_thread = threading.Thread(target=pump, args=(sink, proc), daemon=True)
+            pump_thread.start()
+
+            deadline = time.monotonic() + timeout_s
+            while not ready.is_set() and not pump_done.is_set() and proc.poll() is None:
+                if time.monotonic() >= deadline:
+                    break
+                time.sleep(0.2)
+            if ready.is_set() and proc.poll() is None:
+                if pump_error:  # readiness held; the log stream broke mid-run
+                    print(
+                        f"warning: {log_path.name}: the server log pump failed ({pump_error[0]!r})",
+                        file=sys.stderr,
+                    )
+                yield port if picked else _port_from_ready_line(ready_line, tail)
+                return
+            # Not ready: drain the pump first, so the tail carries the last lines.
+            if proc.poll() is not None:
+                pump_thread.join(timeout=5)
+            if pump_error:
+                raise ServerNotReady(f"the beacon server's log pump failed: {pump_error[0]!r}")
+            if ready.is_set():
+                raise ServerNotReady(_server_error("exited right after its ready line", ready_line, tail))
+            if proc.poll() is None:
+                raise ServerNotReady(_server_error(f"was not ready within {timeout_s:.0f}s", ready_line, tail))
+            if (
+                picked and attempt + 1 < SERVER_BIND_ATTEMPTS
+                and any(HTTP_BIND_FAILED in line for line in tail)
+            ):
+                _kill_tree(proc)
+                proc = None  # the next start owns the cleanup from here
+                continue
+            raise ServerNotReady(_server_error("exited", ready_line, tail))
+    finally:
+        if proc is not None:
+            _kill_tree(proc)
+        if pump_thread is not None:
+            pump_thread.join(timeout=5)
+        if proc is not None:
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                pass
 
 
 def resolve_opencode() -> list[str]:
@@ -446,8 +623,9 @@ def build_beacon(config: RunnerConfig, pin: RepoPin) -> Path:
     return manifest
 
 
-def build_prompt(task: Task, condition: str, manifest_text: str = "") -> str:
-    """Task first, then (C only) the pasted manifest, then the same closing lines."""
+def build_prompt(task: Task, condition: str, manifest_text: str = "", http_url: str = "") -> str:
+    """Task first, then (C) the pasted manifest or (H) the HTTP starting point, then the
+    same closing lines."""
     parts = [task.prompt.strip()]
     if condition == "C":
         parts.append(
@@ -455,8 +633,154 @@ def build_prompt(task: Task, condition: str, manifest_text: str = "") -> str:
             + manifest_text.strip()
             + "\n```"
         )
+    if condition == "H":
+        if not http_url:
+            raise ValueError("condition H needs the http_url its server was started on")
+        parts.append(
+            f"Project knowledge is served over HTTP at {http_url}. Start with GET "
+            f"{http_url}/.well-known/archolith-beacon, which lists the routes and a recommended flow."
+        )
     parts += [TOOL_NOTE, ANSWER_INSTRUCTIONS]
     return "\n\n".join(parts)
+
+
+def disabled_tools(condition: str) -> tuple[str, ...]:
+    """OpenCode's built-in tools switched off for *condition*.
+
+    D and R run on MCP alone; H also loses every built-in tool but keeps ``webfetch``,
+    its only way to reach the Beacon HTTP JSON surface (so ``websearch`` stays off).
+    """
+    if condition in ("D", "R"):
+        return BUILTIN_TOOLS
+    if condition == "H":
+        return tuple(tool for tool in BUILTIN_TOOLS if tool != "webfetch")
+    return ()
+
+
+def export_beacon_snapshot(config: RunnerConfig, pin: RepoPin) -> Path:
+    """The canonical snapshot condition R's MCP server serves, written once per pin."""
+    root = config.workdir / "beacons" / pin.name
+    snapshot = root / "beacon.snapshot.json"
+    if snapshot.is_file():
+        return snapshot
+    manifest = build_beacon(config, pin)
+    env = dict(os.environ)
+    if config.beacon_src:
+        env["PYTHONPATH"] = config.beacon_src
+    staging = root / f"beacon.snapshot.{os.getpid()}-{threading.get_ident()}.tmp"
+    try:
+        subprocess.run(
+            [config.beacon_python, "-m", "beacon", "export", str(manifest),
+             "--docs-root", str(root), "--output", str(staging)],
+            check=True,
+            capture_output=True,
+            env=env,
+        )
+        os.replace(staging, snapshot)  # atomic, so a parallel reader never sees half of one
+    finally:
+        staging.unlink(missing_ok=True)
+    return snapshot
+
+
+#: The stderr line each managed server prints once it is bound (H, then R).
+HTTP_READY_LINE = "Beacon HTTP ready"
+MCP_HTTP_READY_LINE = "MCP http listening"
+
+#: The managed server's stderr, kept in the run dir.
+SERVER_LOG = "beacon-server.log"
+
+
+def _http_server_spec(
+    config: RunnerConfig, condition: str, manifest: Path | None, snapshot: Path | None
+) -> tuple[list[str], str, dict[str, str]] | None:
+    """How to start the managed server for *condition* (H or R); None = no server.
+
+    H's command carries ``--port 0`` so the OS assigns the port and the ready line
+    reports it (``url=http://127.0.0.1:<port>``); R's command carries a ``{port}``
+    placeholder for :func:`beacon_http_process` to fill, because ``serve --transport
+    http`` refuses port 0. Both commands are loopback-only.
+    """
+    if condition == "H" and manifest is not None:
+        cmd = [
+            config.beacon_python, "-m", "beacon", "serve-http",
+            "--manifest", str(manifest), "--docs-root", str(manifest.parent),
+            "--host", "127.0.0.1", "--port", "0",
+        ]
+        ready_line = HTTP_READY_LINE
+    elif condition == "R" and snapshot is not None:
+        cmd = [
+            config.beacon_python, "-m", "beacon", "serve",
+            "--snapshot", str(snapshot), "--transport", "http",
+            "--host", "127.0.0.1", "--port", "{port}",
+        ]
+        ready_line = MCP_HTTP_READY_LINE
+    else:
+        return None
+    env = dict(os.environ)
+    if config.beacon_src:
+        env["PYTHONPATH"] = config.beacon_src
+    return cmd, ready_line, env
+
+
+def _mcp_block(
+    config: RunnerConfig, condition: str, manifest: Path | None, base_url: str
+) -> dict[str, Any] | None:
+    """The ``mcp`` block each condition puts in OpenCode's config; None = none."""
+    if condition in ("B", "D") and manifest is not None:
+        return beacon_server(config.beacon_python, manifest, config.beacon_src)
+    if condition == "R":
+        return beacon_remote_server(base_url + "/mcp")
+    if condition == "M":
+        if config.memory_stdio:
+            return memory_stdio_server(
+                config.memory_stdio, config.memory_stdio_env, config.memory_stdio_key_var
+            )
+        return memory_server(str(config.memory_url))
+    return None
+
+
+# ---------------------------------------------------------------------------
+# The webfetch audit (condition H)
+# ---------------------------------------------------------------------------
+
+
+def webfetch_hosts(run_dir: Path) -> list[str]:
+    """Deduped ``host:port`` of every ``webfetch`` call in the run's ``events.jsonl``.
+
+    OpenCode 1.18.31 cannot restrict ``webfetch`` by URL pattern (its ``permission``
+    config takes only a flat allow/ask/deny for this tool), so condition H is audited
+    after the run instead: these are the hosts it actually asked to fetch.
+    """
+    hosts: set[str] = set()
+    path = run_dir / "events.jsonl"
+    if not path.is_file():
+        return []
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, dict) or event.get("type") != "tool_use":
+            continue
+        part = event.get("part")
+        state = part.get("state") if isinstance(part, dict) else None
+        if not isinstance(part, dict) or part.get("tool") != "webfetch" or not isinstance(state, dict):
+            continue
+        payload = state.get("input")
+        url = payload.get("url") if isinstance(payload, dict) else None
+        if not isinstance(url, str) or not url:
+            continue
+        parts = urlsplit(url)
+        origin = parts.hostname or ""
+        if not origin:
+            continue
+        hosts.add(f"{origin}:{parts.port}" if parts.port is not None else origin)
+    return sorted(hosts)
+
+
+def off_origin_fetches(hosts: list[str], managed_origin: str) -> list[str]:
+    """The fetched hosts that are not the managed server's ``127.0.0.1:<port>`` origin."""
+    return [host for host in hosts if host != managed_origin]
 
 
 # ---------------------------------------------------------------------------
@@ -680,66 +1004,88 @@ def run_one(
     seal = seal_checkout(checkout, repo)
     # Lets rescore rebuild the checkout once it is deleted.
     (run_dir / "pin.json").write_text(json.dumps({**asdict(pin), "seal": seal}, indent=2), encoding="utf-8")
-    manifest = build_beacon(config, pin).resolve() if condition in ("B", "C", "D") else None
-    prompt = build_prompt(
-        task,
-        condition,
-        manifest.read_text(encoding="utf-8") if manifest and condition == "C" else "",
-    )
-    (run_dir / "prompt.txt").write_text(prompt, encoding="utf-8")
-    mcp = (
-        beacon_server(config.beacon_python, manifest, config.beacon_src)
-        if condition in ("B", "D") and manifest is not None
-        else (
-            memory_stdio_server(config.memory_stdio, config.memory_stdio_env, config.memory_stdio_key_var)
-            if config.memory_stdio
-            else memory_server(str(config.memory_url))
-        )
-        if condition == "M"
-        else None
-    )
-    disabled = BUILTIN_TOOLS if condition == "D" else ()
-    # --title skips OpenCode's title-generation request, whose tokens no event reports.
-    cmd = [*config.opencode_cmd, "run", "--pure", "--print-logs", "--title", "beacon-eval",
-           "-m", config.model, "--format", "json"]
+    manifest = build_beacon(config, pin).resolve() if condition in ("B", "C", "D", "H", "R") else None
+    manifest_text = manifest.read_text(encoding="utf-8") if manifest is not None and condition == "C" else ""
     started = time.monotonic()
     keys = load_api_keys(config.env_file) if config.env_file else {}
-    with isolated_config_home(
-        config.config_source or default_config_source(), config.model, mcp,
-        builtin_provider=bool(keys), disabled_tools=disabled,
-        deps_template=deps_template_dir(config.opencode_cmd),
-    ) as home:
-        env = isolated_env(os.environ, home)
-        env.update(keys)
-        if condition == "M":
-            # Read by OpenCode's {env:...} substitution; never written to the config file.
-            env[MEMORY_KEY_ENV] = str(config.memory_key)
-        # An inherited PWD (Git Bash, MSYS, most shells) may root OpenCode in the
-        # caller's repo instead of the checkout; the fake-provider check exercises this.
-        env["PWD"] = str(checkout)
-        reserve_usd = config.run_reserve_usd if config.budget_usd is not None else None
-        log, reason, code = stream_opencode(
-            cmd, prompt, checkout, env, run_dir, config.run_reserve_tokens, config.timeout_s,
-            reserve_usd,
+    secrets: list[str] = [*keys.values(), *([config.memory_key] if config.memory_key else [])]
+    log, reason, code, resumes = EventLog(), "", None, 0
+    managed_origin, server_error = "", ""
+    try:
+        # Inside the try: an export or launch failure is a recorded run like
+        # ServerNotReady, not a crash (condition H/R startup, see finding 7).
+        snapshot = export_beacon_snapshot(config, pin) if condition == "R" else None
+        spec = _http_server_spec(config, condition, manifest, snapshot)
+        server_cm: AbstractContextManager[int | None] = (
+            beacon_http_process(spec[0], run_dir / SERVER_LOG, spec[1], spec[2]) if spec else nullcontext(None)
         )
-        # OpenCode's run mode sometimes exits right after a tool-calls step, before the
-        # model's next turn (7/45 Luna runs). Resume the same session so no setup loses it.
-        resumes = 0
-        while (
-            not reason
-            and resumes < MAX_RESUMES
-            and log.last_step_reason == "tool-calls"
-            and log.session_id
-            and extract_answer("\n".join(log.texts)) is None
-        ):
-            resumes += 1
-            log, reason, code = stream_opencode(
-                [*cmd, "--session", log.session_id], RESUME_PROMPT, checkout, env, run_dir,
-                config.run_reserve_tokens, config.timeout_s, reserve_usd, log=log,
+        with server_cm as port:
+            if port is not None:
+                managed_origin = f"127.0.0.1:{port}"
+            prompt = build_prompt(
+                task,
+                condition,
+                manifest_text,
+                http_url=f"http://{managed_origin}" if condition == "H" else "",
             )
+            (run_dir / "prompt.txt").write_text(prompt, encoding="utf-8")
+            mcp = _mcp_block(config, condition, manifest, f"http://{managed_origin}")
+            disabled = disabled_tools(condition)
+            # --title skips OpenCode's title-generation request, whose tokens no event reports.
+            cmd = [*config.opencode_cmd, "run", "--pure", "--print-logs", "--title", "beacon-eval",
+                   "-m", config.model, "--format", "json"]
+            with isolated_config_home(
+                config.config_source or default_config_source(), config.model, mcp,
+                builtin_provider=bool(keys), disabled_tools=disabled,
+                deps_template=deps_template_dir(config.opencode_cmd),
+            ) as home:
+                env = isolated_env(os.environ, home)
+                env.update(keys)
+                if condition == "M":
+                    # Read by OpenCode's {env:...} substitution; never written to the config file.
+                    env[MEMORY_KEY_ENV] = str(config.memory_key)
+                # Conditions H and R run outside the checkout entirely, in a fresh empty
+                # directory no git repository covers, so OpenCode cannot auto-load the
+                # checkout's AGENTS.md, CLAUDE.md or project opencode.json (--pure only
+                # disables plugins). The checkout is still exported and sealed above for
+                # scoring and rescore.
+                with empty_cwd() if condition in ("H", "R") else nullcontext(checkout) as agent_dir:
+                    # An inherited PWD (Git Bash, MSYS, most shells) may root OpenCode in the
+                    # caller's repo instead of the working directory; the fake-provider check exercises this.
+                    env["PWD"] = str(agent_dir)
+                    reserve_usd = config.run_reserve_usd if config.budget_usd is not None else None
+                    log, reason, code = stream_opencode(
+                        cmd, prompt, agent_dir, env, run_dir, config.run_reserve_tokens, config.timeout_s,
+                        reserve_usd,
+                    )
+                    # OpenCode's run mode sometimes exits right after a tool-calls step, before the
+                    # model's next turn (7/45 Luna runs). Resume the same session so no setup loses it.
+                    while (
+                        not reason
+                        and resumes < MAX_RESUMES
+                        and log.last_step_reason == "tool-calls"
+                        and log.session_id
+                        and extract_answer("\n".join(log.texts)) is None
+                    ):
+                        resumes += 1
+                        log, reason, code = stream_opencode(
+                            [*cmd, "--session", log.session_id], RESUME_PROMPT, agent_dir, env, run_dir,
+                            config.run_reserve_tokens, config.timeout_s, reserve_usd, log=log,
+                        )
+    except ServerNotReady as exc:
+        server_error = _redact_text(str(exc), secrets)
+    except (subprocess.CalledProcessError, OSError) as exc:
+        if condition not in ("H", "R"):
+            raise
+        server_error = _redact_text(_startup_error(exc), secrets)
+    fetched = webfetch_hosts(run_dir) if condition == "H" else []
+    off_origin = off_origin_fetches(fetched, managed_origin) if condition == "H" else []
     text = "\n".join(log.texts)
     answer = extract_answer(text)
-    error = reason or ("; ".join(log.errors) if log.errors else "")
+    error = server_error or reason or ("; ".join(log.errors) if log.errors else "")
+    if off_origin:
+        violation = f"non-loopback fetch: {', '.join(off_origin)}"
+        error = f"{error}; {violation}" if error else violation
     if not error and code not in (0, None):
         error = f"exit code {code}"
     result = RunResult(
@@ -759,11 +1105,14 @@ def run_one(
         tool_calls=log.tool_calls,
         seconds=round(time.monotonic() - started, 1),
         error=error[:500],
+        fetched_hosts=fetched,
     )
     result.scores = score(answer, task.gold, checkout)
     (run_dir / "result.json").write_text(json.dumps(asdict(result), indent=2), encoding="utf-8")
-    _redact(run_dir, [*keys.values(), *([config.memory_key] if config.memory_key else [])])
+    _redact(run_dir, secrets)
     _retire_checkout(checkout, run_dir, baseline, config.keep_checkouts)
+    if server_error:
+        raise ServerNotReady(server_error)
     if reason == "rate_limited":
         raise RateLimited(f"rate limited during {run_dir.name}; stopping, not retrying")
     if reason == "over_reserve":
@@ -858,19 +1207,33 @@ def check_memory_ready(mcp_url: str, timeout_s: float = 10.0) -> None:
         raise MemoryNotReady(f"memory backend cannot serve reads ({body.get('status')}): {failures}")
 
 
+def _startup_error(exc: subprocess.CalledProcessError | OSError) -> str:
+    """The recorded-failure message for a Beacon export or server-launch failure."""
+    if isinstance(exc, subprocess.CalledProcessError):
+        tail = str(getattr(exc, "stderr", "") or "").strip()[-SERVER_TAIL_CHARS:]
+        return f"the beacon setup failed ({exc}); its stderr ends with: {tail}"
+    return f"the beacon server could not be started: {exc}"
+
+
+def _redact_text(text: str, secrets: Any) -> str:
+    """*text* with every secret value of at least 8 characters replaced by ``<redacted>``."""
+    for value in secrets:
+        if len(value) >= 8:
+            text = text.replace(value, "<redacted>")
+    return text
+
+
 def _redact(run_dir: Path, secrets: Any) -> None:
     """Replace any key value that reached a saved file (logs can echo request errors)."""
     values = [value for value in secrets if len(value) >= 8]
     if not values:
         return
-    for name in ("events.jsonl", "stderr.log", "result.json", "prompt.txt"):
+    for name in ("events.jsonl", "stderr.log", "result.json", "prompt.txt", SERVER_LOG):
         path = run_dir / name
         if not path.is_file():
             continue
         text = path.read_text(encoding="utf-8")
-        cleaned = text
-        for value in values:
-            cleaned = cleaned.replace(value, "<redacted>")
+        cleaned = _redact_text(text, values)
         if cleaned != text:
             path.write_text(cleaned, encoding="utf-8")
 
@@ -931,14 +1294,14 @@ def run_matrix(
                     check_disk(config.workdir, config.min_free_gb)
                     try:
                         result = run_one(config, pins[task.repo], task, condition, repeat)
-                    except (RateLimited, BudgetExhausted, AccountingError):
+                    except (RateLimited, BudgetExhausted, AccountingError, ServerNotReady):
                         _record_stopped(config, task, condition, repeat, budget, results, log)
                         raise
                     budget.spend(result.total_tokens, result.cost_usd)
                     results.append(result)
                     with log.open("a", encoding="utf-8") as handle:
                         handle.write(json.dumps(asdict(result)) + "\n")
-    except (BudgetExhausted, RateLimited, AccountingError, LowDisk) as exc:
+    except (BudgetExhausted, RateLimited, AccountingError, LowDisk, ServerNotReady) as exc:
         return results, str(exc)
     return results, ""
 
@@ -979,8 +1342,10 @@ def _run_parallel(
                 seal_repo(pin, config.workdir, source)
             except (subprocess.CalledProcessError, OSError, UnicodeError):
                 pass  # each run warns and seals by copy
-        if set(conditions) & {"B", "C", "D"}:
+        if set(conditions) & {"B", "C", "D", "H", "R"}:
             build_beacon(config, pin)
+        if "R" in conditions:
+            export_beacon_snapshot(config, pin)
 
     lock = threading.Lock()
     results: list[RunResult] = []
@@ -1032,7 +1397,7 @@ def _run_parallel(
                     budget.in_flight -= 1
                 try:
                     result = future.result()
-                except (RateLimited, BudgetExhausted, AccountingError) as exc:
+                except (RateLimited, BudgetExhausted, AccountingError, ServerNotReady) as exc:
                     _record_stopped(config, task, condition, repeat, budget, results, log, lock)
                     stop = stop or str(exc)
                     continue
@@ -1081,9 +1446,17 @@ __all__ = [
     "LowDisk",
     "RateLimited",
     "RunnerConfig",
+    "SERVER_LOG",
+    "SERVER_READY_TIMEOUT_S",
+    "ServerNotReady",
     "TOOL_NOTE",
+    "beacon_http_process",
     "build_prompt",
+    "disabled_tools",
+    "export_beacon_snapshot",
+    "off_origin_fetches",
     "parse_events",
+    "pick_free_port",
     "resolve_opencode",
     "run_matrix",
     "rebuild_checkout",
@@ -1092,4 +1465,5 @@ __all__ = [
     "seal_checkout",
     "seal_repo",
     "stream_opencode",
+    "webfetch_hosts",
 ]

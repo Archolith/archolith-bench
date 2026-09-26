@@ -76,6 +76,9 @@ class RunResult:
     cost_usd: float = 0.0
     #: Times the session was resumed after OpenCode exited following a tool-calls step.
     resumes: int = 0
+    #: Deduped ``host:port`` of every webfetch call a condition H run made (all of them
+    #: must be the managed origin; anything else is named in ``error``). Empty otherwise.
+    fetched_hosts: list[str] = field(default_factory=list)
 
     @property
     def total_tokens(self) -> int:

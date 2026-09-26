@@ -36,7 +36,8 @@ TASK_SETS = {"main": "tasks", "why": "why_tasks", "adr": "why_tasks_adr"}
 
 def add_parser(subparsers: argparse._SubParsersAction) -> None:
     parser = subparsers.add_parser(
-        "beacon-eval", help="Beacon agent-task evaluation (A: docs, B: +Beacon MCP, C: +pasted)"
+        "beacon-eval",
+        help="Beacon agent-task evaluation (A: docs, B: +Beacon MCP, C: +pasted; H/R: HTTP opt-ins)",
     )
     parser.add_argument("action", choices=("plan", "run", "rescore", "judge"))
     parser.add_argument("--repos", default="", help="Comma-separated repo names (default: all)")
@@ -50,7 +51,11 @@ def add_parser(subparsers: argparse._SubParsersAction) -> None:
     )
     parser.add_argument(
         "--conditions", default=",".join(DEFAULT_CONDITIONS),
-        help="A, B, C by default; D (Beacon MCP only, built-in tools off) is opt-in",
+        help=(
+            "A, B, C by default; opt-in: D (Beacon MCP only, built-in tools off), "
+            "H (Beacon HTTP JSON via webfetch, no checkout access) and "
+            "R (Beacon MCP over Streamable HTTP, built-in tools off)"
+        ),
     )
     parser.add_argument("--repeats", type=int, default=1)
     parser.add_argument("--model", default=DEFAULT_MODEL)
