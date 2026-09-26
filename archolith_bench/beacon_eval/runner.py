@@ -13,7 +13,11 @@ the managed origin fails the run. OpenCode's events are streamed: a run is kille
 as its tokens pass the per-run reserve or a rate-limit error appears on stdout or stderr.
 The matrix admits a run only while the reserve still fits under the cap, and stops at the
 first rate limit (never retrying), an over-reserve run, a run with no usage data, or a
-server that never became ready.
+server that never became ready. A stop ends the matrix promptly, a KeyboardInterrupt
+included: no new runs are admitted, queued runs are cancelled, and the OpenCode and
+Beacon processes of runs in flight are killed instead of being waited on. A rerun of a
+run (--resume, or a rerun into an existing run dir) first moves the previous attempt's
+prompt, logs and result into ``attempts/<n>/``, so attempts never overwrite each other.
 """
 
 from __future__ import annotations
@@ -24,6 +28,7 @@ import os
 import queue
 import re
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -33,7 +38,7 @@ import threading
 import time
 from collections import deque
 from collections.abc import Iterator
-from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
+from concurrent.futures import FIRST_COMPLETED, CancelledError, Future, ThreadPoolExecutor, wait
 from contextlib import AbstractContextManager, contextmanager, nullcontext
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -219,11 +224,13 @@ def beacon_http_process(
                 proc = subprocess.Popen(
                     argv, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                     stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace",
+                    **_child_kwargs(),
                 )
             except OSError:
                 sink.close()
                 raise
             assert proc.stderr is not None
+            _track(proc)
             pump_thread = threading.Thread(target=pump, args=(sink, proc), daemon=True)
             pump_thread.start()
 
@@ -259,14 +266,9 @@ def beacon_http_process(
             raise ServerNotReady(_server_error("exited", ready_line, tail))
     finally:
         if proc is not None:
-            _kill_tree(proc)
+            _kill_tree(proc)  # reaps the server and closes its pipes, so the pump ends
         if pump_thread is not None:
             pump_thread.join(timeout=5)
-        if proc is not None:
-            try:
-                proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                pass
 
 
 def resolve_opencode() -> list[str]:
@@ -604,22 +606,56 @@ def rebuild_checkout(run_dir: Path, dest: Path, cache: Path) -> Path:
     return dest
 
 
+#: One lock per beacon key, so two threads that would both build or export the same pin
+#: serialize and the second reuses the finished result. Across processes the staging
+#: rename plays that role (the loser's rename onto the finished directory fails, and it
+#: then finds the result there), the way ``seal_repo`` does it.
+_pin_locks: dict[str, threading.Lock] = {}
+_pin_locks_guard = threading.Lock()
+
+
+def _pin_lock(key: str) -> threading.Lock:
+    with _pin_locks_guard:
+        return _pin_locks.setdefault(key, threading.Lock())
+
+
 def build_beacon(config: RunnerConfig, pin: RepoPin) -> Path:
-    """Build the beacon for *pin* in its own export (never the agent's checkout)."""
-    root = config.workdir / "beacons" / pin.name
+    """Build the beacon for *pin* in its own export (never the agent's checkout).
+
+    The build lives in ``beacons/<name>-<commit12>/``, so a workdir reused with a
+    different commit for the same pin name builds anew instead of reusing the old
+    manifest. Only the first writer builds: a per-pin lock within this process, a
+    staging directory renamed into place across processes.
+    """
+    root = config.workdir / "beacons" / f"{pin.name}-{pin.commit[:12]}"
     manifest = root / "beacon.generated.yaml"
     if manifest.is_file():
         return manifest
-    export_commit(pin, root, config.workdir / "cache")
-    env = dict(os.environ)
-    if config.beacon_src:
-        env["PYTHONPATH"] = config.beacon_src
-    subprocess.run(
-        [config.beacon_python, "-m", "beacon", "build", "--repo", str(root), "--format", "json"],
-        check=True,
-        capture_output=True,
-        env=env,
-    )
+    with _pin_lock(f"build:{root.name}"):
+        if manifest.is_file():
+            return manifest
+        beacons = config.workdir / "beacons"
+        beacons.mkdir(parents=True, exist_ok=True)
+        staging = Path(tempfile.mkdtemp(prefix=root.name + ".staging-", dir=beacons))
+        try:
+            export_commit(pin, staging, config.workdir / "cache")
+            env = dict(os.environ)
+            if config.beacon_src:
+                env["PYTHONPATH"] = config.beacon_src
+            subprocess.run(
+                [config.beacon_python, "-m", "beacon", "build", "--repo", str(staging),
+                 "--format", "json"],
+                check=True,
+                capture_output=True,
+                env=env,
+            )
+            try:
+                os.rename(staging, root)
+            except OSError:
+                if not manifest.is_file():
+                    raise
+        finally:
+            remove_tree(staging)
     return manifest
 
 
@@ -658,27 +694,36 @@ def disabled_tools(condition: str) -> tuple[str, ...]:
 
 
 def export_beacon_snapshot(config: RunnerConfig, pin: RepoPin) -> Path:
-    """The canonical snapshot condition R's MCP server serves, written once per pin."""
-    root = config.workdir / "beacons" / pin.name
+    """The canonical snapshot condition R's MCP server serves, written once per pin.
+
+    Like :func:`build_beacon`, keyed by the pin's commit and written once: a per-pin
+    lock serializes this process's first writers (the second reuses the result), and
+    the snapshot lands through an atomic rename, so a reader in another process never
+    sees half of one.
+    """
+    root = config.workdir / "beacons" / f"{pin.name}-{pin.commit[:12]}"
     snapshot = root / "beacon.snapshot.json"
     if snapshot.is_file():
         return snapshot
-    manifest = build_beacon(config, pin)
-    env = dict(os.environ)
-    if config.beacon_src:
-        env["PYTHONPATH"] = config.beacon_src
-    staging = root / f"beacon.snapshot.{os.getpid()}-{threading.get_ident()}.tmp"
-    try:
-        subprocess.run(
-            [config.beacon_python, "-m", "beacon", "export", str(manifest),
-             "--docs-root", str(root), "--output", str(staging)],
-            check=True,
-            capture_output=True,
-            env=env,
-        )
-        os.replace(staging, snapshot)  # atomic, so a parallel reader never sees half of one
-    finally:
-        staging.unlink(missing_ok=True)
+    with _pin_lock(f"export:{root.name}"):
+        if snapshot.is_file():
+            return snapshot
+        manifest = build_beacon(config, pin)
+        env = dict(os.environ)
+        if config.beacon_src:
+            env["PYTHONPATH"] = config.beacon_src
+        staging = root / f"beacon.snapshot.{os.getpid()}-{threading.get_ident()}.tmp"
+        try:
+            subprocess.run(
+                [config.beacon_python, "-m", "beacon", "export", str(manifest),
+                 "--docs-root", str(root), "--output", str(staging)],
+                check=True,
+                capture_output=True,
+                env=env,
+            )
+            os.replace(staging, snapshot)  # atomic, so a parallel reader never sees half of one
+        finally:
+            staging.unlink(missing_ok=True)
     return snapshot
 
 
@@ -895,13 +940,194 @@ def parse_events(stdout: str, stderr: str = "") -> dict[str, Any]:
     }
 
 
-def _kill_tree(proc: subprocess.Popen[str]) -> None:
-    if proc.poll() is not None:
-        return
+#: POSIX children get this long to exit on TERM before their whole group gets KILL.
+KILL_GRACE_S = 5.0
+#: How long _kill_tree waits for a tree to die before giving up on reaping it.
+KILL_WAIT_S = 15.0
+#: After a stop, how long the parallel matrix drains interrupted runs before leaving.
+DRAIN_TIMEOUT_S = 60.0
+
+#: Processes a run started and has not reaped yet, so a stop can end them now
+#: instead of waiting for their runs to finish (see _run_parallel).
+_live_children: set[subprocess.Popen[str]] = set()
+_live_children_lock = threading.Lock()
+
+
+def _register_child(proc: subprocess.Popen[str]) -> None:
+    """Remember a spawned run process for :func:`_kill_live_children`."""
+    with _live_children_lock:
+        _live_children.add(proc)
+
+
+def _unregister_child(proc: subprocess.Popen[str]) -> None:
+    with _live_children_lock:
+        _live_children.discard(proc)
+
+
+def _kill_live_children() -> None:
+    """Kill every process tree a run started and has not reaped yet."""
+    with _live_children_lock:
+        children = list(_live_children)
+    for proc in children:
+        _kill_tree(proc)
+
+
+if sys.platform == "win32":
+    import ctypes
+    from ctypes import wintypes
+
+    _PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+    _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000
+    _JobObjectExtendedLimitInformation = 9
+
+    class _IO_COUNTERS(ctypes.Structure):
+        _fields_ = [(name, ctypes.c_ulonglong) for name in (
+            "ReadOperationCount", "WriteOperationCount", "OtherOperationCount",
+            "ReadTransferCount", "WriteTransferCount", "OtherTransferCount",
+        )]
+
+    class _JOBOBJECT_BASIC_LIMIT_INFORMATION(ctypes.Structure):
+        _fields_ = [
+            ("PerProcessUserTimeLimit", ctypes.c_longlong),
+            ("PerJobUserTimeLimit", ctypes.c_longlong),
+            ("LimitFlags", wintypes.DWORD),
+            ("MinimumWorkingSetSize", ctypes.c_size_t),
+            ("MaximumWorkingSetSize", ctypes.c_size_t),
+            ("ActiveProcessLimit", wintypes.DWORD),
+            ("Affinity", ctypes.c_size_t),  # ULONG_PTR
+            ("PriorityClass", wintypes.DWORD),
+            ("SchedulingClass", wintypes.DWORD),
+        ]
+
+    class _JOBOBJECT_EXTENDED_LIMIT_INFORMATION(ctypes.Structure):
+        _fields_ = [
+            ("BasicLimitInformation", _JOBOBJECT_BASIC_LIMIT_INFORMATION),
+            ("IoInfo", _IO_COUNTERS),
+            ("ProcessMemoryLimit", ctypes.c_size_t),
+            ("JobMemoryLimit", ctypes.c_size_t),
+            ("PeakProcessMemoryUsed", ctypes.c_size_t),
+            ("PeakJobMemoryUsed", ctypes.c_size_t),
+        ]
+
+    def _win_creation_time(handle: int) -> int | None:
+        """The handle's process creation time (100ns ticks); None if it cannot be read."""
+        created, exited, kernel, user = (wintypes.FILETIME() for _ in range(4))
+        if not ctypes.windll.kernel32.GetProcessTimes(
+            handle, ctypes.byref(created), ctypes.byref(exited), ctypes.byref(kernel), ctypes.byref(user)
+        ):
+            return None
+        return (created.dwHighDateTime << 32) | created.dwLowDateTime
+
+    def _win_pid_creation_time(pid: int) -> int | None:
+        """The creation time of whatever process now owns *pid*; None if none does."""
+        handle = ctypes.windll.kernel32.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+        if not handle:
+            return None
+        try:
+            return _win_creation_time(handle)
+        finally:
+            ctypes.windll.kernel32.CloseHandle(handle)
+
+    def _attach_job(proc: subprocess.Popen[str]) -> None:
+        """Put *proc* and its whole future tree in a kill-on-close job object.
+
+        Closing the job's handle (in ``_kill_tree``) ends every member the kernel still
+        lists, including grandchildren whose parent already exited -- which
+        ``taskkill /T`` cannot reach, because it needs a live root to walk from. Best
+        effort: if a call fails, the tree is left to the taskkill path alone.
+        """
+        kernel32 = ctypes.windll.kernel32
+        job = kernel32.CreateJobObjectW(None, None)
+        if not job:
+            return
+        limits = _JOBOBJECT_EXTENDED_LIMIT_INFORMATION()
+        limits.BasicLimitInformation.LimitFlags = _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        if not kernel32.SetInformationJobObject(
+            job, _JobObjectExtendedLimitInformation, ctypes.byref(limits), ctypes.sizeof(limits)
+        ) or not kernel32.AssignProcessToJobObject(job, proc._handle):
+            kernel32.CloseHandle(job)
+            return
+        proc._beacon_eval_job = job  # noqa: SLF001 - carried with the Popen it belongs to
+
+
+def _child_kwargs() -> dict[str, Any]:
+    """Popen keywords for a managed child: its own process group on POSIX.
+
+    The group lets :func:`_kill_tree` signal the whole tree, leaderless if it must.
+    Windows needs nothing here; its job object and ``taskkill /T`` cover the tree.
+    """
+    return {} if sys.platform == "win32" else {"start_new_session": True}
+
+
+def _track(proc: subprocess.Popen[str]) -> None:
+    """Register a spawned run process for stops to kill, plus its Windows job object."""
     if sys.platform == "win32":
-        subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"], capture_output=True)
+        _attach_job(proc)
+    _register_child(proc)
+
+
+def _kill_tree(proc: subprocess.Popen[str]) -> None:
+    """End the whole tree *proc* started, reap it, and close its pipes.
+
+    POSIX: the child was started in its own process group (``_child_kwargs``), so the
+    group gets TERM and, after :data:`KILL_GRACE_S`, KILL -- grandchildren included,
+    even after the parent itself already exited (a live member keeps the group). The
+    group id stays the parent's pid; a reaped parent's pid is only reused after the
+    whole pid space wraps, so the kill window here is safe in practice.
+
+    Windows: ``taskkill /T /F`` while the pid still names the process we started --
+    checked against the process's creation time, so a recycled pid is never hit --
+    falling back to ``proc.kill()`` when the taskkill fails on a live parent; the
+    kill-on-close job (``_attach_job``) then ends whatever taskkill could not reach,
+    which is any tree whose root already exited. The pipes close last, so pump threads
+    see EOF and end even if a stray grandchild kept a write end open.
+    """
+    alive = proc.poll() is None
+    if sys.platform == "win32":
+        if not alive:
+            started_at = _win_creation_time(proc._handle)  # noqa: SLF001 - our own child
+            alive = started_at is not None and started_at == _win_pid_creation_time(proc.pid)
+        if alive:
+            taskkilled = subprocess.run(
+                ["taskkill", "/PID", str(proc.pid), "/T", "/F"], capture_output=True
+            )
+            if taskkilled.returncode != 0:
+                try:
+                    proc.kill()
+                except OSError:
+                    pass
+        job = getattr(proc, "_beacon_eval_job", None)
+        if job:
+            proc._beacon_eval_job = None  # noqa: SLF001 - ours, closed right here
+            ctypes.windll.kernel32.CloseHandle(job)  # kill-on-close: ends the rest of the tree
     else:
-        proc.kill()
+        try:
+            os.killpg(proc.pid, signal.SIGTERM)
+        except (ProcessLookupError, PermissionError):
+            if alive:
+                try:
+                    proc.kill()
+                except OSError:
+                    pass
+        else:
+            try:
+                proc.wait(timeout=KILL_GRACE_S)
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+    try:
+        proc.wait(timeout=KILL_WAIT_S)
+    except (subprocess.TimeoutExpired, OSError):
+        pass
+    for stream in (proc.stdin, proc.stdout, proc.stderr):
+        try:
+            if stream is not None:
+                stream.close()
+        except (OSError, ValueError):
+            pass
+    _unregister_child(proc)
 
 
 def _pump(stream: IO[str], tag: str, sink: queue.Queue[tuple[str, str | None]]) -> None:
@@ -919,64 +1145,97 @@ def stream_opencode(
 
     The raw streams are kept in ``events.jsonl`` and ``stderr.log``. Stop reasons:
     "" (finished), "rate_limited", "over_reserve", "timeout". Passing *log* continues it
-    (a resumed session): limits apply to the run's running totals and the files are appended.
+    (a resumed session): limits apply to the run's running totals and the files are
+    appended. Every way out of the body -- a KeyboardInterrupt included -- kills the
+    whole process tree first (see :func:`_kill_tree`).
     """
     mode = "a" if log is not None else "w"
     log = log if log is not None else EventLog()
     proc = subprocess.Popen(
         cmd, cwd=cwd, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
         stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace",
+        **_child_kwargs(),
     )
     assert proc.stdin and proc.stdout and proc.stderr
+    _track(proc)
     try:
-        proc.stdin.write(prompt)
-        proc.stdin.close()
-    except OSError:
-        pass  # the process exited early; its output says why
-    lines: queue.Queue[tuple[str, str | None]] = queue.Queue()
-    for stream, tag in ((proc.stdout, "out"), (proc.stderr, "err")):
-        threading.Thread(target=_pump, args=(stream, tag, lines), daemon=True).start()
-    reason, open_streams = "", 2
-    deadline = time.monotonic() + timeout_s
-    with (run_dir / "events.jsonl").open(mode, encoding="utf-8") as events, (
-        run_dir / "stderr.log"
-    ).open(mode, encoding="utf-8") as errors:
-        while open_streams:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                reason = "timeout"
-                break
-            try:
-                tag, line = lines.get(timeout=min(remaining, 1.0))
-            except queue.Empty:
-                continue
-            if line is None:
-                open_streams -= 1
-                continue
-            if tag == "out":
-                events.write(line)
-                log.feed(line)
-            else:
-                errors.write(line)
-                log.feed_stderr(line)
-            if log.rate_limited:
-                reason = "rate_limited"
-                break
-            over_tokens = reserve is not None and log.total_tokens > reserve
-            if over_tokens or (reserve_usd is not None and log.cost_usd > reserve_usd):
-                reason = "over_reserve"
-                break
-    _kill_tree(proc)
-    try:
-        code = proc.wait(timeout=30)
-    except subprocess.TimeoutExpired:
-        code = None
-    return log, reason, code
+        try:
+            proc.stdin.write(prompt)
+            proc.stdin.close()
+        except OSError:
+            pass  # the process exited early; its output says why
+        lines: queue.Queue[tuple[str, str | None]] = queue.Queue()
+        for stream, tag in ((proc.stdout, "out"), (proc.stderr, "err")):
+            threading.Thread(target=_pump, args=(stream, tag, lines), daemon=True).start()
+        reason, open_streams = "", 2
+        deadline = time.monotonic() + timeout_s
+        with (run_dir / "events.jsonl").open(mode, encoding="utf-8") as events, (
+            run_dir / "stderr.log"
+        ).open(mode, encoding="utf-8") as errors:
+            while open_streams:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    reason = "timeout"
+                    break
+                try:
+                    tag, line = lines.get(timeout=min(remaining, 1.0))
+                except queue.Empty:
+                    continue
+                if line is None:
+                    open_streams -= 1
+                    continue
+                if tag == "out":
+                    events.write(line)
+                    log.feed(line)
+                else:
+                    errors.write(line)
+                    log.feed_stderr(line)
+                if log.rate_limited:
+                    reason = "rate_limited"
+                    break
+                over_tokens = reserve is not None and log.total_tokens > reserve
+                if over_tokens or (reserve_usd is not None and log.cost_usd > reserve_usd):
+                    reason = "over_reserve"
+                    break
+    finally:
+        # Every way out -- finished, stopped, timed out, or interrupted (a
+        # KeyboardInterrupt included) -- ends the tree, so no Ctrl+C can orphan
+        # OpenCode or the processes it started.
+        _kill_tree(proc)
+    return log, reason, proc.returncode
 
 
 # ---------------------------------------------------------------------------
 # The matrix
 # ---------------------------------------------------------------------------
+
+
+#: A rerun moves these into ``attempts/<n>/`` first, so a new attempt never sits beside
+#: the old one's logs and the old attempt's cost stays readable for accounting.
+ATTEMPT_FILES = ("prompt.txt", "events.jsonl", "stderr.log", SERVER_LOG, "result.json")
+ATTEMPTS_DIR = "attempts"
+
+
+def _archive_previous_attempt(run_dir: Path) -> None:
+    """Move a previous attempt's artifacts in *run_dir* to ``attempts/<n>/``.
+
+    ``--resume`` redoes a run whose saved result carries an error or no answer (see
+    :func:`_completed_run`), and a plain rerun into an existing run dir overwrites the
+    same paths; this keeps the redone attempt's prompt, logs and result -- its spend
+    with them -- without letting them stand in for the new attempt's.
+    """
+    present = [name for name in ATTEMPT_FILES if (run_dir / name).is_file()]
+    if not present:
+        return
+    attempts = run_dir / ATTEMPTS_DIR
+    used = (
+        {int(path.name) for path in attempts.iterdir() if path.name.isdigit()}
+        if attempts.is_dir() else set()
+    )
+    dest = attempts / str(max(used, default=0) + 1)
+    dest.mkdir(parents=True)
+    for name in present:
+        os.replace(run_dir / name, dest / name)
 
 
 def run_one(
@@ -991,6 +1250,7 @@ def run_one(
     run_dir = (config.workdir / "runs" / f"{task.repo}-{task.task_id}-{condition}-{repeat}").resolve()
     cache = config.workdir / "cache"
     # A rerun (--resume) starts from a clean export and inherits nothing of the last attempt.
+    _archive_previous_attempt(run_dir)
     _rmtree(run_dir / "checkout")
     for name in (*CHANGE_FILES, PARTIAL_MARKER):
         (run_dir / name).unlink(missing_ok=True)
@@ -1322,10 +1582,13 @@ def _run_parallel(
 
     Admission holds a reserve for every run in flight (``Budget.in_flight``), so the cap is
     never passed by more than what those runs overshoot their own reserve. The first stop
-    (rate limit, over-reserve run, missing cost data, or the budget) admits no new run; runs
-    already in flight finish, are recorded and counted. Shared state that runs would otherwise
-    race to create -- the clone cache and the beacons -- is prepared once, up front. Results
-    come back in matrix order, whatever order the runs finished in.
+    (rate limit, over-reserve run, missing cost data, budget, or a KeyboardInterrupt)
+    admits no new run and ends the runs in flight now: queued runs are cancelled and the
+    OpenCode and Beacon processes of running ones are killed, so the stop is prompt and
+    nothing is waited on to finish naturally. Interrupted runs are still recorded, with
+    the error their killed run saved. Shared state that runs would otherwise race to
+    create -- the clone cache and the beacons -- is prepared once, up front. Results come
+    back in matrix order, whatever order the runs finished in.
     """
     jobs = [
         (repeat, task, condition)
@@ -1362,50 +1625,85 @@ def _run_parallel(
         pending: dict[Future[RunResult], tuple[int, Task, str]] = {}
         queue_ = iter(jobs)
         unexpected: BaseException | None = None
+
+        def halt() -> None:
+            """The matrix stopped: cancel queued runs, kill the running children now."""
+            for future in pending:
+                future.cancel()
+            _kill_live_children()
+
+        def first_stop(message: str) -> None:
+            nonlocal stop
+            if not stop:
+                stop = message
+                halt()
+
         while True:
-            while not stop and len(pending) < workers:
-                job = next(queue_, None)
-                if job is None:
-                    break
-                repeat, task, condition = job
-                if resume:
-                    saved = _completed_run(config, task, condition, repeat)
-                    if saved is not None:
-                        key = (saved.repo, saved.task_id, saved.condition, saved.repeat)
-                        if key in logged:
-                            with lock:
-                                budget.spend(saved.total_tokens, saved.cost_usd)
-                                results.append(saved)
-                        else:
-                            record(saved)
-                        continue
-                with lock:
-                    try:
-                        budget.check()
-                        check_disk(config.workdir, config.min_free_gb)
-                    except (BudgetExhausted, LowDisk) as exc:
-                        stop = str(exc)
+            try:
+                while not stop and len(pending) < workers:
+                    job = next(queue_, None)
+                    if job is None:
                         break
-                    budget.in_flight += 1
-                pending[pool.submit(run_one, config, pins[task.repo], task, condition, repeat)] = job
-            if not pending:
+                    repeat, task, condition = job
+                    if resume:
+                        saved = _completed_run(config, task, condition, repeat)
+                        if saved is not None:
+                            key = (saved.repo, saved.task_id, saved.condition, saved.repeat)
+                            if key in logged:
+                                with lock:
+                                    budget.spend(saved.total_tokens, saved.cost_usd)
+                                    results.append(saved)
+                            else:
+                                record(saved)
+                            continue
+                    with lock:
+                        try:
+                            budget.check()
+                            check_disk(config.workdir, config.min_free_gb)
+                        except (BudgetExhausted, LowDisk) as exc:
+                            first_stop(str(exc))
+                            break
+                        budget.in_flight += 1
+                    pending[pool.submit(run_one, config, pins[task.repo], task, condition, repeat)] = job
+                if not pending:
+                    break
+                done, _ = wait(pending, return_when=FIRST_COMPLETED)
+                for future in done:
+                    repeat, task, condition = pending.pop(future)
+                    with lock:
+                        budget.in_flight -= 1
+                    try:
+                        result = future.result()
+                    except CancelledError:
+                        continue  # a queued run the stop cancelled; nothing ran
+                    except (RateLimited, BudgetExhausted, AccountingError, ServerNotReady) as exc:
+                        _record_stopped(config, task, condition, repeat, budget, results, log, lock)
+                        first_stop(str(exc))
+                        continue
+                    except BaseException as exc:  # noqa: BLE001 - re-raised once in-flight runs end
+                        unexpected = unexpected or exc
+                        first_stop(f"{type(exc).__name__}: {exc}")
+                        continue
+                    record(result)
+            except BaseException as exc:  # noqa: BLE001 - any stop ends the matrix promptly
+                # A KeyboardInterrupt (Ctrl+C lands here, in the waiting main thread) or
+                # anything else escaping the loop: no new runs, queued runs cancelled,
+                # the OpenCode and Beacon processes of runs in flight killed, and those
+                # runs drained -- their saved results recorded -- instead of being waited
+                # on to finish naturally.
+                unexpected = unexpected or exc
+                first_stop(f"{type(exc).__name__}: {exc}")
+                done, _ = wait(pending, timeout=DRAIN_TIMEOUT_S)
+                for future in done:
+                    pending.pop(future)
+                    with lock:
+                        budget.in_flight -= 1
+                    try:
+                        result = future.result()
+                    except BaseException:
+                        continue  # cancelled with the queue, or failed by the same stop
+                    record(result)
                 break
-            done, _ = wait(pending, return_when=FIRST_COMPLETED)
-            for future in done:
-                repeat, task, condition = pending.pop(future)
-                with lock:
-                    budget.in_flight -= 1
-                try:
-                    result = future.result()
-                except (RateLimited, BudgetExhausted, AccountingError, ServerNotReady) as exc:
-                    _record_stopped(config, task, condition, repeat, budget, results, log, lock)
-                    stop = stop or str(exc)
-                    continue
-                except BaseException as exc:  # noqa: BLE001 - re-raised once in-flight runs end
-                    unexpected = unexpected or exc
-                    stop = stop or f"{type(exc).__name__}: {exc}"
-                    continue
-                record(result)
         if unexpected is not None:
             raise unexpected
     results.sort(key=lambda r: order.get((r.repo, r.task_id, r.condition, r.repeat), len(order)))

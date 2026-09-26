@@ -1,5 +1,58 @@
 # archolith-bench Changelog
 
+## 2026-09-26 - Beacon eval: run lifecycle fixes (PR #3 review findings 5, 8, 9, 10, 11)
+
+Deferred lower-severity findings from the astra review of PR #3, all in
+`runner.py` (+ `tests/test_beacon_eval_lifecycle.py`); no scoring, condition, or
+isolation behavior changed:
+
+- **Process-tree termination (5).** `_kill_tree` now ends the whole tree, not just the
+  direct child. POSIX: children start in their own process group
+  (`start_new_session=True` via `_child_kwargs`) and the group gets TERM, then KILL
+  after `KILL_GRACE_S` — grandchildren included, even after the parent itself exited.
+  Windows: `taskkill /T /F` stays, and now runs even when the parent already exited,
+  guarded by the process's creation time (read with stdlib `ctypes` off the retained
+  Popen handle, compared against whoever owns the pid now) so a recycled pid is never
+  hit; a failed taskkill on a live parent falls back to `proc.kill()`. One caveat,
+  verified empirically: `taskkill /T` needs a live root (a dead root gets "not found",
+  rc 128, and its orphans survive), so full correctness for the parent-already-exited
+  case needs Windows Job Objects — provided via stdlib `ctypes` (`_attach_job`), not a
+  new dependency: every runner child joins a kill-on-close job, and `_kill_tree`
+  closes that job, which is what deterministically ends orphaned trees. `_kill_tree`
+  always reaps with a timeout (`KILL_WAIT_S`) and closes the pipes afterwards, so
+  pump threads end even if a stray grandchild kept a write end open. `beacon_http_process`
+  and `stream_opencode` register their children with `_track`; `_kill_live_children`
+  ends them all.
+- **Caches keyed by pin identity (8).** `build_beacon` and `export_beacon_snapshot`
+  now live in `beacons/<name>-<commit12>/` (same pattern as the seal repos), so a
+  workdir reused with a different commit for the same pin name rebuilds instead of
+  reusing the old manifest/snapshot. `rescore` never read these directories; existing
+  result dirs keep working (an old-layout workdir just rebuilds once into the new key).
+- **Concurrent first writers (9).** Per-pin `threading.Lock`s (keyed by the beacon
+  directory) serialize first build/export within a process — the second caller reuses
+  the finished artifact — and the build lands through a staging directory renamed into
+  place across processes, like `seal_repo`; the snapshot still lands via an atomic
+  `os.replace`.
+- **Cancellation (10).** `stream_opencode` keeps its child in a `try/finally` that
+  kills the tree on any exception, KeyboardInterrupt included. In the parallel matrix,
+  the first stop — rate limit, budget, disk, or a KeyboardInterrupt in the waiting
+  main thread — now also cancels queued runs and kills the OpenCode and Beacon
+  processes of runs in flight (`_kill_live_children`), then drains briefly
+  (`DRAIN_TIMEOUT_S`) and leaves; it never waits for a killed run to finish naturally.
+  Interrupted runs are still recorded, with the error their killed run saved.
+- **Retry artifacts (11).** A rerun into an existing run dir (`--resume` redoes runs
+  whose saved result has an error or no answer — that selection is unchanged) first
+  moves the previous attempt's `prompt.txt`, `events.jsonl`, `stderr.log`,
+  `beacon-server.log` and `result.json` into `attempts/<n>/`, so attempts never
+  overwrite each other and the old attempt's spend stays visible. `rescore` and
+  `--resume` only look at the run dir's own `result.json`, so archived attempts are
+  invisible to both.
+
+Tests: `tests/test_beacon_eval_lifecycle.py` (11 deterministic, offline tests: grandchild
+kill, kill after parent exit, per-commit cache reuse/rebuild, concurrent first writers,
+KeyboardInterrupt tree kill, parallel stop killing children promptly, attempt archiving
+plus the `--resume` redo path). No existing test changed.
+
 ## 2026-09-26 - Beacon eval: conditions H (HTTP JSON via webfetch) and R (Beacon MCP over Streamable HTTP)
 
 Two opt-in, no-checkout conditions for Beacon issue #26 phase 5 (`CONDITIONS` is now
