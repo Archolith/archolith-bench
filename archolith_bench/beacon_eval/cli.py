@@ -21,6 +21,7 @@ from archolith_bench.beacon_eval.models import RunResult, load_repos, load_tasks
 from archolith_bench.beacon_eval.report import METRICS, render
 from archolith_bench.beacon_eval.runner import (
     DEFAULT_BUDGET_TOKENS,
+    DEFAULT_MIN_FREE_GB,
     DEFAULT_MODEL,
     DEFAULT_RUN_RESERVE,
     RunnerConfig,
@@ -94,6 +95,16 @@ def add_parser(subparsers: argparse._SubParsersAction) -> None:
             "run: runs in flight at once (default 1). Each in-flight run holds its reserve "
             "against the budget, and the first stop admits no new run."
         ),
+    )
+    parser.add_argument(
+        "--keep-checkouts", action="store_true",
+        help="run: keep each run's checkout after scoring (by default it is deleted; rescore "
+        "rebuilds it from pin.json and changes.tar)",
+    )
+    parser.add_argument(
+        "--min-free-gb", type=float, default=DEFAULT_MIN_FREE_GB,
+        help=f"run: start no new run below this much free space on the workdir's volume "
+        f"(default {DEFAULT_MIN_FREE_GB:g}; 0 turns the check off)",
     )
     parser.add_argument(
         "--judge-model", default=DEFAULT_JUDGE_MODEL,
@@ -181,6 +192,8 @@ def run(args: argparse.Namespace) -> int:
             if args.memory_key_file
             else None
         ),
+        keep_checkouts=args.keep_checkouts,
+        min_free_gb=args.min_free_gb or None,
     )
     if "M" in conditions and not (config.memory_url and config.memory_key):
         print("condition M needs --memory-url and --memory-key-file", file=sys.stderr)

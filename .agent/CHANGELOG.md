@@ -1,5 +1,28 @@
 # archolith-bench Changelog
 
+## 2026-09-25 - Beacon eval: cut per-run file churn
+
+- `runner.py`:
+  - `seal_checkout` commits the pin's own tree through git alternates on the clone cache
+    (about 20 `.git` files instead of one loose object per file). The checkout takes the
+    source's `core.autocrlf`/`core.eol`, so CRLF exports on Windows still match. Otherwise it
+    falls back to add/commit plus repack.
+  - After scoring, a run writes `pin.json` and `changes.status` (plus `changes.tar` and
+    `changes.deleted.json` when the agent changed anything), then deletes its checkout.
+    `--keep-checkouts` keeps it.
+  - `rescore` rebuilds deleted checkouts from those files; 17 real runs rescored identically
+    either way.
+  - `--min-free-gb` (default 15) starts no new run below that free space on the workdir's volume.
+- `isolation.py`:
+  - The first run that finishes OpenCode's config-dir install (~3,700 files) becomes a shared
+    template in `%TEMP%\beacon-eval-oc-deps-<key>`, and later runs link it with a junction.
+    With a fake provider, OpenCode installed nothing into a linked run and left the shared
+    copy unchanged.
+  - ripgrep is hard-linked into each run.
+  - Per-run homes are removed with read-only handling, so OpenCode's snapshot git objects
+    no longer leak into `%TEMP%`.
+- `tests/test_beacon_eval_churn.py`: new.
+
 ## 2026-09-24 - Beacon eval: condition M over Menhir's stdio bridge
 
 - `isolation.py`, `runner.py`, `cli.py`: `--memory-stdio` (bridge command as JSON), `--memory-stdio-env`

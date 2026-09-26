@@ -21,6 +21,7 @@ reads a credential field, prints or logs one.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -138,15 +139,104 @@ def isolated_env(base: Mapping[str, str], config_home: Path) -> dict[str, str]:
     return env
 
 
+def remove_tree(path: Path) -> None:
+    """Remove *path*, including read-only files (git objects), which Windows refuses to delete."""
+    def clear_readonly(func: Any, target: str, _exc: Any) -> None:
+        os.chmod(target, 0o700)
+        func(target)
+
+    if not path.exists():
+        return
+    if sys.version_info >= (3, 12):
+        shutil.rmtree(path, onexc=clear_readonly)
+    else:
+        shutil.rmtree(path, onerror=clear_readonly)
+
+
 def _seed_tools(data_home: Path, source_data_home: Path) -> None:
-    """Copy OpenCode's downloaded ripgrep into a fresh data home, so a run doesn't fetch it."""
+    """Link OpenCode's downloaded ripgrep into a fresh data home, so a run doesn't fetch it.
+
+    A hard link writes no file data; it falls back to a copy across volumes.
+    """
     source_bin = source_data_home / "opencode" / "bin"
     target_bin = data_home / "opencode" / "bin"
     target_bin.mkdir(parents=True, exist_ok=True)
     for name in ("rg.exe", "rg"):
         found = source_bin / name
         if found.is_file():
-            shutil.copy2(found, target_bin / name)
+            try:
+                os.link(found, target_bin / name)
+            except OSError:
+                shutil.copy2(found, target_bin / name)
+
+
+#: The files OpenCode writes next to the ``node_modules`` it installs in its config dir.
+DEP_MANIFESTS = ("package.json", "package-lock.json")
+
+
+def deps_template_dir(opencode_cmd: list[str]) -> Path:
+    """Where the shared OpenCode config-dir dependencies live for this OpenCode build.
+
+    Keyed by the executable's path, size and mtime, so an upgraded OpenCode (which pins a
+    new plugin version) gets its own template. The ``beacon-eval-oc-`` prefix matches
+    the per-run config homes, so the same Defender exclusion covers it.
+    """
+    exe = Path(opencode_cmd[-1] if len(opencode_cmd) > 1 else opencode_cmd[0])
+    try:
+        stat = exe.stat()
+        ident = f"{exe.resolve()}|{stat.st_size}|{stat.st_mtime_ns}"
+    except OSError:
+        ident = " ".join(opencode_cmd)
+    key = hashlib.sha256(ident.encode()).hexdigest()[:12]
+    return Path(tempfile.gettempdir()) / f"beacon-eval-oc-deps-{key}"
+
+
+def _link_dir(target: Path, link: Path) -> None:
+    """A directory junction on Windows (no admin needed), a symlink elsewhere."""
+    if sys.platform == "win32":
+        import _winapi
+
+        _winapi.CreateJunction(str(target), str(link))
+    else:
+        os.symlink(target, link, target_is_directory=True)
+
+
+def _use_deps(opencode_dir: Path, template: Path) -> bool:
+    """Point *opencode_dir* at the shared install; False when there is none yet."""
+    if not (template / "node_modules").is_dir():
+        return False
+    for name in DEP_MANIFESTS:
+        if (template / name).is_file():
+            shutil.copy2(template / name, opencode_dir / name)
+    try:
+        _link_dir(template / "node_modules", opencode_dir / "node_modules")
+    except OSError:
+        return False
+    return True
+
+
+def _keep_deps(opencode_dir: Path, template: Path) -> None:
+    """Make this run's finished install the shared template, if there is none yet.
+
+    Only a complete install is kept (npm writes the lock file last). The template appears
+    in one atomic rename, so a concurrent run sees either no template or a whole one.
+    """
+    installed = opencode_dir / "node_modules"
+    if template.exists() or not (opencode_dir / "package-lock.json").is_file():
+        return
+    if not (installed / "@opencode-ai" / "plugin" / "package.json").is_file():
+        return
+    staging = Path(tempfile.mkdtemp(prefix=template.name + ".staging-", dir=template.parent))
+    try:
+        os.rename(installed, staging / "node_modules")
+        for name in DEP_MANIFESTS:
+            if (opencode_dir / name).is_file():
+                shutil.copy2(opencode_dir / name, staging / name)
+        os.rename(staging, template)
+    except OSError:
+        pass  # another run kept its install first; this one is removed with the home
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
 
 
 def default_data_source() -> Path:
@@ -174,17 +264,44 @@ def isolated_config_home(
     mcp: dict[str, Any] | None = None,
     builtin_provider: bool = False,
     disabled_tools: tuple[str, ...] = (),
+    deps_template: Path | None = None,
 ) -> Iterator[Path]:
-    """Yield a temp ``XDG_CONFIG_HOME`` for one run; removed on exit."""
+    """Yield a temp ``XDG_CONFIG_HOME`` for one run; removed on exit.
+
+    With *deps_template*, the plugin dependency OpenCode installs into its config dir
+    (~3,700 files) is shared: the run links the template's ``node_modules`` (OpenCode
+    then installs nothing), and the first run to finish an install becomes the template.
+    """
     config = minimal_config(source_config, model, mcp, builtin_provider, disabled_tools)
     home = Path(tempfile.mkdtemp(prefix="beacon-eval-oc-"))
+    opencode_dir = home / "opencode"
+    linked = False
     try:
-        (home / "opencode").mkdir()
-        (home / "opencode" / "opencode.json").write_text(json.dumps(config, indent=2), encoding="utf-8")
+        opencode_dir.mkdir()
+        (opencode_dir / "opencode.json").write_text(json.dumps(config, indent=2), encoding="utf-8")
+        if deps_template is not None:
+            linked = _use_deps(opencode_dir, deps_template)
         (home / STATE_DIR).mkdir()
         _seed_tools(home / DATA_DIR, default_data_source())
         yield home
     finally:
-        shutil.rmtree(home, ignore_errors=True)
+        safe = True
+        if linked:
+            # Remove the link itself first: the tree walk must never reach the shared install.
+            try:
+                if sys.platform == "win32":
+                    os.rmdir(opencode_dir / "node_modules")
+                else:
+                    os.unlink(opencode_dir / "node_modules")
+            except OSError:
+                safe = False
+        elif deps_template is not None:
+            _keep_deps(opencode_dir, deps_template)
+        if safe:
+            # OpenCode's snapshot store is read-only git objects; a plain rmtree leaks them.
+            try:
+                remove_tree(home)
+            except OSError:
+                pass  # e.g. a file still held by an exiting process; warned below
         if home.exists():
             print(f"warning: could not remove per-run OpenCode config {home}", file=sys.stderr)

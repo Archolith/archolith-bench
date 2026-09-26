@@ -35,10 +35,12 @@ from archolith_bench.beacon_eval.isolation import (
     beacon_server,
     memory_stdio_server,
     default_config_source,
+    deps_template_dir,
     isolated_config_home,
     isolated_env,
     load_api_keys,
     memory_server,
+    remove_tree,
 )
 from archolith_bench.beacon_eval.models import ANSWER_KEYS, RepoPin, RunResult, Task
 from archolith_bench.beacon_eval.scoring import extract_answer, score
@@ -48,6 +50,8 @@ DEFAULT_MODEL = "openai/gpt-6-luna"
 DEFAULT_BUDGET_TOKENS = 20_000_000
 #: Tokens set aside for each run; a run that passes it is killed and stops the matrix.
 DEFAULT_RUN_RESERVE = 400_000
+#: Owner decision 2026-09-25: no new run below 15 GB free on the workdir's volume.
+DEFAULT_MIN_FREE_GB = 15.0
 
 #: OpenCode's built-in tools, switched off in condition D (Beacon MCP only).
 BUILTIN_TOOLS = (
@@ -126,6 +130,23 @@ class RunnerConfig:
     memory_stdio: list[str] | None = None
     memory_stdio_env: dict[str, str] = field(default_factory=dict)
     memory_stdio_key_var: str = "MENHIR_API_KEY"
+    #: Keep each run's checkout after scoring (debugging); by default it is deleted and
+    #: ``rescore`` rebuilds it from ``pin.json`` and the saved changes.
+    keep_checkouts: bool = False
+    #: No new run starts while the workdir's volume has less free space (GB); None = off.
+    min_free_gb: float | None = DEFAULT_MIN_FREE_GB
+
+
+class LowDisk(RuntimeError):
+    """The workdir's volume is below ``min_free_gb``; no new run starts."""
+
+
+def check_disk(workdir: Path, min_free_gb: float | None) -> None:
+    if not min_free_gb:
+        return
+    free = shutil.disk_usage(workdir).free / 1e9
+    if free < min_free_gb:
+        raise LowDisk(f"only {free:.1f} GB free on the workdir's volume (floor {min_free_gb:g} GB)")
 
 
 @dataclass
@@ -200,22 +221,147 @@ def export_commit(pin: RepoPin, dest: Path, cache: Path) -> Path:
     return dest
 
 
-def seal_checkout(checkout: Path) -> None:
-    """Make *checkout* its own git root with one commit.
+def _checkout_git(checkout: Path, autocrlf_off: bool = True) -> list[str]:
+    git = [
+        "git", "-C", str(checkout),
+        "-c", "user.name=beacon-eval", "-c", "user.email=beacon-eval@example.invalid",
+        "-c", "commit.gpgsign=false",
+    ]
+    return [*git, "-c", "core.autocrlf=false"] if autocrlf_off else git
+
+
+#: Settings that decide how ``git archive`` wrote line endings into the export.
+_EOL_SETTINGS = ("core.autocrlf", "core.eol")
+
+
+def _seal_via_alternates(checkout: Path, source: Path, commit: str) -> None:
+    """Commit the pin's own tree, borrowing its objects from *source* (no object copies).
+
+    The checkout gets the source's line-ending settings, so files ``git archive`` wrote
+    with converted endings (e.g. ``core.autocrlf=true`` on Windows) still match the tree,
+    for this check and for the agent's own ``git status``. Raises CalledProcessError when
+    the tree does not match the files on disk or an object is missing from *source*; the
+    caller then falls back.
+    """
+    def out(cmd: list[str]) -> str:
+        return subprocess.run(cmd, check=True, capture_output=True, text=True).stdout.strip()
+
+    git = _checkout_git(checkout, autocrlf_off=False)
+    for key in _EOL_SETTINGS:
+        value = subprocess.run(["git", "-C", str(source), "config", "--get", key],
+                               check=False, capture_output=True, text=True).stdout.strip()
+        if value:
+            subprocess.run([*git, "config", key, value], check=True, capture_output=True)
+    objects = out(["git", "-C", str(source), "rev-parse", "--path-format=absolute", "--git-path", "objects"])
+    tree = out(["git", "-C", str(source), "rev-parse", f"{commit}^{{tree}}"])
+    (checkout / ".git" / "objects" / "info").mkdir(parents=True, exist_ok=True)
+    # LF only: git would read a CRLF line as a path ending in "\r".
+    (checkout / ".git" / "objects" / "info" / "alternates").write_bytes(objects.encode() + b"\n")
+    subprocess.run([*git, "read-tree", tree], check=True, capture_output=True)
+    # Non-zero when any file differs from the tree (export-ignore, eol attributes).
+    subprocess.run([*git, "update-index", "--refresh", "-q"], check=True, capture_output=True)
+    new = subprocess.run([*git, "commit-tree", tree, "-m", "pinned export"],
+                         check=True, capture_output=True, text=True).stdout.strip()
+    subprocess.run([*git, "update-ref", "HEAD", new], check=True, capture_output=True)
+    missing = out([*git, "rev-list", "--objects", "--missing=print", "HEAD"])
+    if any(line.startswith("?") for line in missing.splitlines()):
+        raise subprocess.CalledProcessError(1, "rev-list", "objects missing from the source")
+
+
+def seal_checkout(checkout: Path, source: Path | None = None, commit: str = "") -> str:
+    """Make *checkout* its own git root with one commit; returns how ("alternates" or "copied").
 
     OpenCode searches parent directories for project config and instructions up to the
     git root; without this a checkout under the results tree picks up the enclosing
     repositories' ``AGENTS.md`` and ``opencode.json``.
+
+    With *source* and *commit*, the commit reuses the pin's tree through git alternates, so
+    only ~20 files are written instead of one loose object per file. Otherwise, or if that
+    fails, the files are added and committed as before, then packed.
     """
-    git = [
-        "git", "-C", str(checkout),
-        "-c", "user.name=beacon-eval", "-c", "user.email=beacon-eval@example.invalid",
-        "-c", "commit.gpgsign=false", "-c", "core.autocrlf=false",
-    ]
+    git = _checkout_git(checkout)
     subprocess.run([*git, "init", "--quiet"], check=True, capture_output=True)
+    if source is not None and commit:
+        try:
+            _seal_via_alternates(checkout, source, commit)
+            return "alternates"
+        except subprocess.CalledProcessError:
+            _rmtree(checkout / ".git")
+            subprocess.run([*git, "init", "--quiet"], check=True, capture_output=True)
     subprocess.run([*git, "add", "--all"], check=True, capture_output=True)
     subprocess.run([*git, "commit", "--quiet", "--allow-empty", "-m", "pinned export"],
                    check=True, capture_output=True)
+    if source is not None:
+        subprocess.run([*git, "repack", "-a", "-d", "-q"], check=True, capture_output=True)
+        subprocess.run([*git, "prune"], check=True, capture_output=True)
+    return "copied"
+
+
+_rmtree = remove_tree
+
+
+def _changed_paths(checkout: Path) -> list[str]:
+    """Paths ``git status`` reports in the checkout, as the agent's own git would see them."""
+    raw = subprocess.run(
+        [*_checkout_git(checkout, autocrlf_off=False), "status", "--porcelain", "-z", "--untracked-files=all"],
+        check=True, capture_output=True,
+    ).stdout.decode("utf-8", errors="surrogateescape")
+    fields = raw.split("\0")
+    paths: list[str] = []
+    index = 0
+    while index < len(fields):
+        entry = fields[index]
+        index += 1
+        if len(entry) < 4:
+            continue
+        paths.append(entry[3:])
+        if entry[0] in "RC" and index < len(fields):  # the original path follows as its own field
+            paths.append(fields[index])
+            index += 1
+    return paths
+
+
+def save_changes(checkout: Path, run_dir: Path) -> None:
+    """Record what the agent changed in the sealed checkout (usually nothing).
+
+    ``changes.status`` is ``git status --porcelain``. When anything changed,
+    ``changes.tar`` holds the changed and new files as they are on disk and
+    ``changes.deleted.json`` lists the removed ones: exact bytes, whatever the line endings.
+    """
+    status = subprocess.run(
+        [*_checkout_git(checkout, autocrlf_off=False), "status", "--porcelain", "--untracked-files=all"],
+        check=True, capture_output=True,
+    ).stdout
+    (run_dir / "changes.status").write_bytes(status)
+    paths = _changed_paths(checkout)
+    if not paths:
+        return
+    present = sorted({p for p in paths if (checkout / p).is_file()})
+    deleted = sorted({p for p in paths if not (checkout / p).exists()})
+    with tarfile.open(run_dir / "changes.tar", "w") as tar:
+        for rel in present:
+            tar.add(checkout / rel, arcname=rel)
+    (run_dir / "changes.deleted.json").write_text(json.dumps(deleted), encoding="utf-8")
+
+
+def _has_changes(run_dir: Path) -> bool:
+    return (run_dir / "changes.tar").is_file() or (run_dir / "changes.deleted.json").is_file()
+
+
+def rebuild_checkout(run_dir: Path, dest: Path, cache: Path) -> Path:
+    """Re-create a deleted checkout at *dest* from ``pin.json`` plus the saved changes."""
+    pin = RepoPin(**{k: v for k, v in json.loads((run_dir / "pin.json").read_text(encoding="utf-8")).items()
+                     if k in RepoPin.__dataclass_fields__})
+    export_commit(pin, dest, cache)
+    if (run_dir / "changes.tar").is_file():
+        with tarfile.open(run_dir / "changes.tar") as tar:
+            tar.extractall(dest, filter="data")
+    deleted = run_dir / "changes.deleted.json"
+    for rel in json.loads(deleted.read_text(encoding="utf-8")) if deleted.is_file() else []:
+        target = (dest / rel).resolve()
+        if target.is_relative_to(dest.resolve()) and target.is_file():
+            target.unlink()
+    return dest
 
 
 def build_beacon(config: RunnerConfig, pin: RepoPin) -> Path:
@@ -456,8 +602,12 @@ def run_one(
         raise ValueError("condition M needs memory_url and memory_key")
     # Absolute paths: PWD and B's --manifest are resolved by processes running in the checkout.
     run_dir = (config.workdir / "runs" / f"{task.repo}-{task.task_id}-{condition}-{repeat}").resolve()
-    checkout = export_commit(pin, run_dir / "checkout", config.workdir / "cache")
-    seal_checkout(checkout)
+    cache = config.workdir / "cache"
+    _rmtree(run_dir / "checkout")  # a rerun (--resume) starts from a clean export
+    checkout = export_commit(pin, run_dir / "checkout", cache)
+    seal = seal_checkout(checkout, _ensure_source(pin, cache), pin.commit)
+    # Lets rescore rebuild the checkout once it is deleted.
+    (run_dir / "pin.json").write_text(json.dumps({**asdict(pin), "seal": seal}, indent=2), encoding="utf-8")
     manifest = build_beacon(config, pin).resolve() if condition in ("B", "C", "D") else None
     prompt = build_prompt(
         task,
@@ -485,6 +635,7 @@ def run_one(
     with isolated_config_home(
         config.config_source or default_config_source(), config.model, mcp,
         builtin_provider=bool(keys), disabled_tools=disabled,
+        deps_template=deps_template_dir(config.opencode_cmd),
     ) as home:
         env = isolated_env(os.environ, home)
         env.update(keys)
@@ -540,6 +691,9 @@ def run_one(
     result.scores = score(answer, task.gold, checkout)
     (run_dir / "result.json").write_text(json.dumps(asdict(result), indent=2), encoding="utf-8")
     _redact(run_dir, [*keys.values(), *([config.memory_key] if config.memory_key else [])])
+    save_changes(checkout, run_dir)
+    if not config.keep_checkouts:
+        _rmtree(checkout)
     if reason == "rate_limited":
         raise RateLimited(f"rate limited during {run_dir.name}; stopping, not retrying")
     if reason == "over_reserve":
@@ -565,19 +719,44 @@ def run_one(
 def rescore(workdir: Path, tasks: list[Task]) -> list[RunResult]:
     """Recompute scores for every saved run from its answer and checkout (no model calls).
 
-    Rewrites each ``result.json`` and ``results.jsonl``; runs whose task is not in *tasks*
-    are left untouched and not returned.
+    A run whose checkout was deleted is scored against one rebuilt from its ``pin.json``
+    and saved changes; runs without changes share one rebuilt export per pin. Rewrites
+    each ``result.json`` and ``results.jsonl``; runs whose task is not in *tasks* are left
+    untouched and not returned.
     """
     by_id = {(task.repo, task.task_id): task for task in tasks}
     results: list[RunResult] = []
-    for path in sorted((workdir / "runs").glob("*/result.json")):
-        result = RunResult(**json.loads(path.read_text(encoding="utf-8")))
-        task = by_id.get((result.repo, result.task_id))
-        if task is None:
-            continue
-        result.scores = score(result.answer, task.gold, path.parent / "checkout")
-        path.write_text(json.dumps(asdict(result), indent=2), encoding="utf-8")
-        results.append(result)
+    scratch = workdir / "rescore-tmp"
+    _rmtree(scratch)
+    shared: dict[str, Path] = {}
+    try:
+        for path in sorted((workdir / "runs").glob("*/result.json")):
+            result = RunResult(**json.loads(path.read_text(encoding="utf-8")))
+            task = by_id.get((result.repo, result.task_id))
+            if task is None:
+                continue
+            run_dir = path.parent
+            checkout = run_dir / "checkout"
+            rebuilt: Path | None = None
+            if not checkout.is_dir():
+                if not (run_dir / "pin.json").is_file():
+                    raise FileNotFoundError(f"{run_dir.name}: no checkout and no pin.json to rebuild one")
+                if _has_changes(run_dir):
+                    rebuilt = rebuild_checkout(run_dir, scratch / run_dir.name, workdir / "cache")
+                    checkout = rebuilt
+                else:
+                    saved_pin = json.loads((run_dir / "pin.json").read_text(encoding="utf-8"))
+                    key = f"{saved_pin['name']}@{saved_pin['commit']}"
+                    if key not in shared:
+                        shared[key] = rebuild_checkout(run_dir, scratch / f"pin-{len(shared)}", workdir / "cache")
+                    checkout = shared[key]
+            result.scores = score(result.answer, task.gold, checkout)
+            if rebuilt is not None:
+                _rmtree(rebuilt)
+            path.write_text(json.dumps(asdict(result), indent=2), encoding="utf-8")
+            results.append(result)
+    finally:
+        _rmtree(scratch)
     (workdir / "results.jsonl").write_text(
         "".join(json.dumps(asdict(result)) + "\n" for result in results), encoding="utf-8"
     )
@@ -679,6 +858,7 @@ def run_matrix(
                                     handle.write(json.dumps(asdict(saved)) + "\n")
                             continue
                     budget.check()
+                    check_disk(config.workdir, config.min_free_gb)
                     try:
                         result = run_one(config, pins[task.repo], task, condition, repeat)
                     except (RateLimited, BudgetExhausted, AccountingError):
@@ -688,7 +868,7 @@ def run_matrix(
                     results.append(result)
                     with log.open("a", encoding="utf-8") as handle:
                         handle.write(json.dumps(asdict(result)) + "\n")
-    except (BudgetExhausted, RateLimited, AccountingError) as exc:
+    except (BudgetExhausted, RateLimited, AccountingError, LowDisk) as exc:
         return results, str(exc)
     return results, ""
 
@@ -762,7 +942,8 @@ def _run_parallel(
                 with lock:
                     try:
                         budget.check()
-                    except BudgetExhausted as exc:
+                        check_disk(config.workdir, config.min_free_gb)
+                    except (BudgetExhausted, LowDisk) as exc:
                         stop = str(exc)
                         break
                     budget.in_flight += 1
@@ -822,6 +1003,7 @@ __all__ = [
     "Budget",
     "BudgetExhausted",
     "EventLog",
+    "LowDisk",
     "RateLimited",
     "RunnerConfig",
     "TOOL_NOTE",
@@ -829,7 +1011,9 @@ __all__ = [
     "parse_events",
     "resolve_opencode",
     "run_matrix",
+    "rebuild_checkout",
     "run_one",
+    "save_changes",
     "seal_checkout",
     "stream_opencode",
 ]
