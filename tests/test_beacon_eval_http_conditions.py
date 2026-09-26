@@ -49,19 +49,11 @@ from archolith_bench.beacon_eval.runner import (
 GOLD = Gold()
 TASK = Task(repo="demo", task_id="t1", kind="docs_and_files", prompt="Find docs.", gold=GOLD)
 
-#: Where the real-Beacon integration test finds a Beacon build (#26 phases 1-3).
-BEACON_SRC = Path(
-    os.environ.get(
-        "BEACON_EVAL_BEACON_SRC",
-        r"C:\Users\thron\IdeaProjects\.agent\worktrees\beacon-26-p4-deploy\src",
-    )
-)
-BEACON_PYTHON = Path(
-    os.environ.get(
-        "BEACON_EVAL_BEACON_PYTHON",
-        r"C:\Users\thron\IdeaProjects\.agent\worktrees\beacon-26-p4-deploy\.venv\Scripts\python.exe",
-    )
-)
+#: Where the real-Beacon integration test finds a Beacon build (#26 phases 1-3):
+#: BEACON_EVAL_BEACON_SRC (a Beacon ``src`` dir) and, optionally, BEACON_EVAL_BEACON_PYTHON
+#: (a Python with Beacon's dependencies; defaults to this interpreter).
+BEACON_SRC = os.environ.get("BEACON_EVAL_BEACON_SRC", "")
+BEACON_PYTHON = os.environ.get("BEACON_EVAL_BEACON_PYTHON", sys.executable)
 
 #: A stand-in server for lifecycle tests: binds the given host/port, prints its
 #: ready line, then serves (mode "ready") or stalls (modes "decoy"/"silent").
@@ -453,6 +445,8 @@ def test_a_server_that_never_becomes_ready_fails_the_run_and_stops(
 
 
 def _beacon_skip_reason() -> str:
+    if not BEACON_SRC:
+        return "set BEACON_EVAL_BEACON_SRC to a Beacon source tree with #26 phases 1-3"
     try:
         probe = subprocess.run(
             [str(BEACON_PYTHON), "-c", "import beacon"],

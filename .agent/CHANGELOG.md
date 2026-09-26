@@ -38,8 +38,9 @@ Two opt-in, no-checkout conditions for Beacon issue #26 phase 5 (`CONDITIONS` is
 - `cli.py`: `--conditions` help names the opt-ins; run with e.g.
   `archolith-bench beacon-eval run --conditions H,R --beacon-python <python with Beacon's
   deps> --beacon-src <Beacon source>`. The Beacon source must be a build with
-  `/v1/search` and MCP HTTP transport (Beacon #26 phases 1-3); the Beacon worktree
-  `beacon-26-p4-deploy` qualifies.
+  `/v1/search` and MCP HTTP transport (Beacon #26 phases 1-3). The real-Beacon
+  integration test runs only when `BEACON_EVAL_BEACON_SRC` (and optionally
+  `BEACON_EVAL_BEACON_PYTHON`) point at such a build; otherwise it is skipped.
 - Verified, no model spend: a fake local chat provider (scripted `webfetch` tool call) drove
   real OpenCode 1.18.31 through condition H end to end against a real `serve-http` on a
   random loopback port. `webfetch` fetched `http://127.0.0.1:<P>/.well-known/archolith-beacon`
