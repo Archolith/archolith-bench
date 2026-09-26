@@ -1,28 +1,55 @@
 # archolith-bench Changelog
 
-## 2026-09-26 - Beacon eval: run lifecycle fixes (PR #3 review findings 5, 8, 9, 10, 11)
+## 2026-09-26 - Beacon eval: run lifecycle fixes (PR #3 review findings 5, 8, 9, 10, 11; reworked per the PR #4 review)
 
-Deferred lower-severity findings from the astra review of PR #3, all in
-`runner.py` (+ `tests/test_beacon_eval_lifecycle.py`); no scoring, condition, or
-isolation behavior changed:
+Deferred lower-severity findings from the astra review of PR #3, reworked after the
+astra review of this branch; all changes are in `runner.py`
+(+ `tests/test_beacon_eval_lifecycle.py`); no scoring, condition, or isolation
+behavior changed:
 
-- **Process-tree termination (5).** `_kill_tree` now ends the whole tree, not just the
-  direct child. POSIX: children start in their own process group
-  (`start_new_session=True` via `_child_kwargs`) and the group gets TERM, then KILL
-  after `KILL_GRACE_S` — grandchildren included, even after the parent itself exited.
-  Windows: `taskkill /T /F` stays, and now runs even when the parent already exited,
-  guarded by the process's creation time (read with stdlib `ctypes` off the retained
-  Popen handle, compared against whoever owns the pid now) so a recycled pid is never
-  hit; a failed taskkill on a live parent falls back to `proc.kill()`. One caveat,
-  verified empirically: `taskkill /T` needs a live root (a dead root gets "not found",
-  rc 128, and its orphans survive), so full correctness for the parent-already-exited
-  case needs Windows Job Objects — provided via stdlib `ctypes` (`_attach_job`), not a
-  new dependency: every runner child joins a kill-on-close job, and `_kill_tree`
-  closes that job, which is what deterministically ends orphaned trees. `_kill_tree`
-  always reaps with a timeout (`KILL_WAIT_S`) and closes the pipes afterwards, so
-  pump threads end even if a stray grandchild kept a write end open. `beacon_http_process`
-  and `stream_opencode` register their children with `_track`; `_kill_live_children`
-  ends them all.
+- **Stop semantics: stops drain, interrupts cancel (owner decision).** An orderly
+  stop — rate limit, over-reserve run, missing usage or cost data, budget admission,
+  low disk, server setup — admits no new run and cancels the queued ones, while the
+  runs already in flight finish and are recorded, each run's own reserve still
+  enforced by `stream_opencode`. Only a KeyboardInterrupt (in the waiting main thread
+  or surfacing from a run) kills the in-flight OpenCode and Beacon processes now, and
+  it does so cooperatively: a matrix-scoped cancel `threading.Event`, checked before a
+  child is registered (`_register_child` kills a latecomer at once), before OpenCode
+  or a managed server is spawned, and before a session resume — a killed session
+  never enters the auto-resume loop. Finished and interrupted runs go through one
+  completion/accounting handler, so a stopped or killed run's saved result and spend
+  are recorded exactly as a finished run's are (the interrupt drain no longer skips
+  `_record_stopped`). The drain's result-collection wait is bounded
+  (`DRAIN_TIMEOUT_S`), but the executor's shutdown afterwards still waits for the
+  worker threads, so shutdown as a whole is *not* bounded by it.
+- **Windows containment without Job Objects.** The ctypes Job Object code
+  (`_attach_job`, its structures and helpers, and the `GetProcessTimes` identity
+  check) is gone — no ctypes or Win32 API code remains. `taskkill /T /F` stays, now
+  with a timeout and `OSError` handling, falling back to `proc.kill()` on failure;
+  the reap, pump join, pipe close and unregister run in an outer `finally` whatever
+  taskkill does. Known limit, documented in the code: a tree whose root already
+  exited cannot be reached by `taskkill` on Windows (it needs a live root to walk),
+  so such orphans can survive the kill.
+- **POSIX escalation by group membership.** After TERM to the process group, KILL is
+  sent while the group still has a member (`os.killpg(pgid, 0)` succeeding), not
+  while the leader is alive — a grandchild that ignores SIGTERM is killed even after
+  its leader exited.
+- **Pump and pipes.** The stderr/stdout pump emits its EOF sentinel in `finally` (and
+  reports the failure), so a mid-read error releases the consumer instead of leaving
+  it until the run timeout. `_kill_tree` kills the tree before touching any pipe,
+  joins registered pump threads with a bounded timeout, and — when a descendant still
+  holds the pipe — leaves the daemon pump running with a warning instead of closing a
+  stream under a blocked reader or hanging shutdown.
+- **Resume safety.** `--resume` reuses a saved completed run only if the run dir's
+  `pin.json` does not name another pin (name or commit); a saved answer from another
+  commit is archived and the run redone (a run dir predating `pin.json` is still
+  reused). The spend of failed and archived attempts (`attempts/<n>/result.json`,
+  and a failed current attempt about to be redone) counts against a resumed matrix's
+  budget, deduplicated per (file, spend) so no attempt is ever counted twice.
+- **Attempt archive provenance.** A rerun now also moves `pin.json`, the saved
+  changes (`changes.status`/`changes.tar`/`changes.deleted.json`) and `judged.json`
+  into `attempts/<n>/` with the prompt, logs and result, so a stale judge artifact
+  can never sit beside a new answer.
 - **Caches keyed by pin identity (8).** `build_beacon` and `export_beacon_snapshot`
   now live in `beacons/<name>-<commit12>/` (same pattern as the seal repos), so a
   workdir reused with a different commit for the same pin name rebuilds instead of
@@ -33,25 +60,24 @@ isolation behavior changed:
   the finished artifact — and the build lands through a staging directory renamed into
   place across processes, like `seal_repo`; the snapshot still lands via an atomic
   `os.replace`.
-- **Cancellation (10).** `stream_opencode` keeps its child in a `try/finally` that
-  kills the tree on any exception, KeyboardInterrupt included. In the parallel matrix,
-  the first stop — rate limit, budget, disk, or a KeyboardInterrupt in the waiting
-  main thread — now also cancels queued runs and kills the OpenCode and Beacon
-  processes of runs in flight (`_kill_live_children`), then drains briefly
-  (`DRAIN_TIMEOUT_S`) and leaves; it never waits for a killed run to finish naturally.
-  Interrupted runs are still recorded, with the error their killed run saved.
 - **Retry artifacts (11).** A rerun into an existing run dir (`--resume` redoes runs
-  whose saved result has an error or no answer — that selection is unchanged) first
-  moves the previous attempt's `prompt.txt`, `events.jsonl`, `stderr.log`,
-  `beacon-server.log` and `result.json` into `attempts/<n>/`, so attempts never
-  overwrite each other and the old attempt's spend stays visible. `rescore` and
-  `--resume` only look at the run dir's own `result.json`, so archived attempts are
-  invisible to both.
+  whose saved result has an error or no answer — that selection is unchanged) moves
+  the previous attempt's artifacts into `attempts/<n>/` (see provenance above), so
+  attempts never overwrite each other and the old attempt's spend stays visible.
+  `rescore` and `--resume` only look at the run dir's own `result.json`, so archived
+  attempts are invisible to both (their spend is counted separately, above).
 
-Tests: `tests/test_beacon_eval_lifecycle.py` (11 deterministic, offline tests: grandchild
-kill, kill after parent exit, per-commit cache reuse/rebuild, concurrent first writers,
-KeyboardInterrupt tree kill, parallel stop killing children promptly, attempt archiving
-plus the `--resume` redo path). No existing test changed.
+Tests: `tests/test_beacon_eval_lifecycle.py` — deterministic and fully offline (the
+parallel-matrix tests mock source preparation, so no git fetch runs; matrix runs
+synchronize through events; POSIX aliveness checks distinguish a live process from an
+unreaped zombie). Coverage: grandchild kill, kill after parent exit and a
+TERM-ignoring grandchild (POSIX-only, skipped on Windows with the dead-root reason),
+per-commit cache reuse/rebuild, concurrent first writers, KeyboardInterrupt tree kill,
+budget stop draining in-flight runs, interrupt killing and recording them, late
+registration after cancel killed, cancelled session not resumed, pump EOF on an
+exception, resume pin-identity rejection, archived-attempt spend (and its
+deduplication), and attempt archiving with provenance plus the `--resume` redo path.
+No other existing test changed.
 
 ## 2026-09-26 - Beacon eval: conditions H (HTTP JSON via webfetch) and R (Beacon MCP over Streamable HTTP)
 

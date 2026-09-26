@@ -1,21 +1,26 @@
-"""Beacon-eval run lifecycle (PR #3 review findings 5, 8, 9, 10, 11): process-tree
-termination, per-commit beacon caches, concurrent first writers, cancellation, and
-retry artifact archiving.
+"""Beacon-eval run lifecycle (PR #3 review findings 5, 8, 9, 10, 11; reworked per the
+PR #4 review): process-tree termination, per-commit beacon caches, concurrent first
+writers, stop-drains/interrupt-cancels semantics, pump EOF, and retry artifact
+archiving with provenance and spend accounting.
 
 Offline and deterministic: real processes appear only as sleeping stand-ins for
-OpenCode and the Beacon servers, and ``beacon`` itself is a fake package that counts
-its invocations. No model, judge or paid call is made.
+OpenCode and the Beacon servers, ``beacon`` itself is a fake package that counts its
+invocations, and the parallel-matrix tests mock source preparation, so no git fetch
+ever runs. Matrix runs synchronize through events, never sleeps; POSIX aliveness
+checks distinguish a live process from an unreaped zombie. No model, judge or paid
+call is made.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import queue
 import subprocess
 import sys
 import threading
 import time
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any
 
@@ -24,15 +29,18 @@ import pytest
 from archolith_bench.beacon_eval import runner as runner_mod
 from archolith_bench.beacon_eval.models import Gold, RepoPin, RunResult, Task
 from archolith_bench.beacon_eval.runner import (
-    RateLimited,
+    Budget,
+    BudgetExhausted,
     RunnerConfig,
     _kill_live_children,
     _kill_tree,
     _register_child,
+    _spend_result,
     _unregister_child,
     build_beacon,
     export_beacon_snapshot,
     run_matrix,
+    run_one,
     stream_opencode,
 )
 
@@ -52,7 +60,11 @@ def _tasks(n: int) -> list[Task]:
 
 
 def _alive(pid: int) -> bool:
-    """Whether the process *pid* is still running (best effort, for assertions)."""
+    """Whether the process *pid* is still running (best effort, for assertions).
+
+    On POSIX an unreaped zombie is dead for our purposes: it exited, and its parent
+    (or init) just has not collected it yet.
+    """
     if sys.platform == "win32":
         import ctypes
 
@@ -66,10 +78,12 @@ def _alive(pid: int) -> bool:
         finally:
             ctypes.windll.kernel32.CloseHandle(handle)
     try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
+        stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8", errors="replace")
+    except OSError:
         return False
-    return True
+    # The state letter sits after the comm in parens, which may itself contain spaces.
+    fields = stat[stat.rindex(")") + 1:].split()
+    return bool(fields) and fields[0] != "Z"  # Z = exited but unreaped
 
 
 def _waits_for_death(pid: int, timeout_s: float = 20.0) -> bool:
@@ -104,6 +118,18 @@ def _pin(root: Path, name: str = "demo") -> RepoPin:
         ["git", "-C", str(root), "rev-parse", "HEAD"], check=True, capture_output=True, text=True
     ).stdout.strip()
     return RepoPin(name=name, url="", commit=commit, local_path=str(root))
+
+
+def _offline_source(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the parallel matrix's up-front source preparation off git entirely (the
+    fake run_one stand-ins need no checkout, so nothing is prepared)."""
+    monkeypatch.setattr(runner_mod, "_ensure_source", lambda pin, cache: None)
+    monkeypatch.setattr(runner_mod, "seal_repo", lambda pin, workdir, source=None: None)
+
+
+def _matrix_config(tmp_path: Path) -> RunnerConfig:
+    return RunnerConfig(workdir=tmp_path / "work", beacon_python="py", opencode_cmd=["x"],
+                        budget_tokens=None, run_reserve_tokens=None, min_free_gb=None)
 
 
 # ---------------------------------------------------------------------------
@@ -293,8 +319,9 @@ def _spawn_tree(tmp_path: Path) -> tuple[subprocess.Popen[str], int]:
         pipe_arg = write_fd
     parent = subprocess.Popen([sys.executable, str(script), str(pipe_arg)], **kwargs)
     os.close(write_fd)
-    # The runner tracks every child it starts (the Windows kill-on-close job is what
-    # reaches a tree whose root already exited); the stand-in starts the same way.
+    # The runner tracks every child it starts (on POSIX the process group is what
+    # reaches a tree whose root already exited; on Windows a dead root is the
+    # documented taskkill limit); the stand-in starts the same way.
     runner_mod._track(parent)
     return parent, read_fd
 
@@ -322,6 +349,11 @@ def test_kill_tree_ends_a_grandchild(tmp_path: Path) -> None:
         os.close(read_fd)
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="Windows cannot reach a tree whose root already exited (taskkill walks "
+           "from the live root; the documented limit) -- POSIX reaches it via the group",
+)
 def test_kill_tree_after_the_parent_exited_still_ends_the_tree(tmp_path: Path) -> None:
     parent, read_fd = _spawn_tree(tmp_path)
     try:
@@ -330,7 +362,7 @@ def test_kill_tree_after_the_parent_exited_still_ends_the_tree(tmp_path: Path) -
         parent.kill()  # the parent exits on its own; the child it started does not
         assert parent.wait(timeout=30) is not None
         assert _alive(grandchild)
-        _kill_tree(parent)  # the pid is still ours (creation time matches): the tree must end
+        _kill_tree(parent)  # the group outlives the leader: the tree must still end
         assert _read_to_eof(read_fd)
     finally:
         _kill_tree(parent)
@@ -357,8 +389,56 @@ def test_kill_live_children_ends_every_registered_tree(tmp_path: Path) -> None:
             _kill_tree(proc)
 
 
+#: A leader that spawns a child which ignores SIGTERM and then exits at once: the group
+#: keeps a member after the leader is gone, so escalation must be decided by membership
+#: (os.killpg(pgid, 0)), never by whether the leader exited.
+TERM_IGNORING_TREE = r"""
+import subprocess
+import sys
+
+code = (
+    "import signal, time\n"
+    "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+    "print('armed', flush=True)\n"
+    "time.sleep(120)\n"
+)
+child = subprocess.Popen([sys.executable, "-c", code], stdout=subprocess.PIPE, text=True)
+assert child.stdout is not None
+child.stdout.readline()  # the TERM handler is installed before we report the pid
+print(child.pid, flush=True)
+sys.exit(0)  # the leader is gone; the TERM-ignoring grandchild carries the group
+"""
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="POSIX process-group escalation; Windows has no groups and cannot reach a "
+           "tree whose root already exited (the documented limit)",
+)
+def test_term_ignoring_grandchild_is_reached_by_the_kill_escalation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(runner_mod, "KILL_GRACE_S", 0.5)  # keep the TERM->KILL grace short
+    script = tmp_path / "leader.py"
+    script.write_text(TERM_IGNORING_TREE, encoding="utf-8")
+    parent = subprocess.Popen(
+        [sys.executable, str(script)],
+        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
+        **runner_mod._child_kwargs(),
+    )
+    try:
+        assert parent.stdout is not None
+        grandchild = int(parent.stdout.readline())
+        assert _alive(grandchild)
+        assert parent.wait(timeout=30) == 0  # the leader is long gone before the kill
+        _kill_tree(parent)
+        assert _waits_for_death(grandchild, timeout_s=30)  # TERM ignored, KILL delivered
+    finally:
+        _kill_tree(parent)
+
+
 # ---------------------------------------------------------------------------
-# Finding 10: cancellation
+# Findings 10 and 3: stops drain, interrupts cancel
 # ---------------------------------------------------------------------------
 
 
@@ -389,11 +469,57 @@ def test_a_keyboard_interrupt_in_stream_opencode_kills_the_tree(
     assert _waits_for_death(grandchild)  # the finally killed the tree mid-stream
 
 
-def test_a_parallel_stop_kills_running_children_promptly(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_budget_stop_drains_in_flight_runs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _offline_source(monkeypatch)
+    t1_in_flight = threading.Event()
+    child_rc: dict[str, int | None] = {}
+
+    def fake_run_one(config: RunnerConfig, pin: RepoPin, task: Task, condition: str,
+                     repeat: int) -> RunResult:
+        run_dir = config.workdir / "runs" / f"{task.repo}-{task.task_id}-{condition}-{repeat}"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        if task.task_id == "t0":
+            assert t1_in_flight.wait(timeout=30)  # both runs admitted and in flight
+            stopped = RunResult(task.repo, task.task_id, condition, repeat, None, "",
+                                error="the next run's reserve would exceed the cap")
+            (run_dir / "result.json").write_text(json.dumps(asdict(stopped)), encoding="utf-8")
+            raise BudgetExhausted("the next run's reserve would exceed the cap")
+        t1_in_flight.set()
+        # An already-admitted run finishes and is recorded: its child is left alone.
+        proc = subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(0.5)"], **runner_mod._child_kwargs()
+        )
+        _register_child(proc)
+        try:
+            proc.wait(timeout=30)
+        finally:
+            child_rc[task.task_id] = proc.returncode
+            _unregister_child(proc)
+        return RunResult(task.repo, task.task_id, condition, repeat, {"findings": []}, "",
+                         input_tokens=10, output_tokens=5)
+
+    monkeypatch.setattr(runner_mod, "run_one", fake_run_one)
+    config = _matrix_config(tmp_path)
+    results, stopped = run_matrix(config, {"demo": PIN}, _tasks(3), ("A",), workers=2)
+
+    assert "cap" in stopped  # t0's budget stop ended the matrix
+    assert {result.task_id for result in results} == {"t0", "t1"}  # t1 finished and was recorded
+    assert child_rc["t1"] == 0  # the in-flight run drained; its child was never killed
+
+
+def test_a_keyboard_interrupt_kills_in_flight_runs_and_records_them(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _offline_source(monkeypatch)
+    t1_in_flight = threading.Event()
     pids: dict[str, int] = {}
 
     def fake_run_one(config: RunnerConfig, pin: RepoPin, task: Task, condition: str,
                      repeat: int) -> RunResult:
+        run_dir = config.workdir / "runs" / f"{task.repo}-{task.task_id}-{condition}-{repeat}"
+        run_dir.mkdir(parents=True, exist_ok=True)
         proc = subprocess.Popen(
             [sys.executable, "-c", "import time; time.sleep(120)"], **runner_mod._child_kwargs()
         )
@@ -401,35 +527,101 @@ def test_a_parallel_stop_kills_running_children_promptly(tmp_path: Path, monkeyp
         pids[task.task_id] = proc.pid
         try:
             if task.task_id == "t0":
-                time.sleep(0.5)  # both runs in flight, both children registered
-                proc.kill()
-                proc.wait(timeout=10)
-                run_dir = config.workdir / "runs" / f"{task.repo}-{task.task_id}-{condition}-{repeat}"
-                run_dir.mkdir(parents=True, exist_ok=True)
-                stopped = RunResult(task.repo, task.task_id, condition, repeat, None, "",
-                                    error="429 simulated")
-                (run_dir / "result.json").write_text(json.dumps(asdict(stopped)), encoding="utf-8")
-                raise RateLimited("429 simulated")
-            proc.wait(timeout=60)  # ends when the stop kills the child, not after 120s
+                assert t1_in_flight.wait(timeout=30)
+                interrupted = RunResult(task.repo, task.task_id, condition, repeat, None, "",
+                                        error="interrupted by the user")
+                (run_dir / "result.json").write_text(json.dumps(asdict(interrupted)), encoding="utf-8")
+                raise KeyboardInterrupt
+            t1_in_flight.set()
+            proc.wait(timeout=30)  # ends when the interrupt kills the child, not after 120s
             return RunResult(task.repo, task.task_id, condition, repeat, {"findings": []}, "",
                              error=f"exit code {proc.returncode}")
         finally:
-            _unregister_child(proc)
+            if task.task_id == "t0":
+                _kill_tree(proc)  # like stream_opencode's finally: end the raising run's tree
+            else:
+                _unregister_child(proc)  # t1's tree only ends through the interrupt sweep
 
     monkeypatch.setattr(runner_mod, "run_one", fake_run_one)
-    config = RunnerConfig(workdir=tmp_path / "work", beacon_python="py", opencode_cmd=["x"],
-                          budget_tokens=None, run_reserve_tokens=None)
+    config = _matrix_config(tmp_path)
     started = time.monotonic()
-    results, stopped = run_matrix(config, {"demo": PIN}, _tasks(2), ("A",), workers=2)
+    with pytest.raises(KeyboardInterrupt):
+        run_matrix(config, {"demo": PIN}, _tasks(2), ("A",), workers=2)
     elapsed = time.monotonic() - started
 
-    assert "429" in stopped
     assert elapsed < 60  # prompt: the 120s children were killed, not waited on
-    assert {result.task_id for result in results} == {"t0", "t1"}  # both runs recorded
-    interrupted = next(result for result in results if result.task_id == "t1")
-    assert interrupted.error  # recorded with an error, like other stopped runs
     for task_id, pid in pids.items():
-        assert not _alive(pid), f"{task_id}'s child survived the stop"
+        assert not _alive(pid), f"{task_id}'s child survived the interrupt"
+    logged = [json.loads(line)["task_id"] for line in
+              (config.workdir / "results.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert sorted(logged) == ["t0", "t1"]  # both recorded through the shared completion handler
+
+
+def test_a_child_registering_after_cancellation_is_killed(tmp_path: Path) -> None:
+    proc = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(120)"], **runner_mod._child_kwargs()
+    )
+    try:
+        with runner_mod._cancel_scope() as cancel:
+            cancel.set()  # the interrupt landed before this late registration
+            _register_child(proc)  # the registration itself must end the latecomer
+            assert _waits_for_death(proc.pid)
+    finally:
+        _kill_tree(proc)
+
+
+def test_a_cancelled_session_is_not_resumed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config = _stub_config(tmp_path)
+    pin = _pin(_repo(tmp_path / "repo"))
+    calls: list[str] = []
+
+    def fake_stream(cmd: list[str], prompt: str, cwd: Path, env: dict[str, str], run_dir: Path,
+                    reserve: int | None, timeout_s: float,
+                    reserve_usd: float | None = None, log: runner_mod.EventLog | None = None,
+                    ) -> tuple[runner_mod.EventLog, str, int | None]:
+        calls.append(prompt)
+        # Ended right after a tool-calls step with a session id: exactly the state the
+        # auto-resume loop targets (finding 3). The step carries usage, so the run is
+        # accountable and only the resume question is under test.
+        ended = runner_mod.EventLog()
+        ended.session_id = "sess-1"
+        ended.feed(json.dumps({"type": "step_finish",
+                               "part": {"reason": "tool-calls",
+                                        "tokens": {"input": 100, "output": 10}, "cost": 0.001}}))
+        return ended, "", 0
+
+    monkeypatch.setattr(runner_mod, "stream_opencode", fake_stream)
+    with runner_mod._cancel_scope() as cancel:
+        result = run_one(config, pin, TASK, "A", 1)
+        assert result.resumes == 2 and len(calls) == 3  # the loop really is the resume loop
+
+        cancel.set()  # the interrupt killed the session in flight
+        result = run_one(config, pin, TASK, "A", 2)
+    assert result.resumes == 0
+    assert len(calls) == 4  # a killed session never enters the auto-resume loop
+
+
+# ---------------------------------------------------------------------------
+# Finding 9: the pump releases its consumer even when iteration breaks
+# ---------------------------------------------------------------------------
+
+
+def test_the_pump_emits_eof_even_when_iteration_raises() -> None:
+    class _Broken:
+        """A stream whose read fails midway (a pipe closed under the pump)."""
+
+        def __iter__(self) -> Any:
+            raise RuntimeError("the pipe broke mid-read")
+
+    lines: queue.Queue[tuple[str, str | None]] = queue.Queue()
+    thread = threading.Thread(
+        target=runner_mod._pump, args=(_Broken(), "out", lines), daemon=True
+    )
+    thread.start()
+    tag, line = lines.get(timeout=30)
+    assert (tag, line) == ("out", None)  # the EOF sentinel arrived despite the exception
+    thread.join(timeout=30)
+    assert not thread.is_alive()
 
 
 # ---------------------------------------------------------------------------
@@ -437,13 +629,20 @@ def test_a_parallel_stop_kills_running_children_promptly(tmp_path: Path, monkeyp
 # ---------------------------------------------------------------------------
 
 #: A stand-in OpenCode that answers cleanly; STUB_FAIL makes it exit nonzero after
-#: answering (a failed run --resume redoes), STUB_COST varies the spend per attempt.
+#: answering (a failed run --resume redoes), STUB_COST varies the spend per attempt,
+#: and STUB_COUNTER counts invocations in a file.
 STUB = r"""
 import json
 import os
 import sys
+from pathlib import Path
 
 sys.stdin.read()
+counter = os.environ.get("STUB_COUNTER", "")
+if counter:
+    path = Path(counter)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(str(int(path.read_text(encoding="utf-8") or "0") + 1), encoding="utf-8")
 fail = os.environ.get("STUB_FAIL", "") == "1"
 cost = float(os.environ.get("STUB_COST", "0.001"))
 answer = {"docs": [], "files": [], "commands": [], "guardrails": [], "verdict": "",
@@ -507,6 +706,27 @@ def test_a_rerun_archives_the_previous_attempt_s_artifacts(
     assert not (run_dir / "attempts" / "2").exists()
 
 
+def test_an_archived_attempt_carries_its_provenance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _stub_config(tmp_path)
+    pin = _pin(_repo(tmp_path / "repo"))
+    results, stopped = run_matrix(config, {"demo": pin}, [TASK], ("A",))
+    assert stopped == ""
+    run_dir = config.workdir / "runs" / "demo-t1-A-1"
+    # What the judge CLI leaves behind after scoring the attempt.
+    (run_dir / "judged.json").write_text('{"point_recall_judged": 1.0}', encoding="utf-8")
+
+    results, stopped = run_matrix(config, {"demo": pin}, [TASK], ("A",))
+    assert stopped == ""
+    attempt = run_dir / "attempts" / "1"
+    for name in ("pin.json", "judged.json", "changes.status", "result.json"):
+        assert (attempt / name).is_file(), name
+    assert not (run_dir / "judged.json").exists()  # no stale verdict beside the new answer
+    archived = json.loads((attempt / "pin.json").read_text(encoding="utf-8"))
+    assert archived["commit"] == pin.commit  # the archived pin is the attempt's own
+
+
 def test_resume_redoes_a_failed_run_and_keeps_the_failed_attempt(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -524,3 +744,86 @@ def test_resume_redoes_a_failed_run_and_keeps_the_failed_attempt(
     assert saved["error"] == "exit code 3"  # the failed attempt is archived, not lost
     current = json.loads((run_dir / "result.json").read_text(encoding="utf-8"))
     assert current["answer"] is not None and current["error"] == ""
+
+
+# ---------------------------------------------------------------------------
+# Findings 14 and 7: resume honors pin identity and archived-attempt spend
+# ---------------------------------------------------------------------------
+
+
+def test_resume_reuses_only_the_same_pin_and_reruns_another_commit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _stub_config(tmp_path)
+    root = _repo(tmp_path / "repo")
+    counter = tmp_path / "stub-invocations.txt"
+    counter.write_text("0", encoding="utf-8")
+    monkeypatch.setenv("STUB_COUNTER", str(counter))
+
+    pin_a = _pin(root)
+    results, stopped = run_matrix(config, {"demo": pin_a}, [TASK], ("A",), resume=True)
+    assert stopped == "" and counter.read_text(encoding="utf-8") == "1"
+    assert len((config.workdir / "results.jsonl").read_text(encoding="utf-8").splitlines()) == 1
+
+    results, stopped = run_matrix(config, {"demo": pin_a}, [TASK], ("A",), resume=True)
+    assert stopped == "" and len(results) == 1
+    assert counter.read_text(encoding="utf-8") == "1"  # the same pin: reused, not rerun
+    assert len((config.workdir / "results.jsonl").read_text(encoding="utf-8").splitlines()) == 1
+
+    _commit(root, "changed.txt")
+    results, stopped = run_matrix(config, {"demo": _pin(root)}, [TASK], ("A",), resume=True)
+    assert stopped == "" and len(results) == 1
+    assert counter.read_text(encoding="utf-8") == "2"  # another commit reruns, answer or not
+    run_dir = config.workdir / "runs" / "demo-t1-A-1"
+    archived = json.loads((run_dir / "attempts" / "1" / "result.json").read_text(encoding="utf-8"))
+    assert archived["answer"] is not None  # the old commit's answer was archived, not reused
+
+
+def test_resume_counts_archived_attempt_spend(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _stub_config(tmp_path)
+    pin = _pin(_repo(tmp_path / "repo"))
+    counter = tmp_path / "stub-invocations.txt"
+    counter.write_text("0", encoding="utf-8")
+    monkeypatch.setenv("STUB_COUNTER", str(counter))
+
+    monkeypatch.setenv("STUB_FAIL", "1")
+    results, stopped = run_matrix(config, {"demo": pin}, [TASK], ("A",), resume=True)
+    assert stopped == "" and results[0].error == "exit code 3"
+
+    monkeypatch.setenv("STUB_FAIL", "")
+    results, stopped = run_matrix(config, {"demo": pin}, [TASK], ("A",), resume=True)
+    assert stopped == "" and results[0].error == ""
+    run_dir = config.workdir / "runs" / "demo-t1-A-1"
+    assert (run_dir / "attempts" / "1" / "result.json").is_file()
+    assert counter.read_text(encoding="utf-8") == "2"
+
+    # The run's history is two 110-token attempts (the failed one plus the redo). A
+    # resumed matrix under a 200-token cap must stop before running anything else --
+    # it would not if the archived attempt's spend went uncounted.
+    later = Task(repo="demo", task_id="t9", kind="why", prompt="Why?", gold=GOLD, reviewed=True)
+    tight = replace(config, budget_tokens=200, run_reserve_tokens=0)
+    results, stopped = run_matrix(tight, {"demo": pin}, [TASK, later], ("A",), resume=True)
+    assert "200" in stopped and "cap" in stopped  # the 220 spent tokens exhausted the cap
+    assert [result.task_id for result in results] == ["t1"]  # t1 reused; t9 never admitted
+    assert counter.read_text(encoding="utf-8") == "2"  # neither t1 nor t9 ran again
+
+
+def test_a_saved_result_is_counted_against_the_budget_once(tmp_path: Path) -> None:
+    budget = Budget(cap=None, reserve=None)
+    spent: set[runner_mod.SpentKey] = set()
+    path = tmp_path / "result.json"
+    result = RunResult(repo="demo", task_id="t1", condition="A", repeat=1, answer=None,
+                       final_text="", input_tokens=100, output_tokens=10)
+    path.write_text(json.dumps(asdict(result)), encoding="utf-8")
+
+    _spend_result(result, path, spent, budget)
+    _spend_result(result, path, spent, budget)
+    assert budget.used == 110  # the same attempt, read twice, counts once
+
+    redone = RunResult(repo="demo", task_id="t1", condition="A", repeat=1, answer=None,
+                       final_text="", input_tokens=200, output_tokens=20)
+    path.write_text(json.dumps(asdict(redone)), encoding="utf-8")
+    _spend_result(redone, path, spent, budget)
+    assert budget.used == 330  # a genuinely new result in the same file counts too
