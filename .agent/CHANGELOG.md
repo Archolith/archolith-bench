@@ -1,5 +1,13 @@
 # archolith-bench Changelog
 
+## 2026-09-25 - Beacon eval: citation paths on case-sensitive file systems
+
+- `scoring.py`: `citation_location_validity` used to look up the lower-cased cited path, so every
+  location scored 0 on Linux. It now tries the path as cited, then a case-insensitive match, which
+  is what Windows already did. Gold matching still ignores case. Windows scores are unchanged:
+  17 saved runs rescore to their saved scores.
+- `tests/test_beacon_eval_citation_paths.py`: new.
+
 ## 2026-09-25 - Beacon eval: churn fix, review follow-up
 
 Fixes from an independent review of e46aba7.

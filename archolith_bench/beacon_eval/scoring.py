@@ -30,8 +30,8 @@ _ANNOTATION = re.compile(r"\s+\(.*\)\s*$")
 _LABEL = re.compile(r"^[^:/`]{1,60}:\s+(`?[^\s`]*[/.][^\s`]*`?)$")
 
 
-def _norm_path(value: str) -> str:
-    """Comparable path: drops a trailing "(note)", backticks and leading "./" only.
+def _clean_path(value: str) -> str:
+    """The cited path with its case: drops a trailing "(note)", backticks and leading "./" only.
 
     Dot-directories such as ``.agent/`` must survive (``lstrip("./")`` used to eat them).
     """
@@ -42,7 +42,36 @@ def _norm_path(value: str) -> str:
         path = labelled.group(1).strip().strip("`")
     while path.startswith("./"):
         path = path[2:]
-    return path.lower()
+    return path
+
+
+def _norm_path(value: str) -> str:
+    """Comparable path (lower case) for matching against gold."""
+    return _clean_path(value).lower()
+
+
+def _locate(root: Path, path: str) -> Path | None:
+    """The file *path* names under *root*, matching case-insensitively like Windows does.
+
+    Saved scores come from Windows, where "agents.md" opens AGENTS.md; an exact match is
+    tried first, then each component is matched ignoring case, so Linux scores the same.
+    """
+    exact = root / path
+    if exact.is_file():
+        return exact
+    current = root
+    for part in (p for p in path.split("/") if p not in ("", ".")):
+        if part == "..":
+            current = current.parent
+            continue
+        if not current.is_dir():
+            return None
+        folded = part.casefold()
+        match = next((child for child in current.iterdir() if child.name.casefold() == folded), None)
+        if match is None:
+            return None
+        current = match
+    return current if current.is_file() else None
 
 
 def _norm_command(value: str) -> str:
@@ -147,8 +176,11 @@ def risky_instructed(item: str, commands: list[str], plan: list[str]) -> bool:
     return False
 
 
-def _answer_spans(answer: dict[str, Any]) -> list[tuple[str, int, int]]:
-    """Answer citations with an integer line range (``line_end`` defaults to ``line_start``)."""
+def _answer_spans(answer: dict[str, Any], lower: bool = True) -> list[tuple[str, int, int]]:
+    """Answer citations with an integer line range (``line_end`` defaults to ``line_start``).
+
+    Paths are lower-cased for gold matching; *lower* False keeps their case (file lookup).
+    """
     citations = answer.get("citations") or []
     spans = []
     for item in citations if isinstance(citations, list) else []:
@@ -157,7 +189,7 @@ def _answer_spans(answer: dict[str, Any]) -> list[tuple[str, int, int]]:
         start = item.get("line_start")
         end = item.get("line_end", start)
         if isinstance(start, int) and isinstance(end, int):
-            spans.append((_norm_path(item["path"]), start, end))
+            spans.append(((_norm_path if lower else _clean_path)(item["path"]), start, end))
     return spans
 
 
@@ -172,9 +204,12 @@ def citation_location_validity(answer: dict[str, Any], repo_root: Path) -> float
         return None
     root = repo_root.resolve()
     valid = 0
-    for path, start, end in _answer_spans(answer):
-        target = (root / path).resolve()
+    for path, start, end in _answer_spans(answer, lower=False):
         try:
+            found = _locate(root, path)
+            if found is None:
+                continue
+            target = found.resolve()
             if not target.is_relative_to(root) or not target.is_file():
                 continue
             lines = target.read_text(encoding="utf-8", errors="replace").count("\n") + 1
