@@ -120,6 +120,14 @@ def memory_server(url: str) -> dict[str, Any]:
     }
 
 
+def beacon_remote_server(url: str) -> dict[str, Any]:
+    """The ``mcp`` block for condition R: Beacon MCP over Streamable HTTP.
+
+    ``memory_server``'s shape without headers: the loopback Beacon server needs no key.
+    """
+    return {"beacon": {"type": "remote", "url": url, "enabled": True}}
+
+
 #: Per-run OpenCode data and state (sessions database, logs), inside the run's temp home.
 DATA_DIR = ".data"
 STATE_DIR = ".state"
