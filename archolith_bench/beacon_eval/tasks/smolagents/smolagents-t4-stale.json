@@ -1,0 +1,89 @@
+{
+  "repo": "smolagents",
+  "task_id": "smolagents-t4-stale",
+  "kind": "stale_doc",
+  "prompt": "You are writing a multi-agent example and find `docs/source/hi/examples/multiagents.md`, a published page in the Hindi docs, which wraps the web search agent in a `ManagedAgent(agent=..., name=..., description=...)` object before passing it to the manager's `managed_agents`. Is this page current or superseded as a guide to the multi-agent API, and which doc should you follow instead?",
+  "reviewed": true,
+  "gold": {
+    "docs": [
+      "docs/source/en/examples/multiagents.md"
+    ],
+    "files": [
+      "docs/source/hi/examples/multiagents.md"
+    ],
+    "acceptable_files": [
+      "docs/source/en/guided_tour.md",
+      "docs/source/hi/guided_tour.md",
+      "docs/source/zh/examples/multiagents.md",
+      "docs/source/hi/_toctree.yml",
+      "tests/test_all_docs.py",
+      "tests/test_agents.py",
+      "src/smolagents/agents.py"
+    ],
+    "commands": [],
+    "allowed_flags": [],
+    "guardrails": [],
+    "points": [
+      [
+        "pass named agent directly",
+        "managed_agents receives web_agent",
+        "pass the agent directly",
+        "agent passed directly to managed_agents"
+      ]
+    ],
+    "verdict": "superseded",
+    "risky": []
+  },
+  "gold_citations": [
+    {
+      "item": "docs/source/en/examples/multiagents.md",
+      "path": "docs/source/en/examples/multiagents.md",
+      "line_start": 118,
+      "line_end": 124,
+      "quote": "web_agent = ToolCallingAgent("
+    },
+    {
+      "item": "docs/source/en/examples/multiagents.md",
+      "path": "docs/source/en/examples/multiagents.md",
+      "line_start": 139,
+      "line_end": 139,
+      "quote": "managed_agents=[web_agent],"
+    },
+    {
+      "item": "docs/source/hi/examples/multiagents.md",
+      "path": "docs/source/hi/examples/multiagents.md",
+      "line_start": 131,
+      "line_end": 135,
+      "quote": "managed_web_agent = ManagedAgent("
+    },
+    {
+      "item": "docs/source/hi/examples/multiagents.md",
+      "path": ".github/workflows/build_pr_documentation.yml",
+      "line_start": 21,
+      "line_end": 21,
+      "quote": "languages: en hi ko zh"
+    },
+    {
+      "item": "superseded",
+      "path": "src/smolagents/agents.py",
+      "line_start": 373,
+      "line_end": 376,
+      "quote": "self.managed_agents = {agent.name: agent for agent in managed_agents}"
+    },
+    {
+      "item": "superseded",
+      "path": "docs/source/en/examples/multiagents.md",
+      "line_start": 127,
+      "line_end": 127,
+      "quote": "mandatory attributes to make this agent callable by its manager agent"
+    },
+    {
+      "item": "pass named agent directly",
+      "path": "docs/source/en/examples/multiagents.md",
+      "line_start": 129,
+      "line_end": 129,
+      "quote": "we pass our managed agent to it in its `managed_agents` argument"
+    }
+  ],
+  "notes": "Absence of a ManagedAgent class cannot be quoted directly: src/smolagents defines only ManagedAgentPromptTemplate, and the package __init__ star-imports modules none of which define ManagedAgent. The English page and guided tour set name/description on the agent itself, which agents.py enforces. docs/source/zh/examples/multiagents.md has the same stale import and is also acceptable to mention."
+}

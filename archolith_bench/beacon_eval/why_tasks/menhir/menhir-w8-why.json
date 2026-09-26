@@ -1,0 +1,83 @@
+{
+  "repo": "menhir",
+  "task_id": "menhir-w8-why",
+  "kind": "why",
+  "prompt": "Bench and probe scripts under scripts/ (for example scripts/freeze_scalar_samples.py) take their Neo4j password from MENHIR_BENCH_NEO4J_PASSWORD with an empty default, so they fail without explicit configuration, while docker-compose.test.yml still contains the literal password testpassword. A newcomer wants to put the old hardcoded dev passwords back as script defaults for convenience. Why were they removed, and why is a literal test password still allowed in docker-compose.test.yml?",
+  "reviewed": true,
+  "gold": {
+    "docs": [],
+    "files": [
+      "scripts/freeze_scalar_samples.py",
+      "docker-compose.test.yml"
+    ],
+    "acceptable_files": [],
+    "commands": [],
+    "allowed_flags": [],
+    "guardrails": [],
+    "points": [
+      [
+        "dev password literals scrubbed",
+        "hardcoded passwords removed",
+        "password literals removed",
+        "security scrub removed passwords"
+      ],
+      [
+        "flagless invocation already broken",
+        "defaults pointed at removed containers",
+        "containers no longer defined",
+        "old defaults already broken"
+      ],
+      [
+        "only at container-creation sites",
+        "container creation sites only",
+        "where container is created",
+        "retained only at container creation"
+      ]
+    ],
+    "verdict": "",
+    "risky": []
+  },
+  "gold_citations": [
+    {
+      "item": "scripts/freeze_scalar_samples.py",
+      "path": "scripts/freeze_scalar_samples.py",
+      "line_start": 218,
+      "line_end": 218,
+      "quote": "ap.add_argument(\"--password\", default=os.environ.get(\"MENHIR_BENCH_NEO4J_PASSWORD\", \"\"))"
+    },
+    {
+      "item": "docker-compose.test.yml",
+      "path": "docker-compose.test.yml",
+      "line_start": 19,
+      "line_end": 19,
+      "quote": "NEO4J_AUTH: neo4j/testpassword"
+    }
+  ],
+  "memory_citations": [
+    {
+      "item": "dev password literals scrubbed",
+      "episode_uuid": "96e1518a-ff43-4049-a88a-24a2db557539",
+      "created_at": "2026-09-11T21:37:22.439708Z",
+      "quote": "SCR2-SEC-2 dev-password scrub executed 2026-09-11 per owner approval"
+    },
+    {
+      "item": "dev password literals scrubbed",
+      "episode_uuid": "96e1518a-ff43-4049-a88a-24a2db557539",
+      "created_at": "2026-09-11T21:37:22.439708Z",
+      "quote": "All lmedata123 (x27) and menhirdummy123 (x6) literals removed from scripts/"
+    },
+    {
+      "item": "flagless invocation already broken",
+      "episode_uuid": "96e1518a-ff43-4049-a88a-24a2db557539",
+      "created_at": "2026-09-11T21:37:22.439708Z",
+      "quote": "flagless invocation was already broken; the scrub makes them require explicit config"
+    },
+    {
+      "item": "only at container-creation sites",
+      "episode_uuid": "96e1518a-ff43-4049-a88a-24a2db557539",
+      "created_at": "2026-09-11T21:37:22.439708Z",
+      "quote": "testpassword retained ONLY at container-creation sites"
+    }
+  ],
+  "notes": "Repo search: grep for 'SCR2-SEC', 'lmedata123', 'menhirdummy', 'dev-password', 'filter-repo' finds only two stale archive/handoff mentions of lmedata123 (.agent/archive/plans/menhir-resolve-suburbs-extraction-failure-handoff.md:42, .agent/handoffs/HANDOFF-2026-07-27-...:6) and no rationale. Scripts reading MENHIR_BENCH_NEO4J_PASSWORD carry no comment explaining the scrub; docker-compose.test.yml has no comment about why its literal is allowed. Uncertain: the memory records the scrub as an approved security finding (SCR2-SEC-2) but does not spell out the threat beyond that; point 1 therefore rewards naming it as a deliberate security scrub. The episode also notes the literals persist in public git history (purge option not taken); not a gold point."
+}

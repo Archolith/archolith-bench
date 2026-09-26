@@ -1,0 +1,61 @@
+{
+ "repo": "menhir-adr",
+ "task_id": "menhir-adr-a5-why",
+ "kind": "why",
+ "prompt": "Several Menhir retrieval and consolidation features are fully built and tested but still ship off by default. A contributor wants a feature's default flipped to on automatically as soon as it passes its benchmark threshold. Why doesn't Menhir do that, and would the same rule hold back a fix for a known correctness defect?",
+ "reviewed": true,
+ "gold": {
+  "docs": [
+   ".agent/adr/0007-evidence-gated-default-off-feature-activation.md"
+  ],
+  "files": [],
+  "acceptable_files": [],
+  "commands": [],
+  "allowed_flags": [],
+  "guardrails": [],
+  "points": [
+   [
+    "build success is not value",
+    "code complete is not evidence",
+    "implemented is not active"
+   ],
+   [
+    "benchmark is input to an owner decision",
+    "explicit owner activation",
+    "benchmark does not know deployment risk"
+   ],
+   [
+    "safety fixes ship enabled",
+    "correctness fixes are not gated",
+    "known defects are not held back"
+   ]
+  ],
+  "verdict": "",
+  "risky": []
+ },
+ "gold_citations": [
+  {
+   "item": "build success is not value",
+   "path": ".agent/adr/0007-evidence-gated-default-off-feature-activation.md",
+   "line_start": 66,
+   "line_end": 66,
+   "quote": "Build success proves implementation, not retrieval value, authority precision, or an"
+  },
+  {
+   "item": "benchmark is input to an owner decision",
+   "path": ".agent/adr/0007-evidence-gated-default-off-feature-activation.md",
+   "line_start": 81,
+   "line_end": 81,
+   "quote": "Bench evidence is an input to an owner decision; it does not know deployment risk,"
+  },
+  {
+   "item": "safety fixes ship enabled",
+   "path": ".agent/adr/0007-evidence-gated-default-off-feature-activation.md",
+   "line_start": 91,
+   "line_end": 91,
+   "quote": "Safety fixes and contract-preserving hardening remain able to ship enabled."
+  }
+ ],
+ "memory_citations": [],
+ "notes": "Answer is written in .agent/adr/0007-evidence-gated-default-off-feature-activation.md at Menhir fdaf56bf (ADR merged in #133, 2026-09-24). Gold points and quotes are verbatim from the ADR; drafted by Claude from the ADR text only, approved by the owner 2026-09-25."
+}

@@ -1,0 +1,139 @@
+{
+  "repo": "menhir",
+  "task_id": "menhir-t2-commands",
+  "kind": "commands_and_guardrails",
+  "prompt": "You are about to change the Cypher in src/menhir/infrastructure/personal_memory_queries.py that selects dirty episodes for personal-memory consolidation (a graph query change against Neo4j). Starting from a fresh checkout, what exact commands does the project prescribe to install the development environment, run the graph-backed tests for this change, and run static checks on the changed paths? Which project rules govern how and where you run verification for this change?",
+  "reviewed": true,
+  "gold": {
+    "docs": [
+      ".agent/workflows/run_and_test.md"
+    ],
+    "files": [],
+    "commands": [
+      "python -m pip install -e . --group dev",
+      "python -m pytest --run-online",
+      "ruff check --select F811,F821,ASYNC"
+    ],
+    "guardrails": [
+      [
+        "disposable test database",
+        "disposable neo4j",
+        "never production graph",
+        "never operator graph"
+      ],
+      [
+        "full suite in CI",
+        "complete suite CI",
+        "full suite CI",
+        "entire suite CI"
+      ],
+      [
+        "online tests opt-in",
+        "online tests --run-online",
+        "live tests opt-in",
+        "live neo4j opt-in"
+      ],
+      [
+        "focused unit tests",
+        "focused tests",
+        "narrowest tests",
+        "direct tests"
+      ]
+    ],
+    "verdict": "",
+    "risky": [],
+    "allowed_flags": [
+      "-q",
+      "-x",
+      "-v",
+      "-m",
+      "-k"
+    ]
+  },
+  "gold_citations": [
+    {
+      "item": ".agent/workflows/run_and_test.md",
+      "path": "AGENTS.md",
+      "line_start": 34,
+      "line_end": 34,
+      "quote": "Follow `.agent/workflows/run_and_test.md`; it is the authoritative risk-based test and reporting policy."
+    },
+    {
+      "item": "python -m pip install -e . --group dev",
+      "path": ".agent/workflows/run_and_test.md",
+      "line_start": 139,
+      "line_end": 143,
+      "quote": "python -m pip install -e . --group dev"
+    },
+    {
+      "item": "python -m pytest --run-online",
+      "path": ".agent/workflows/run_and_test.md",
+      "line_start": 129,
+      "line_end": 132,
+      "quote": "python -m pytest --run-online -m \"online and not needs_llm\" -q"
+    },
+    {
+      "item": "python -m pytest --run-online",
+      "path": ".agent/workflows/run_and_test.md",
+      "line_start": 82,
+      "line_end": 82,
+      "quote": "| Graph query, schema, identity, lifecycle, or destructive write | Focused unit tests plus disposable-Neo4j online tests"
+    },
+    {
+      "item": "ruff check --select F811,F821,ASYNC",
+      "path": ".agent/workflows/run_and_test.md",
+      "line_start": 55,
+      "line_end": 59,
+      "quote": "ruff check --select F811,F821,ASYNC src/menhir/changed.py tests/test_changed.py"
+    },
+    {
+      "item": "disposable test database",
+      "path": ".agent/workflows/run_and_test.md",
+      "line_start": 126,
+      "line_end": 127,
+      "quote": "never an operator or production graph"
+    },
+    {
+      "item": "full suite in CI",
+      "path": "AGENTS.md",
+      "line_start": 41,
+      "line_end": 43,
+      "quote": "Do not run the complete repository suite locally as a routine implementation or deployment step."
+    },
+    {
+      "item": "full suite in CI",
+      "path": "AGENTS.md",
+      "line_start": 42,
+      "line_end": 42,
+      "quote": "let required CI run the complete suite on that exact SHA"
+    },
+    {
+      "item": "online tests opt-in",
+      "path": ".agent/workflows/run_and_test.md",
+      "line_start": 126,
+      "line_end": 126,
+      "quote": "Online tests are opt-in"
+    },
+    {
+      "item": "online tests opt-in",
+      "path": "AGENTS.md",
+      "line_start": 49,
+      "line_end": 49,
+      "quote": "Live Neo4j/LLM tests require explicit opt-in"
+    },
+    {
+      "item": "focused unit tests",
+      "path": ".agent/workflows/run_and_test.md",
+      "line_start": 82,
+      "line_end": 82,
+      "quote": "Focused unit tests plus disposable-Neo4j online tests"
+    },
+    {
+      "item": "focused unit tests",
+      "path": ".agent/workflows/run_and_test.md",
+      "line_start": 34,
+      "line_end": 36,
+      "quote": "Run the narrowest credible tests during implementation"
+    }
+  ]
+}

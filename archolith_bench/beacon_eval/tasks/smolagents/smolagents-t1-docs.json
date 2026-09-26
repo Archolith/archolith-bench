@@ -1,0 +1,131 @@
+{
+  "repo": "smolagents",
+  "task_id": "smolagents-t1-docs",
+  "kind": "docs_and_files",
+  "prompt": "You want to make the hard-coded 20-second HTTP timeout of the built-in `VisitWebpageTool` configurable through a new constructor argument. Before editing, which project docs should you read, which source file defines the tool, and which test files exercise it? Also name any rule the tool class must keep following once the new argument is added.",
+  "reviewed": true,
+  "gold": {
+    "docs": [
+      "AGENTS.md",
+      "CONTRIBUTING.md",
+      "docs/source/en/reference/default_tools.md"
+    ],
+    "files": [
+      "src/smolagents/default_tools.py",
+      "tests/test_default_tools.py",
+      "tests/test_tool_validation.py"
+    ],
+    "acceptable_files": [
+      "src/smolagents/tool_validation.py",
+      "src/smolagents/tools.py",
+      "tests/test_tools.py",
+      "docs/source/en/tutorials/tools.md"
+    ],
+    "commands": [],
+    "allowed_flags": [],
+    "guardrails": [],
+    "points": [
+      [
+        "argument must have a default",
+        "init arguments need defaults",
+        "needs a default value",
+        "every __init__ argument default",
+        "give it a default"
+      ],
+      [
+        "methods must be self-contained",
+        "self-contained methods",
+        "imports inside forward",
+        "import inside the method"
+      ],
+      [
+        "write unit tests",
+        "add a unit test",
+        "add unit tests",
+        "unit tests for new functionality"
+      ]
+    ],
+    "verdict": "",
+    "risky": []
+  },
+  "gold_citations": [
+    {
+      "item": "AGENTS.md",
+      "path": "AGENTS.md",
+      "line_start": 1,
+      "line_end": 4,
+      "quote": "Write unit tests for new functionality"
+    },
+    {
+      "item": "CONTRIBUTING.md",
+      "path": "CONTRIBUTING.md",
+      "line_start": 151,
+      "line_end": 155,
+      "quote": "When making changes to the codebase, please check that it follows the repo's code quality requirements by running:"
+    },
+    {
+      "item": "docs/source/en/reference/default_tools.md",
+      "path": "docs/source/en/reference/default_tools.md",
+      "line_start": 55,
+      "line_end": 57,
+      "quote": "[[autodoc]] smolagents.default_tools.VisitWebpageTool"
+    },
+    {
+      "item": "src/smolagents/default_tools.py",
+      "path": "src/smolagents/default_tools.py",
+      "line_start": 491,
+      "line_end": 491,
+      "quote": "class VisitWebpageTool(Tool):"
+    },
+    {
+      "item": "src/smolagents/default_tools.py",
+      "path": "src/smolagents/default_tools.py",
+      "line_start": 528,
+      "line_end": 528,
+      "quote": "response = requests.get(url, timeout=20)"
+    },
+    {
+      "item": "tests/test_default_tools.py",
+      "path": "tests/test_default_tools.py",
+      "line_start": 36,
+      "line_end": 38,
+      "quote": "result = VisitWebpageTool()(arguments)"
+    },
+    {
+      "item": "tests/test_tool_validation.py",
+      "path": "tests/test_tool_validation.py",
+      "line_start": 20,
+      "line_end": 24,
+      "quote": "[DuckDuckGoSearchTool, GoogleSearchTool, SpeechToTextTool, VisitWebpageTool, WebSearchTool]"
+    },
+    {
+      "item": "argument must have a default",
+      "path": "src/smolagents/tool_validation.py",
+      "line_start": 160,
+      "line_end": 161,
+      "quote": "0. Any argument of __init__ should have a default."
+    },
+    {
+      "item": "methods must be self-contained",
+      "path": "src/smolagents/tool_validation.py",
+      "line_start": 165,
+      "line_end": 167,
+      "quote": "- All methods must be self-contained"
+    },
+    {
+      "item": "methods must be self-contained",
+      "path": "src/smolagents/default_tools.py",
+      "line_start": 515,
+      "line_end": 521,
+      "quote": "from markdownify import markdownify"
+    },
+    {
+      "item": "write unit tests",
+      "path": "AGENTS.md",
+      "line_start": 4,
+      "line_end": 4,
+      "quote": "Write unit tests for new functionality"
+    }
+  ],
+  "notes": "test_tool_validation.py parametrizes validate_tool_attributes over VisitWebpageTool, so a new __init__ argument without a default would fail it. docs/source/en/reference/default_tools.md is autodoc-generated from the class, so the doc change is in the class itself."
+}

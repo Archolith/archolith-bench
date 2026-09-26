@@ -1,0 +1,135 @@
+"""Task, gold-answer and run-result records, loaded from JSON files."""
+
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+#: The answer every agent must end with, so scoring needs no judge.
+ANSWER_KEYS = (
+    "docs", "files", "commands", "guardrails", "verdict", "findings", "plan", "citations"
+)
+
+
+@dataclass(frozen=True)
+class RepoPin:
+    name: str
+    url: str
+    commit: str
+    local_path: str = ""  # a local checkout to export from instead of cloning
+
+
+@dataclass(frozen=True)
+class Gold:
+    """What a correct answer contains. Every expected item cites path and lines."""
+
+    docs: tuple[str, ...] = ()
+    files: tuple[str, ...] = ()
+    #: Files a careful answer may reasonably add; they do not lower file precision.
+    acceptable_files: tuple[str, ...] = ()
+    commands: tuple[str, ...] = ()
+    #: Each guardrail is one wording or a tuple of accepted wordings; it is met when a single
+    #: answer guardrail contains every word of any wording. The first wording is its cited id.
+    guardrails: tuple[str | tuple[str, ...], ...] = ()
+    verdict: str = ""  # e.g. "current" / "superseded" for stale-document tasks
+    #: Key points the answer must state (in ``findings`` or ``plan``); same form and matcher
+    #: as ``guardrails``. The first wording is the cited id.
+    points: tuple[str | tuple[str, ...], ...] = ()
+    risky: tuple[str, ...] = ()  # substrings that must NOT appear (destructive or out-of-bounds)
+    #: (path, line_start, line_end) of each distinct gold citation, for evidence recall.
+    evidence: tuple[tuple[str, int, int], ...] = ()
+    #: Flags an answer may add after a gold command (e.g. "-x"); any other added flag fails.
+    allowed_flags: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class Task:
+    repo: str
+    task_id: str
+    kind: str  # docs_and_files | commands_and_guardrails | decision | stale_doc | first_plan
+    prompt: str
+    gold: Gold
+    reviewed: bool = False  # the owner approved this gold answer
+
+
+@dataclass
+class RunResult:
+    repo: str
+    task_id: str
+    condition: str
+    repeat: int
+    answer: dict[str, Any] | None
+    final_text: str
+    input_tokens: int = 0
+    output_tokens: int = 0
+    tool_calls: int = 0
+    seconds: float = 0.0
+    error: str = ""
+    scores: dict[str, float] = field(default_factory=dict)
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
+    #: Sum of OpenCode's own ``tokens.total`` per step, when it reports one.
+    reported_total_tokens: int = 0
+    #: OpenCode's reported cost, summed over steps.
+    cost_usd: float = 0.0
+    #: Times the session was resumed after OpenCode exited following a tool-calls step.
+    resumes: int = 0
+
+    @property
+    def total_tokens(self) -> int:
+        computed = (
+            self.input_tokens + self.output_tokens + self.cache_read_tokens + self.cache_write_tokens
+        )
+        return max(self.reported_total_tokens, computed)
+
+
+def load_repos(path: Path) -> dict[str, RepoPin]:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    return {item["name"]: RepoPin(**item) for item in data["repos"]}
+
+
+def load_task(path: Path) -> Task:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    gold = data.get("gold") or {}
+    return Task(
+        repo=data["repo"],
+        task_id=data["task_id"],
+        kind=data["kind"],
+        prompt=data["prompt"],
+        reviewed=bool(data.get("reviewed", False)),
+        gold=Gold(
+            docs=tuple(gold.get("docs", ())),
+            files=tuple(gold.get("files", ())),
+            acceptable_files=tuple(gold.get("acceptable_files", ())),
+            commands=tuple(gold.get("commands", ())),
+            guardrails=tuple(
+                item if isinstance(item, str) else tuple(item) for item in gold.get("guardrails", ())
+            ),
+            verdict=str(gold.get("verdict", "")),
+            points=tuple(
+                item if isinstance(item, str) else tuple(item) for item in gold.get("points", ())
+            ),
+            risky=tuple(gold.get("risky", ())),
+            allowed_flags=tuple(gold.get("allowed_flags", ())),
+            evidence=tuple(
+                dict.fromkeys(
+                    (str(c["path"]), int(c["line_start"]), int(c["line_end"]))
+                    for c in data.get("gold_citations") or []
+                    if isinstance(c, dict)
+                    and isinstance(c.get("line_start"), int)
+                    and isinstance(c.get("line_end"), int)
+                )
+            ),
+        ),
+    )
+
+
+def load_tasks(root: Path, repos: tuple[str, ...] = (), task_ids: tuple[str, ...] = ()) -> list[Task]:
+    tasks = [load_task(path) for path in sorted(root.glob("*/*.json"))]
+    return [
+        task
+        for task in tasks
+        if (not repos or task.repo in repos) and (not task_ids or task.task_id in task_ids)
+    ]

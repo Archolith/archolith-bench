@@ -1,0 +1,63 @@
+"""Markdown report: per-condition means, median tokens, and every per-run row."""
+
+from __future__ import annotations
+
+import statistics
+from collections import defaultdict
+
+from archolith_bench.beacon_eval.models import RunResult
+
+METRICS = (
+    "answered",
+    "doc_recall",
+    "file_recall",
+    "file_precision",
+    "command_recall",
+    "guardrail_recall",
+    "point_recall",
+    "verdict_correct",
+    "risky_false_positive",
+    "citation_location_validity",
+    "evidence_recall",
+)
+
+
+def _mean(values: list[float]) -> str:
+    return f"{statistics.fmean(values):.2f}" if values else "-"
+
+
+def render(
+    results: list[RunResult], header: dict[str, str], stopped: str = "",
+    metrics: tuple[str, ...] = METRICS,
+) -> str:
+    by_condition: dict[str, list[RunResult]] = defaultdict(list)
+    for result in results:
+        by_condition[result.condition].append(result)
+    lines = ["# Beacon agent-task evaluation", ""]
+    lines += [f"- **{key}:** {value}" for key, value in header.items()]
+    lines += [f"- **Runs completed:** {len(results)}"]
+    lines += [f"- **Total cost:** ${sum(r.cost_usd for r in results):.4f}"]
+    if stopped:
+        lines += [f"- **Stopped early:** {stopped}"]
+    lines += ["", "## By condition", ""]
+    lines += ["| Condition | Runs | " + " | ".join(metrics) + " | median tokens | median cost |"]
+    lines += ["|---" * (len(metrics) + 4) + "|"]
+    for condition in sorted(by_condition):
+        runs = by_condition[condition]
+        means = [
+            _mean([r.scores[m] for r in runs if m in r.scores]) for m in metrics
+        ]
+        tokens = statistics.median([r.total_tokens for r in runs]) if runs else 0
+        cost = statistics.median([r.cost_usd for r in runs]) if runs else 0.0
+        lines += [
+            f"| {condition} | {len(runs)} | " + " | ".join(means) + f" | {tokens:,.0f} | ${cost:.4f} |"
+        ]
+    lines += ["", "## Runs", "", "| Repo | Task | Cond | Rep | Tokens | Cost | Tools | s | Scores | Error |"]
+    lines += ["|---|---|---|---|---|---|---|---|---|---|"]
+    for r in results:
+        scores = ", ".join(f"{k}={v:.2f}" for k, v in sorted(r.scores.items()))
+        lines += [
+            f"| {r.repo} | {r.task_id} | {r.condition} | {r.repeat} | {r.total_tokens:,} | ${r.cost_usd:.4f} | "
+            f"{r.tool_calls} | {r.seconds} | {scores} | {r.error[:60]} |"
+        ]
+    return "\n".join(lines) + "\n"

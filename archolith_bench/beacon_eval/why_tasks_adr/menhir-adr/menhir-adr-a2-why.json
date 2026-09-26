@@ -1,0 +1,50 @@
+{
+ "repo": "menhir-adr",
+ "task_id": "menhir-adr-a2-why",
+ "kind": "why",
+ "prompt": "In Menhir, a client pinned to a namespace that reads with namespace=B silently gets results narrowed to its own namespace, but the same client calling a delete with namespace=B gets a PermissionError instead of having the delete retargeted to its own namespace. Why the asymmetry?",
+ "reviewed": true,
+ "gold": {
+  "docs": [
+   ".agent/adr/0005-core-enforced-namespace-isolation.md"
+  ],
+  "files": [],
+  "acceptable_files": [],
+  "commands": [],
+  "allowed_flags": [],
+  "guardrails": [],
+  "points": [
+   [
+    "authorized answer to a smaller question",
+    "narrowing a read is safe",
+    "smaller question"
+   ],
+   [
+    "retargeting destroys the caller's own data",
+    "self-inflicted deletion",
+    "success against the wrong target",
+    "deletes the caller's own data"
+   ]
+  ],
+  "verdict": "",
+  "risky": []
+ },
+ "gold_citations": [
+  {
+   "item": "authorized answer to a smaller question",
+   "path": ".agent/adr/0005-core-enforced-namespace-isolation.md",
+   "line_start": 53,
+   "line_end": 53,
+   "quote": "returns an authorized answer to a"
+  },
+  {
+   "item": "retargeting destroys the caller's own data",
+   "path": ".agent/adr/0005-core-enforced-namespace-isolation.md",
+   "line_start": 55,
+   "line_end": 55,
+   "quote": "data while reporting success against the wrong target."
+  }
+ ],
+ "memory_citations": [],
+ "notes": "Answer is written in .agent/adr/0005-core-enforced-namespace-isolation.md at Menhir fdaf56bf (ADR merged in #133, 2026-09-24). Gold points and quotes are verbatim from the ADR; drafted by Claude from the ADR text only, approved by the owner 2026-09-25."
+}

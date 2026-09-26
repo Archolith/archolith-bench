@@ -407,6 +407,10 @@ def main(argv: list[str] | None = None) -> None:
                          help="Show every listening port, not just menhir/neo4j/bench/etc.")
     ports_p.add_argument("--json", action="store_true", dest="as_json", help="Emit JSON")
 
+    from .beacon_eval.cli import add_parser as _add_beacon_eval
+
+    _add_beacon_eval(subparsers)
+
     # ---- menhir subcommand group ----
     menhir_p = subparsers.add_parser("menhir", help="Menhir capability evidence runners")
     menhir_sub = menhir_p.add_subparsers(dest="menhir_command", help="Menhir command")
@@ -542,6 +546,10 @@ def main(argv: list[str] | None = None) -> None:
         _run_menhir(args)
     elif args.suite == "report":
         _run_report(args)
+    elif args.suite == "beacon-eval":
+        from .beacon_eval.cli import run as _run_beacon_eval
+
+        sys.exit(_run_beacon_eval(args))
     else:
         print(f"Unknown suite: {args.suite}")
         sys.exit(1)

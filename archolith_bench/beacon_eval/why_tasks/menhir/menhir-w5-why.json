@@ -1,0 +1,80 @@
+{
+  "repo": "menhir",
+  "task_id": "menhir-w5-why",
+  "kind": "why",
+  "prompt": "Menhir's public repository commits its whole .agent/ directory (plans, reviews, audits, handoffs), while .gitignore keeps .agent/backups/ and .agent/mcp_telemetry.db out. A newcomer proposes gitignoring all of .agent/ before the next release to look tidier, and separately wants to commit the telemetry DB so others can debug with it. Why is .agent/ published on purpose, and why must those two paths never be committed?",
+  "reviewed": true,
+  "gold": {
+    "docs": [],
+    "files": [
+      ".gitignore"
+    ],
+    "acceptable_files": [],
+    "commands": [],
+    "allowed_flags": [],
+    "guardrails": [],
+    "points": [
+      [
+        "reasoning corpus is on-brand evidence",
+        "on-brand evidence",
+        "evidence not a liability",
+        "reasoning corpus is evidence",
+        "reasoning is product evidence"
+      ],
+      [
+        "contain real personal data",
+        "real personal data",
+        "personal data of real people",
+        "third-party emails personal data"
+      ],
+      [
+        "never committed not in history",
+        "must never enter history",
+        "never be in git history",
+        "keep out of history"
+      ]
+    ],
+    "verdict": "",
+    "risky": [
+      "git add .agent/mcp_telemetry.db",
+      "git add -f .agent/backups"
+    ]
+  },
+  "gold_citations": [
+    {
+      "item": ".gitignore",
+      "path": ".gitignore",
+      "line_start": 39,
+      "line_end": 39,
+      "quote": ".agent/backups/"
+    },
+    {
+      "item": ".gitignore",
+      "path": ".gitignore",
+      "line_start": 46,
+      "line_end": 46,
+      "quote": ".agent/mcp_telemetry.db"
+    }
+  ],
+  "memory_citations": [
+    {
+      "item": "reasoning corpus is on-brand evidence",
+      "episode_uuid": "13f9aa17-61e8-4f2b-9b4c-ee361e8ce205",
+      "created_at": "2026-08-10T16:13:42.270918Z",
+      "quote": ".agent/ IS published deliberately -- rationale: for an AI-memory product the reasoning corpus is on-brand evidence, not a liability."
+    },
+    {
+      "item": "contain real personal data",
+      "episode_uuid": "13f9aa17-61e8-4f2b-9b4c-ee361e8ce205",
+      "created_at": "2026-08-10T16:13:42.270918Z",
+      "quote": ".agent/backups/*.jsonl and .agent/mcp_telemetry.db contain REAL personal data"
+    },
+    {
+      "item": "never committed not in history",
+      "episode_uuid": "13f9aa17-61e8-4f2b-9b4c-ee361e8ce205",
+      "created_at": "2026-08-10T16:13:42.270918Z",
+      "quote": "must stay gitignored -- never committed, not in history"
+    }
+  ],
+  "notes": "Repo search: grep for 'on-brand', 'reasoning corpus', 'published deliberately', '.agent/ is published' across the checkout finds nothing; README, AGENTS.md, CLAUDE.md and .agent/README.md describe .agent/ contents but not why it is public. .gitignore lines 39-55 list the ignored .agent paths; a comment above backups/ (lines 40-43) says graph dumps contain real memory content, which partly covers point 2 for backups/ but not for .agent/mcp_telemetry.db and does not state the publish-deliberately rationale. No later memory reverses the decision (searched 'on-brand', '.agent/ IS published')."
+}

@@ -1,0 +1,212 @@
+{
+  "repo": "beacon",
+  "task_id": "beacon-t2-commands",
+  "kind": "commands_and_guardrails",
+  "prompt": "You are adding a new publication-blocking validation warning code to src/beacon/core/validator.py (a new CODE_* constant added to PUBLICATION_WARNING_CODES). List the exact commands the project prescribes to install the development environment and to run the tests, lint, format and type checks, and state the project rules that govern this change and its commit.",
+  "reviewed": true,
+  "gold": {
+    "docs": [
+      "CONTRIBUTING.md",
+      ".agent/README.md"
+    ],
+    "files": [
+      "src/beacon/core/validator.py"
+    ],
+    "acceptable_files": [
+      "src/beacon/core/policy.py",
+      "tests/test_core.py",
+      "tests/test_policy.py",
+      ".agent/architecture.md",
+      ".agent/data_models.md",
+      ".agent/CHANGELOG.md",
+      ".agent/workflows/code_conventions.md",
+      "pyproject.toml",
+      ".github/workflows/ci.yml"
+    ],
+    "commands": [
+      "python -m pip install -e \".[dev,audit]\"",
+      "python -m pytest -p no:cacheprovider -q",
+      "ruff check src tests",
+      "ruff format --check src tests",
+      "mypy --no-incremental src"
+    ],
+    "allowed_flags": [
+      "-x",
+      "-k",
+      "-v"
+    ],
+    "guardrails": [
+      [
+        "positive and negative tests",
+        "positive negative tests",
+        "negative tests",
+        "failure paths tests"
+      ],
+      [
+        "update changelog",
+        "changelog entry",
+        "update .agent/changelog.md",
+        "changelog.md entry"
+      ],
+      [
+        "stage files explicitly by path",
+        "add files explicitly",
+        "explicit paths",
+        "stage explicit paths",
+        "never git add -A"
+      ],
+      [
+        "conventional commit",
+        "conventional commits",
+        "conventional title",
+        "conventional titles"
+      ],
+      [
+        "open an issue",
+        "open issue first",
+        "issue before contract change"
+      ]
+    ],
+    "points": [
+      [
+        "tests run offline",
+        "offline tests",
+        "fully offline",
+        "no network"
+      ]
+    ],
+    "verdict": "",
+    "risky": [
+      "git add -A"
+    ]
+  },
+  "gold_citations": [
+    {
+      "item": "CONTRIBUTING.md",
+      "path": "CONTRIBUTING.md",
+      "line_start": 15,
+      "line_end": 15,
+      "quote": "## Development setup"
+    },
+    {
+      "item": ".agent/README.md",
+      "path": "AGENTS.md",
+      "line_start": 5,
+      "line_end": 5,
+      "quote": "Start with `.agent/README.md`."
+    },
+    {
+      "item": "src/beacon/core/validator.py",
+      "path": "src/beacon/core/validator.py",
+      "line_start": 97,
+      "line_end": 99,
+      "quote": "PUBLICATION_WARNING_CODES = frozenset("
+    },
+    {
+      "item": "python -m pip install -e \".[dev,audit]\"",
+      "path": "CONTRIBUTING.md",
+      "line_start": 23,
+      "line_end": 23,
+      "quote": "python -m pip install -e \".[dev,audit]\""
+    },
+    {
+      "item": "python -m pytest -p no:cacheprovider -q",
+      "path": "CONTRIBUTING.md",
+      "line_start": 29,
+      "line_end": 29,
+      "quote": "python -m pytest -p no:cacheprovider -q"
+    },
+    {
+      "item": "python -m pytest -p no:cacheprovider -q",
+      "path": ".github/workflows/ci.yml",
+      "line_start": 52,
+      "line_end": 53,
+      "quote": "run: python -m pytest -p no:cacheprovider -q"
+    },
+    {
+      "item": "ruff check src tests",
+      "path": "CONTRIBUTING.md",
+      "line_start": 30,
+      "line_end": 30,
+      "quote": "ruff check src tests"
+    },
+    {
+      "item": "ruff format --check src tests",
+      "path": "CONTRIBUTING.md",
+      "line_start": 31,
+      "line_end": 31,
+      "quote": "ruff format --check src tests"
+    },
+    {
+      "item": "mypy --no-incremental src",
+      "path": "CONTRIBUTING.md",
+      "line_start": 32,
+      "line_end": 32,
+      "quote": "mypy --no-incremental src"
+    },
+    {
+      "item": "positive and negative tests",
+      "path": "CONTRIBUTING.md",
+      "line_start": 47,
+      "line_end": 47,
+      "quote": "Add positive and negative tests for behavior changes."
+    },
+    {
+      "item": "update changelog",
+      "path": "CONTRIBUTING.md",
+      "line_start": 48,
+      "line_end": 48,
+      "quote": "Update architecture/data-model docs and `.agent/CHANGELOG.md` when contracts change."
+    },
+    {
+      "item": "update changelog",
+      "path": ".agent/README.md",
+      "line_start": 38,
+      "line_end": 39,
+      "quote": "Add a `CHANGELOG.md` entry at the end of every session with meaningful changes."
+    },
+    {
+      "item": "stage files explicitly by path",
+      "path": ".agent/README.md",
+      "line_start": 42,
+      "line_end": 42,
+      "quote": "Add files explicitly by path \u2014 never `git add .` or `git add -A`."
+    },
+    {
+      "item": "conventional commit",
+      "path": ".agent/README.md",
+      "line_start": 41,
+      "line_end": 41,
+      "quote": "Use conventional commit messages: `feat:`, `fix:`, `refactor:`, `chore:`, `docs:`."
+    },
+    {
+      "item": "conventional commit",
+      "path": "CONTRIBUTING.md",
+      "line_start": 46,
+      "line_end": 46,
+      "quote": "Use conventional titles such as `feat:`, `fix:`, `docs:`, `test:`, or `chore:`."
+    },
+    {
+      "item": "open an issue",
+      "path": "CONTRIBUTING.md",
+      "line_start": 10,
+      "line_end": 10,
+      "quote": "Open an issue before a new product capability or public contract change."
+    },
+    {
+      "item": "tests run offline",
+      "path": ".agent/workflows/code_conventions.md",
+      "line_start": 53,
+      "line_end": 53,
+      "quote": "All tests run fully offline \u2014 no network, no LLM calls, no external services"
+    },
+    {
+      "item": "git add -A",
+      "path": ".agent/README.md",
+      "line_start": 42,
+      "line_end": 42,
+      "quote": "never `git add .` or `git add -A`"
+    }
+  ],
+  "notes": "CONTRIBUTING.md lists further core checks (bandit, pip-audit, validate-pyproject, build, twine, check-wheel-contents, beacon validate/inspect beacon.yaml); gold keeps the test/lint/format/type commands the prompt asks for. CI runs ruff over `src tests scripts`; the extra `scripts` argument is a plain path and still matches. CONTRIBUTING.md pins the framework clone at v0.2.0 while pyproject.toml requires archolith-mcp-framework>=0.3.0 and CI checks out v0.3.0, so the clone command is deliberately not gold. `git add .` is not listed as risky because it is a substring of legitimate `git add .agent/...` commands. `--no-verify` is not stated in the repo; it is a prohibition that bypasses the .githooks/pre-push guard. Whether a new stable diagnostic code counts as a 'public contract change' (issue first) is a judgment call."
+}

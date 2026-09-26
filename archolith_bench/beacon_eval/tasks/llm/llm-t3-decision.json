@@ -1,0 +1,126 @@
+{
+  "repo": "llm",
+  "task_id": "llm-t3-decision",
+  "kind": "decision",
+  "prompt": "You are about to register a new reasoning-capable OpenAI model in the default OpenAI plugin. Which OpenAI API endpoint does the project currently use by default for reasoning-capable OpenAI models, what did that replace, how can a user fall back to the older path for a single prompt, and what happened to the older model classes? Name the docs and source files that state this decision.",
+  "reviewed": true,
+  "gold": {
+    "docs": [
+      "docs/changelog.md",
+      "docs/openai-models.md"
+    ],
+    "files": [
+      "llm/default_plugins/openai_models.py",
+      "tests/test_openai_responses.py"
+    ],
+    "acceptable_files": [
+      "docs/plugins/advanced-model-plugins.md",
+      "tests/cassettes/test_openai_responses",
+      "tests/conftest.py"
+    ],
+    "commands": [],
+    "allowed_flags": [],
+    "guardrails": [],
+    "points": [
+      [
+        "most reasoning models use Responses",
+        "most reasoning-capable models Responses",
+        "Responses API for most reasoning models",
+        "most reasoning models v1/responses"
+      ],
+      [
+        "instead of chat completions",
+        "replaced chat completions",
+        "instead of v1/chat/completions",
+        "previously chat completions"
+      ],
+      [
+        "-o chat_completions 1",
+        "chat_completions 1",
+        "chat_completions option"
+      ],
+      [
+        "Chat classes unchanged",
+        "Chat and AsyncChat unchanged",
+        "Chat classes remain available",
+        "Chat Completions classes remain available",
+        "Chat AsyncChat keep working"
+      ]
+    ],
+    "verdict": "",
+    "risky": []
+  },
+  "gold_citations": [
+    {
+      "item": "docs/changelog.md",
+      "path": "docs/changelog.md",
+      "line_start": 92,
+      "line_end": 92,
+      "quote": "Most reasoning-capable OpenAI models now use the `/v1/responses` endpoint by default, enabling interleaved reasoning across tool calls."
+    },
+    {
+      "item": "docs/openai-models.md",
+      "path": "docs/openai-models.md",
+      "line_start": 78,
+      "line_end": 78,
+      "quote": "use the Responses API by default"
+    },
+    {
+      "item": "llm/default_plugins/openai_models.py",
+      "path": "llm/default_plugins/openai_models.py",
+      "line_start": 301,
+      "line_end": 302,
+      "quote": "# GPT-5.5 \u2014 routes through the Responses API by default; pass"
+    },
+    {
+      "item": "llm/default_plugins/openai_models.py",
+      "path": "llm/default_plugins/openai_models.py",
+      "line_start": 2450,
+      "line_end": 2450,
+      "quote": "class Responses(_SharedResponses, KeyModel):"
+    },
+    {
+      "item": "tests/test_openai_responses.py",
+      "path": "tests/test_openai_responses.py",
+      "line_start": 1,
+      "line_end": 1,
+      "quote": "Tests for the /v1/responses code path in the default OpenAI plugin."
+    },
+    {
+      "item": "instead of chat completions",
+      "path": "docs/changelog.md",
+      "line_start": 203,
+      "line_end": 203,
+      "quote": "Most reasoning-capable OpenAI models now use the [`/v1/responses`](https://developers.openai.com/api/reference/responses/overview) endpoint instead of `/v1/chat/completions`."
+    },
+    {
+      "item": "-o chat_completions 1",
+      "path": "docs/changelog.md",
+      "line_start": 207,
+      "line_end": 207,
+      "quote": "Use `-o chat_completions 1` to fall back to the older `/v1/chat/completions` code path for any of these models."
+    },
+    {
+      "item": "Chat classes unchanged",
+      "path": "docs/changelog.md",
+      "line_start": 205,
+      "line_end": 205,
+      "quote": "The existing `Chat` and `AsyncChat` classes are unchanged so other plugins that import them keep working."
+    },
+    {
+      "item": "Chat classes unchanged",
+      "path": "docs/changelog.md",
+      "line_start": 92,
+      "line_end": 92,
+      "quote": "The existing Chat Completions classes remain available, and `-o chat_completions 1` selects that older path for an individual prompt."
+    },
+    {
+      "item": "most reasoning models use Responses",
+      "path": "docs/changelog.md",
+      "line_start": 92,
+      "line_end": 92,
+      "quote": "Most reasoning-capable OpenAI models now use the"
+    }
+  ],
+  "notes": "Decision introduced in 0.32a2 (docs/changelog.md lines 198-210, PR #1435) and summarised in the 0.32 release notes (line 92). The model factory picks `Responses if use_responses else Chat` at llm/default_plugins/openai_models.py line 708."
+}

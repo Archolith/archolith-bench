@@ -1,0 +1,156 @@
+{
+  "repo": "llm",
+  "task_id": "llm-t5-plan",
+  "kind": "first_plan",
+  "prompt": "The maintainer wants you to prepare the version bump commit for the next release, 0.37, from the current 0.36; they will create the GitHub release and publish to PyPI themselves. Before touching anything, write a safe first-step plan: which project document describes the process, which files the change touches, which command regenerates derived docs and which checks to run before committing, and how the release is recorded.",
+  "reviewed": true,
+  "gold": {
+    "docs": [
+      "docs/contributing.md"
+    ],
+    "files": [
+      "docs/changelog.md",
+      "pyproject.toml",
+      "docs/fragments.md"
+    ],
+    "acceptable_files": [
+      "Justfile",
+      ".github/workflows/publish.yml",
+      ".github/workflows/test.yml",
+      "docs/help.md",
+      "README.md"
+    ],
+    "commands": [
+      "just cog",
+      "uv run pytest",
+      "just lint"
+    ],
+    "allowed_flags": [
+      "-x",
+      "-q",
+      "-vv"
+    ],
+    "guardrails": [
+      [
+        "cog --check",
+        "cog check fails",
+        "cog needs to be run",
+        "check cog is current"
+      ]
+    ],
+    "points": [
+      [
+        "update docs/changelog.md",
+        "changelog entry",
+        "update changelog",
+        "add changelog section"
+      ],
+      [
+        "version in pyproject.toml",
+        "bump pyproject.toml version",
+        "update version pyproject.toml",
+        "version = \"0.37\""
+      ],
+      [
+        "fragments.md version",
+        "update docs/fragments.md",
+        "fragments.md user-agent",
+        "cog updates fragments.md"
+      ],
+      [
+        "(v0_37)=",
+        "v0_37 anchor",
+        "v0_37 label"
+      ]
+    ],
+    "verdict": "",
+    "risky": []
+  },
+  "gold_citations": [
+    {
+      "item": "docs/contributing.md",
+      "path": "docs/contributing.md",
+      "line_start": 57,
+      "line_end": 59,
+      "quote": "## Release process"
+    },
+    {
+      "item": "docs/changelog.md",
+      "path": "docs/contributing.md",
+      "line_start": 61,
+      "line_end": 61,
+      "quote": "Update `docs/changelog.md` with the new changes."
+    },
+    {
+      "item": "pyproject.toml",
+      "path": "pyproject.toml",
+      "line_start": 3,
+      "line_end": 3,
+      "quote": "version = \"0.36\""
+    },
+    {
+      "item": "docs/fragments.md",
+      "path": "docs/fragments.md",
+      "line_start": 28,
+      "line_end": 33,
+      "quote": "The URL will be fetched with the user-agent `llm/0.36 (https://llm.datasette.io/)`."
+    },
+    {
+      "item": "just cog",
+      "path": "docs/contributing.md",
+      "line_start": 63,
+      "line_end": 63,
+      "quote": "Run `just cog` to update `docs/fragments.md` with the new version number."
+    },
+    {
+      "item": "uv run pytest",
+      "path": "docs/contributing.md",
+      "line_start": 4,
+      "line_end": 8,
+      "quote": "uv run pytest"
+    },
+    {
+      "item": "just lint",
+      "path": "Justfile",
+      "line_start": 8,
+      "line_end": 20,
+      "quote": "@lint:"
+    },
+    {
+      "item": "cog --check",
+      "path": ".github/workflows/test.yml",
+      "line_start": 29,
+      "line_end": 34,
+      "quote": "- name: Check if cog needs to be run"
+    },
+    {
+      "item": "update docs/changelog.md",
+      "path": "docs/contributing.md",
+      "line_start": 61,
+      "line_end": 61,
+      "quote": "Update `docs/changelog.md` with the new changes."
+    },
+    {
+      "item": "version in pyproject.toml",
+      "path": "docs/contributing.md",
+      "line_start": 62,
+      "line_end": 62,
+      "quote": "Update the version number in `pyproject.toml`"
+    },
+    {
+      "item": "fragments.md version",
+      "path": "docs/fragments.md",
+      "line_start": 28,
+      "line_end": 31,
+      "quote": "llm_version = version(\"llm\")"
+    },
+    {
+      "item": "(v0_37)=",
+      "path": "docs/changelog.md",
+      "line_start": 3,
+      "line_end": 4,
+      "quote": "(v0_36)="
+    }
+  ],
+  "notes": "The repository has no staging or commit-message rules of its own; the release is recorded as a new top section in docs/changelog.md following the existing `(v0_36)=` label plus `## 0.36 (2026-09-22)` heading pattern. Publishing to PyPI is automated by .github/workflows/publish.yml when a GitHub release is created, so pushing, creating a release or uploading manually are out of scope for this preparation step. `just cog` needs the package installed at the new version (fragments.md reads importlib.metadata.version('llm')), so run it via uv after bumping pyproject.toml."
+}

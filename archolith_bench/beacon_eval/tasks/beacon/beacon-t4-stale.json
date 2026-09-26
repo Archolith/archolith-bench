@@ -1,0 +1,132 @@
+{
+  "repo": "beacon",
+  "task_id": "beacon-t4-stale",
+  "kind": "stale_doc",
+  "prompt": "The .agent/README.md router sends every code change to .agent/workflows/code_conventions.md, which opens by saying no linter or formatter is configured, that pyproject.toml has no [tool.ruff] or [tool.mypy] section, and that its conventions are not enforced. Before you skip lint, format and type checks on a change, decide whether that statement is current or superseded, and name the doc and files to follow instead, with the commands they prescribe.",
+  "reviewed": true,
+  "gold": {
+    "docs": [
+      "CONTRIBUTING.md"
+    ],
+    "files": [
+      ".agent/workflows/code_conventions.md",
+      "pyproject.toml"
+    ],
+    "acceptable_files": [
+      ".github/workflows/ci.yml",
+      ".agent/README.md",
+      ".agent/CHANGELOG.md"
+    ],
+    "commands": [
+      "ruff check src tests",
+      "ruff format --check src tests",
+      "mypy --no-incremental src"
+    ],
+    "allowed_flags": [],
+    "guardrails": [],
+    "points": [
+      [
+        "[tool.ruff]",
+        "tool.ruff section",
+        "ruff is configured",
+        "configures ruff",
+        "ruff configured"
+      ],
+      [
+        "[tool.mypy]",
+        "tool.mypy section",
+        "mypy is configured",
+        "configures mypy",
+        "mypy configured"
+      ],
+      [
+        "CI runs ruff",
+        "CI lint and type-check",
+        "CI enforces ruff",
+        "ci runs mypy"
+      ]
+    ],
+    "verdict": "superseded",
+    "risky": []
+  },
+  "gold_citations": [
+    {
+      "item": "CONTRIBUTING.md",
+      "path": "CONTRIBUTING.md",
+      "line_start": 26,
+      "line_end": 32,
+      "quote": "Run the core checks:"
+    },
+    {
+      "item": ".agent/workflows/code_conventions.md",
+      "path": ".agent/workflows/code_conventions.md",
+      "line_start": 3,
+      "line_end": 5,
+      "quote": "No linter or formatter is configured yet (`pyproject.toml` has no `[tool.ruff]` / `[tool.black]` / `[tool.mypy]` section)."
+    },
+    {
+      "item": "pyproject.toml",
+      "path": "pyproject.toml",
+      "line_start": 86,
+      "line_end": 88,
+      "quote": "[tool.ruff] target-version = \"py312\" line-length = 100"
+    },
+    {
+      "item": "superseded",
+      "path": "pyproject.toml",
+      "line_start": 86,
+      "line_end": 99,
+      "quote": "[tool.ruff]"
+    },
+    {
+      "item": "superseded",
+      "path": "pyproject.toml",
+      "line_start": 97,
+      "line_end": 99,
+      "quote": "[tool.mypy] python_version = \"3.12\""
+    },
+    {
+      "item": "ruff check src tests",
+      "path": "CONTRIBUTING.md",
+      "line_start": 30,
+      "line_end": 30,
+      "quote": "ruff check src tests"
+    },
+    {
+      "item": "ruff format --check src tests",
+      "path": "CONTRIBUTING.md",
+      "line_start": 31,
+      "line_end": 31,
+      "quote": "ruff format --check src tests"
+    },
+    {
+      "item": "mypy --no-incremental src",
+      "path": "CONTRIBUTING.md",
+      "line_start": 32,
+      "line_end": 32,
+      "quote": "mypy --no-incremental src"
+    },
+    {
+      "item": "[tool.ruff]",
+      "path": "pyproject.toml",
+      "line_start": 86,
+      "line_end": 91,
+      "quote": "[tool.ruff.lint] select = [\"E4\", \"E7\", \"E9\", \"F\", \"I\", \"UP\", \"B\"]"
+    },
+    {
+      "item": "[tool.mypy]",
+      "path": "pyproject.toml",
+      "line_start": 97,
+      "line_end": 99,
+      "quote": "[tool.mypy]"
+    },
+    {
+      "item": "CI runs ruff",
+      "path": ".github/workflows/ci.yml",
+      "line_start": 101,
+      "line_end": 106,
+      "quote": "- name: Lint and type-check run: | validate-pyproject pyproject.toml ruff check src tests scripts ruff format --check src tests scripts mypy --no-incremental src"
+    }
+  ],
+  "notes": "Only the tooling claim at the top of code_conventions.md is superseded; its style and naming conventions (future annotations, frozen dataclasses, beacon_ tool prefix) still describe the code. Its 'one test file per layer' testing note is also out of date (tests/ now has ~35 files, e.g. test_declared_sources.py, test_policy.py), but that is not part of the gold. The doc to follow for checks is CONTRIBUTING.md (backed by pyproject.toml and .github/workflows/ci.yml). A second stale spot exists: .agent/architecture.md line 58 still states archolith-mcp-framework>=0.2,<0.3 while pyproject.toml requires >=0.3.0 (used in t5)."
+}

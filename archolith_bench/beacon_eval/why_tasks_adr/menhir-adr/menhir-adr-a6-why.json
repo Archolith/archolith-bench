@@ -1,0 +1,63 @@
+{
+ "repo": "menhir-adr",
+ "task_id": "menhir-adr-a6-why",
+ "kind": "why",
+ "prompt": "Menhir derives the canonical self identity for a namespace deterministically (self_uuid_for_namespace) and binds it only through an explicit declaration, instead of treating extracted entities named 'user' as the human. Why not just resolve self by the name 'user'? And is this binding enforced in production today?",
+ "reviewed": true,
+ "gold": {
+  "docs": [
+   ".agent/adr/0010-deterministic-canonical-self-identity.md"
+  ],
+  "files": [],
+  "acceptable_files": [],
+  "commands": [],
+  "allowed_flags": [],
+  "guardrails": [],
+  "points": [
+   [
+    "a name is not authority",
+    "the name user carries no provenance",
+    "software actors are named user",
+    "names prove nothing"
+   ],
+   [
+    "probabilistic resolution forked the identity",
+    "many entities named user",
+    "one identity fragmented"
+   ],
+   [
+    "enforcement is default off",
+    "not activated in production",
+    "activation is an open owner decision",
+    "accepted target not enforced"
+   ]
+  ],
+  "verdict": "",
+  "risky": []
+ },
+ "gold_citations": [
+  {
+   "item": "a name is not authority",
+   "path": ".agent/adr/0010-deterministic-canonical-self-identity.md",
+   "line_start": 76,
+   "line_end": 76,
+   "quote": "Rejected. Software actors, account concepts, and third-person references legitimately use that"
+  },
+  {
+   "item": "probabilistic resolution forked the identity",
+   "path": ".agent/adr/0010-deterministic-canonical-self-identity.md",
+   "line_start": 16,
+   "line_end": 16,
+   "quote": "one identity fragmented across the graph."
+  },
+  {
+   "item": "enforcement is default off",
+   "path": ".agent/adr/0010-deterministic-canonical-self-identity.md",
+   "line_start": 70,
+   "line_end": 70,
+   "quote": "does not activate `enforce`."
+  }
+ ],
+ "memory_citations": [],
+ "notes": "Answer is written in .agent/adr/0010-deterministic-canonical-self-identity.md at Menhir fdaf56bf (ADR merged in #133, 2026-09-24). Gold points and quotes are verbatim from the ADR; drafted by Claude from the ADR text only, approved by the owner 2026-09-25."
+}

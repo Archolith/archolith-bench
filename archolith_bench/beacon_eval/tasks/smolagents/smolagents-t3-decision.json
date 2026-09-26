@@ -1,0 +1,141 @@
+{
+  "repo": "smolagents",
+  "task_id": "smolagents-t3-decision",
+  "kind": "decision",
+  "prompt": "You are about to change how `RemotePythonExecutor` passes variables into the remote sandbox and reads the final answer back. What serialization policy is currently in force for that channel, what did it replace or rule out, and which files state and test that policy?",
+  "reviewed": true,
+  "gold": {
+    "docs": [],
+    "files": [
+      "src/smolagents/serialization.py",
+      "src/smolagents/remote_executors.py",
+      "tests/test_serialization.py",
+      "tests/test_remote_executors.py"
+    ],
+    "acceptable_files": [
+      "docs/source/en/tutorials/secure_code_execution.md",
+      "docs/source/en/reference/python_executors.md"
+    ],
+    "commands": [],
+    "allowed_flags": [],
+    "guardrails": [],
+    "points": [
+      [
+        "safe JSON by default",
+        "allow_pickle defaults to False",
+        "allow_pickle default False",
+        "JSON-only by default",
+        "defaults to safe JSON"
+      ],
+      [
+        "pickle is legacy",
+        "legacy pickle fallback",
+        "pickle only when allow_pickle True",
+        "pickle is opt-in",
+        "opt in to pickle"
+      ],
+      [
+        "pickle data rejected",
+        "rejects pickle data",
+        "raises SerializationError",
+        "pickle payloads rejected"
+      ],
+      [
+        "safe: and pickle: prefixes",
+        "prefix distinguishes safe and pickle",
+        "safe: prefix and pickle: prefix",
+        "prefix distinguishes safe pickle",
+        "safe prefix pickle prefix"
+      ]
+    ],
+    "verdict": "",
+    "risky": []
+  },
+  "gold_citations": [
+    {
+      "item": "src/smolagents/serialization.py",
+      "path": "src/smolagents/serialization.py",
+      "line_start": 18,
+      "line_end": 27,
+      "quote": "Safe serialization module for remote executor communication."
+    },
+    {
+      "item": "src/smolagents/remote_executors.py",
+      "path": "src/smolagents/remote_executors.py",
+      "line_start": 37,
+      "line_end": 37,
+      "quote": "from .serialization import SafeSerializer, SerializationError"
+    },
+    {
+      "item": "tests/test_serialization.py",
+      "path": "tests/test_serialization.py",
+      "line_start": 60,
+      "line_end": 60,
+      "quote": "def test_safe_mode_blocks_pickle_deserialization(self):"
+    },
+    {
+      "item": "tests/test_remote_executors.py",
+      "path": "tests/test_remote_executors.py",
+      "line_start": 61,
+      "line_end": 62,
+      "quote": "def test_send_variables_allow_pickle_handles_prefixed_payload(self):"
+    },
+    {
+      "item": "safe JSON by default",
+      "path": "src/smolagents/serialization.py",
+      "line_start": 24,
+      "line_end": 26,
+      "quote": "defaults to safe JSON-only serialization"
+    },
+    {
+      "item": "safe JSON by default",
+      "path": "src/smolagents/remote_executors.py",
+      "line_start": 60,
+      "line_end": 61,
+      "quote": "- `False` (default, recommended): Only safe JSON serialization is used."
+    },
+    {
+      "item": "safe JSON by default",
+      "path": "src/smolagents/remote_executors.py",
+      "line_start": 74,
+      "line_end": 74,
+      "quote": "allow_pickle: bool = False,"
+    },
+    {
+      "item": "pickle is legacy",
+      "path": "src/smolagents/remote_executors.py",
+      "line_start": 62,
+      "line_end": 62,
+      "quote": "- `True` (legacy mode): Tries safe JSON serialization first, falls back to pickle with warning if needed."
+    },
+    {
+      "item": "pickle is legacy",
+      "path": "src/smolagents/remote_executors.py",
+      "line_start": 64,
+      "line_end": 65,
+      "quote": "**Security Warning:** Pickle deserialization can execute arbitrary code. Only set `allow_pickle=True`"
+    },
+    {
+      "item": "pickle data rejected",
+      "path": "src/smolagents/serialization.py",
+      "line_start": 315,
+      "line_end": 320,
+      "quote": "\"Pickle data rejected: allow_pickle=False requires safe-only data. \""
+    },
+    {
+      "item": "pickle data rejected",
+      "path": "src/smolagents/remote_executors.py",
+      "line_start": 328,
+      "line_end": 329,
+      "quote": "raise SerializationError(\"Pickle data rejected: allow_pickle=False\")"
+    },
+    {
+      "item": "safe: and pickle: prefixes",
+      "path": "src/smolagents/serialization.py",
+      "line_start": 51,
+      "line_end": 53,
+      "quote": "The serializer uses a prefix system to distinguish between formats:"
+    }
+  ],
+  "notes": "The policy is stated in module/class docstrings and tests rather than in docs/source, so gold.docs is empty; the secure_code_execution tutorial covers the remote executors but does not mention serialization. The replaced approach is unconditional (and unprefixed, 'legacy format') pickle serialization, now only available behind allow_pickle=True with a FutureWarning."
+}

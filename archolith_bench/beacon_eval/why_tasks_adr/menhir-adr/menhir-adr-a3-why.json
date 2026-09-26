@@ -1,0 +1,62 @@
+{
+ "repo": "menhir-adr",
+ "task_id": "menhir-adr-a3-why",
+ "kind": "why",
+ "prompt": "Menhir's destructive graph operations (merge, unmerge, delete, erasure) first write a PREPARED row with recovery material to the SQLite sidecar, then mutate Neo4j, verify, and mark the row COMMITTED. A newcomer asks why Menhir doesn't simply mutate the graph and write telemetry afterwards. Why not?",
+ "reviewed": true,
+ "gold": {
+  "docs": [
+   ".agent/adr/0006-recoverable-sagas-for-cross-store-mutations.md"
+  ],
+  "files": [],
+  "acceptable_files": [],
+  "commands": [],
+  "allowed_flags": [],
+  "guardrails": [],
+  "points": [
+   [
+    "cannot share a transaction",
+    "no shared transaction",
+    "stores cannot share one transaction"
+   ],
+   [
+    "deletions became unrecoverable",
+    "observed data loss",
+    "degree-zero cleanup lost nodes",
+    "crash lost the only recovery record"
+   ],
+   [
+    "drift abstains to needs review",
+    "NEEDS_REVIEW instead of guessing",
+    "never guesses from partial state"
+   ]
+  ],
+  "verdict": "",
+  "risky": []
+ },
+ "gold_citations": [
+  {
+   "item": "cannot share a transaction",
+   "path": ".agent/adr/0006-recoverable-sagas-for-cross-store-mutations.md",
+   "line_start": 13,
+   "line_end": 13,
+   "quote": "The two stores cannot participate in one transaction."
+  },
+  {
+   "item": "deletions became unrecoverable",
+   "path": ".agent/adr/0006-recoverable-sagas-for-cross-store-mutations.md",
+   "line_start": 15,
+   "line_end": 15,
+   "quote": "the 2026-07-12 degree-zero cleanup made roughly two dozen deletions unrecoverable."
+  },
+  {
+   "item": "drift abstains to needs review",
+   "path": ".agent/adr/0006-recoverable-sagas-for-cross-store-mutations.md",
+   "line_start": 51,
+   "line_end": 51,
+   "quote": "`NEEDS_REVIEW`; it never guesses from partial state."
+  }
+ ],
+ "memory_citations": [],
+ "notes": "Answer is written in .agent/adr/0006-recoverable-sagas-for-cross-store-mutations.md at Menhir fdaf56bf (ADR merged in #133, 2026-09-24). Gold points and quotes are verbatim from the ADR; drafted by Claude from the ADR text only, approved by the owner 2026-09-25."
+}

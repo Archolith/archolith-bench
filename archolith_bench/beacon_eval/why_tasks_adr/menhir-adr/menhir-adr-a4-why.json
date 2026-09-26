@@ -1,0 +1,62 @@
+{
+ "repo": "menhir-adr",
+ "task_id": "menhir-adr-a4-why",
+ "kind": "why",
+ "prompt": "To answer questions like 'how many movies are on my watch list', a contributor proposes skipping Menhir's fold and View machinery and having the LLM count the matching memories at recall time. Why does Menhir fold events into Views instead?",
+ "reviewed": true,
+ "gold": {
+  "docs": [
+   ".agent/adr/0003-event-fold-view-projection-boundary.md"
+  ],
+  "files": [],
+  "acceptable_files": [],
+  "commands": [],
+  "allowed_flags": [],
+  "guardrails": [],
+  "points": [
+   [
+    "retrieval does not guarantee completeness",
+    "retrieval not complete or deduplicated",
+    "incomplete duplicated evidence"
+   ],
+   [
+    "LLM is not an arithmetic authority",
+    "model only at the language boundary",
+    "folds are deterministic not model",
+    "probabilistic interpretation stops at perception"
+   ],
+   [
+    "views never replace evidence",
+    "rebuildable from evidence",
+    "evidence is the source of truth"
+   ]
+  ],
+  "verdict": "",
+  "risky": []
+ },
+ "gold_citations": [
+  {
+   "item": "retrieval does not guarantee completeness",
+   "path": ".agent/adr/0003-event-fold-view-projection-boundary.md",
+   "line_start": 66,
+   "line_end": 66,
+   "quote": "Rejected. Retrieval does not guarantee completeness or deduplication, and repeated model reasoning"
+  },
+  {
+   "item": "LLM is not an arithmetic authority",
+   "path": ".agent/adr/0003-event-fold-view-projection-boundary.md",
+   "line_start": 71,
+   "line_end": 71,
+   "quote": "The model is useful at the language-to-event boundary, not as an arithmetic, replay, or"
+  },
+  {
+   "item": "views never replace evidence",
+   "path": ".agent/adr/0003-event-fold-view-projection-boundary.md",
+   "line_start": 53,
+   "line_end": 53,
+   "quote": "They never replace the evidence or event log that produced them."
+  }
+ ],
+ "memory_citations": [],
+ "notes": "Answer is written in .agent/adr/0003-event-fold-view-projection-boundary.md at Menhir fdaf56bf (ADR merged in #133, 2026-09-24). Gold points and quotes are verbatim from the ADR; drafted by Claude from the ADR text only, approved by the owner 2026-09-25."
+}

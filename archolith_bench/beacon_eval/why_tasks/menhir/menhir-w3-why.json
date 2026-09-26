@@ -1,0 +1,84 @@
+{
+  "repo": "menhir",
+  "task_id": "menhir-w3-why",
+  "kind": "why",
+  "prompt": "This is a history question. Menhir's entity and fact extraction runs through Graphiti's LLM combined extraction (_run_graphiti_combined_extraction in graphiti_extraction_patches.py). Replacing that step with a local GLiNER model to cut LLM cost was evaluated in September 2026 and not adopted. Why was a GLiNER replacement judged a poor idea?",
+  "reviewed": true,
+  "gold": {
+    "docs": [],
+    "files": [
+      "src/menhir/infrastructure/graphiti_extraction_patches.py"
+    ],
+    "acceptable_files": [],
+    "commands": [],
+    "allowed_flags": [],
+    "guardrails": [],
+    "points": [
+      [
+        "paraphrase contract mismatch",
+        "CombinedFact paraphrase mismatch",
+        "span triples do not match",
+        "fact paraphrase contract",
+        "span-triples mismatch"
+      ],
+      [
+        "dedupe dominates paid input",
+        "extraction small share of cost",
+        "dedupe is bigger cost",
+        "extraction only 17%",
+        "dedupe 62% of input"
+      ],
+      [
+        "torch wheelhouse footprint",
+        "PyTorch image footprint",
+        "heavy torch dependency",
+        "image size too large",
+        "offline image footprint"
+      ],
+      [
+        "invalidate calibrated extraction guards",
+        "calibrated guards invalidated",
+        "breaks calibrated extraction guards",
+        "calibrated guards would break"
+      ]
+    ],
+    "verdict": "",
+    "risky": []
+  },
+  "gold_citations": [
+    {
+      "item": "src/menhir/infrastructure/graphiti_extraction_patches.py",
+      "path": "src/menhir/infrastructure/graphiti_extraction_patches.py",
+      "line_start": 1556,
+      "line_end": 1556,
+      "quote": "async def _run_graphiti_combined_extraction("
+    }
+  ],
+  "memory_citations": [
+    {
+      "item": "paraphrase contract mismatch",
+      "episode_uuid": "56915258-9fa1-4254-953f-e9c0744ad233",
+      "created_at": "2026-09-11T04:27:43.328623Z",
+      "quote": "CombinedFact.fact paraphrase contract mismatch with RelEx span-triples"
+    },
+    {
+      "item": "dedupe dominates paid input",
+      "episode_uuid": "56915258-9fa1-4254-953f-e9c0744ad233",
+      "created_at": "2026-09-11T04:27:43.328623Z",
+      "quote": "extraction is only ~17% of paid input vs dedupe's ~62%"
+    },
+    {
+      "item": "torch wheelhouse footprint",
+      "episode_uuid": "56915258-9fa1-4254-953f-e9c0744ad233",
+      "created_at": "2026-09-11T04:27:43.328623Z",
+      "quote": "torch wheelhouse footprint in offline digest-pinned image (~1.5-2.5GB)"
+    },
+    {
+      "item": "invalidate calibrated extraction guards",
+      "episode_uuid": "56915258-9fa1-4254-953f-e9c0744ad233",
+      "created_at": "2026-09-11T04:27:43.328623Z",
+      "quote": "would invalidate calibrated extraction guards"
+    }
+  ],
+  "notes": "Repo search: grep -i 'gliner' over the whole checkout (src, docs, .agent, scripts, tests) returns nothing; grep for 'RelEx', 'span-triple', '62%', '17%' finds only unrelated hits (scripts/probe_scalar_extraction.py and enrichment_steps.py use 62% for other statistics). The analysis and bench plan live in the archolith workspace, not the menhir repo. Later memory: correction episode 64208afe (same day) fixes the model name and redefines the viable variant as a GLiNER-assisted entity-linking PREPASS (bench plan revs 1-3); it does not revive full replacement, so the replacement verdict stands. An answer that also mentions the prepass variant is fine but it is not a gold point. The episode's reasons 'unproven on conversational developer-memory entities' and the 4 GiB container correction are not required."
+}

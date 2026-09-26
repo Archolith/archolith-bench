@@ -1,5 +1,208 @@
 # archolith-bench Changelog
 
+## 2026-09-25 - Beacon eval: citation paths on case-sensitive file systems
+
+- `scoring.py`: `citation_location_validity` used to look up the lower-cased cited path, so every
+  location scored 0 on Linux. It now tries the path as cited, then a case-insensitive match, which
+  is what Windows already did. Gold matching still ignores case. Windows scores are unchanged:
+  17 saved runs rescore to their saved scores.
+- `tests/test_beacon_eval_citation_paths.py`: new.
+
+## 2026-09-25 - Beacon eval: churn fix, review follow-up
+
+Fixes from an independent review of e46aba7.
+
+- `runner.py`, seal:
+  - Checkouts now borrow objects from a per-pin seal repo (`<workdir>/seals/<name>-<commit12>`),
+    built once with the original `add --all` + commit (`core.autocrlf=false`) and packed. The
+    earlier version borrowed from the clone cache.
+  - The agent sees the same tree, index, `git status`, local config and log as the old seal,
+    checked on the real menhir-adr pin. Only the pin's objects are reachable; the earlier
+    version exposed later commits through the cache.
+- `runner.py`, change capture:
+  - Agent changes are detected by comparing file mtimes against the export (`git archive`
+    stamps every file with the commit time), so committed and gitignored files are captured.
+  - A rerun clears the earlier attempt's `changes.*` files.
+  - Saving changes and deleting the checkout no longer raise. A checkout that can't be fully
+    deleted gets a `checkout.partial` marker, and `rescore` rebuilds it.
+  - Git output is decoded as UTF-8, and a seal failure of any kind falls back to the copy seal.
+- `isolation.py`:
+  - A template is linked only when it holds a complete install.
+  - `mkdtemp` failures during template promotion no longer leak the run's home.
+  - The read-only removal handler tolerates files that are already gone.
+- Known limits:
+  - `rescore` fetches or clones when the cache lacks the pin.
+  - The disk floor checks only the workdir's volume, at admission.
+  - `extractall(filter=)` needs Python 3.11.4+.
+  - A kept checkout needs its seal repo.
+
+## 2026-09-25 - Beacon eval: cut per-run file churn
+
+- `runner.py`:
+  - `seal_checkout` commits the pin's own tree through git alternates on the clone cache
+    (about 20 `.git` files instead of one loose object per file). The checkout takes the
+    source's `core.autocrlf`/`core.eol`, so CRLF exports on Windows still match. Otherwise it
+    falls back to add/commit plus repack.
+  - After scoring, a run writes `pin.json` and `changes.status` (plus `changes.tar` and
+    `changes.deleted.json` when the agent changed anything), then deletes its checkout.
+    `--keep-checkouts` keeps it.
+  - `rescore` rebuilds deleted checkouts from those files; 17 real runs rescored identically
+    either way.
+  - `--min-free-gb` (default 15) starts no new run below that free space on the workdir's volume.
+- `isolation.py`:
+  - The first run that finishes OpenCode's config-dir install (~3,700 files) becomes a shared
+    template in `%TEMP%\beacon-eval-oc-deps-<key>`, and later runs link it with a junction.
+    With a fake provider, OpenCode installed nothing into a linked run and left the shared
+    copy unchanged.
+  - ripgrep is hard-linked into each run.
+  - Per-run homes are removed with read-only handling, so OpenCode's snapshot git objects
+    no longer leak into `%TEMP%`.
+- `tests/test_beacon_eval_churn.py`: new.
+
+## 2026-09-24 - Beacon eval: condition M over Menhir's stdio bridge
+
+- `isolation.py`, `runner.py`, `cli.py`: `--memory-stdio` (bridge command as JSON), `--memory-stdio-env`
+  and `--memory-stdio-key-var` run condition M through Menhir's stdio bridge, the local-stdio MVP's
+  supported interface, instead of remote MCP. The backend key reaches the bridge as an `{env:...}`
+  reference; `--memory-url` still names the backend for the readiness check.
+- `tests/test_beacon_eval.py`: the written config carries the key reference only.
+
+## 2026-09-24 - Beacon eval: stricter judge and why-gold fixes (owner decisions)
+
+- `judge.py`: the judge credits only the specific recorded reason, fact, decision, incident or
+  number, not a general principle that would fit many projects; one answer passage credits one point
+  (overlapping evidence for a later point is not met); `JUDGE_PROMPT_VERSION` (2) is part of the cache
+  key. The first pass credited generic reasoning (e.g. a repo-only answer got the w6 delegate incident).
+- `why_tasks/menhir/`: w2 retired to `why_tasks_retired/` (the code answers it: `list_todos` falls
+  back to 'open'); w4 keeps only point 1 and w7 drops point 2 (both answerable from the repo). The
+  why set is 7 tasks; the remaining citations still verify against the graph copy.
+- `cli.py`: the judged report lists only runs of the current task set.
+
+## 2026-09-24 - Beacon eval: resume a killed matrix
+
+- `runner.py`, `cli.py`: `beacon-eval run --resume` reuses saved runs that have an answer and no
+  error, counts their cost against the cap, and adds them to `results.jsonl` once; other runs are
+  run from scratch. Needed after the why matrix was killed for low memory at 44 of 48 runs.
+- `tests/test_beacon_eval.py`: reuse, rerun of a failed run, cap accounting and single logging.
+
+## 2026-09-24 - Beacon eval: LLM judge for "why" points (owner decision)
+
+- `archolith_bench/beacon_eval/judge.py` (new), `cli.py`, `report.py`: `beacon-eval judge` adds
+  `point_recall_judged` beside the deterministic `point_recall` (which is unchanged). Per gold point,
+  an OpenAI model (default `gpt-6-luna`, owner decision; no temperature, as a reasoning model) sees the question, the point, its cited memory quotes
+  and the answer's findings and plan, never the condition or run. A "met" verdict counts only when
+  its evidence is copied from the answer. Verdicts are cached per run and answer; a 429 stops without
+  retry and `--judge-budget-usd` (default $0.10) is checked before each call. Writes
+  `report-judged.md`. Reason: word-set matching missed correct explanations worded differently.
+- `tests/test_beacon_eval.py`: grounded verdicts, cache reuse, rate-limit and cap stops.
+
+## 2026-09-24 - Beacon eval: condition M (Menhir memory MCP)
+
+- `archolith_bench/beacon_eval/`: opt-in condition `M` gives the agent A's tools plus one remote
+  MCP server, Menhir (`--memory-url`, `--memory-key-file`). The key reaches the OpenCode process as
+  an environment variable referenced by `{env:...}` in the config, so it is never written to disk,
+  and it is redacted from saved run files. Before any run, the matrix checks `/api/ready` and
+  stops at zero cost unless the backend reports `reads_ready` (a degraded backend still lists its
+  tools, so M would otherwise run as A with failing recalls).
+- Intended use: a local Menhir backend in benchmark mode over a read-only graph copy, with a
+  read-only-tier key (21 read tools, no write tools).
+- `tests/test_beacon_eval.py`: config shape, ready check, stop-before-run, and missing settings.
+
+## 2026-09-24 - Beacon eval: Menhir "why" tasks
+
+- `archolith_bench/beacon_eval/why_tasks/menhir/` (new): eight owner-approved "why" tasks (kind `why`)
+  whose answers are in Menhir's recorded memory but not in the repository at `9432a60d`. Each gold
+  point cites an episode uuid and a verbatim quote (`memory_citations`), verified against a read-only
+  copy of the restored graph. Kept outside `tasks/` so the default 20-task matrix is unchanged;
+  `beacon-eval --task-set why` runs them (setups A, B, C score as-is; `point_recall` comes from
+  `findings`). A memory-backed setup is not wired: Menhir's Beacon evidence provider carries
+  structure only, no episodes.
+
+## 2026-09-24 - Beacon eval gold for Beacon, llm and smolagents
+
+- `archolith_bench/beacon_eval/tasks/{beacon,llm,smolagents}/` (new): five grounded tasks per repository
+  (docs and files, commands and rules, a decision, a stale document, a first plan), drafted by fresh
+  agents with no Beacon context from exports without `beacon.yaml`, peer-reviewed by Codex (11
+  findings applied with owner approval) and owner-approved. Beacon is pinned to `27e2fad`. Every task
+  grounds cleanly at its pin; changed wordings were checked to accept a correct answer and reject a
+  wrong one. With Menhir's five, the evaluation has 20 tasks.
+
+## 2026-09-23 - Beacon eval: Menhir pinned to the canonical-docs merge
+
+- `archolith_bench/beacon_eval/repos.json`: Menhir pin `9100d0db` -> `9432a60d` (Menhir #140: Beacon
+  can search 25 orientation docs). Only `beacon.yaml` and the changelogs changed; all five Menhir gold
+  tasks still ground cleanly at the new commit.
+
+## 2026-09-23 - Beacon eval harness: isolation, stops and accounting fixes from review
+
+- `archolith_bench/beacon_eval/isolation.py`: each run gets a temp `XDG_CONFIG_HOME` holding only
+  the model's provider (plus Beacon in B), with `OPENCODE_*` overrides dropped and Claude Code
+  fallbacks disabled. The old config-dir copy still loaded the global `AGENTS.md` and plugins.
+- `archolith_bench/beacon_eval/runner.py`: checkouts are sealed as their own git root and run with
+  `PWD` set to the checkout (an inherited `PWD` rooted OpenCode in the bench repo and loaded its
+  `AGENTS.md`); the prompt goes on stdin to the real `opencode.exe` with `--pure` and a fixed
+  `--title` (the title request's tokens were never reported); events are streamed and the run is
+  killed on a 429 in error events or stderr, or past a per-run token reserve (default 400k); a run
+  with no usage stops the matrix; tool calls count once; totals include cache tokens; raw
+  `events.jsonl`, `stderr.log` and `prompt.txt` are kept. Every condition gets the same tool line
+  and C's manifest follows the question.
+- `archolith_bench/beacon_eval/models.py`, `cli.py`: cache and reported-total token fields;
+  `--run-reserve-tokens`.
+- `tests/test_beacon_eval.py`: tests for each case above. Scoring and gold unchanged; no paid runs.
+- `scoring.py`, `models.py` (owner decision: scoring 1A): a command matches when its tokens start
+  with the gold command's and every extra token is a plain argument; an added flag fails unless the
+  task's optional `gold.allowed_flags` lists it.
+- `scoring.py`, `models.py`, `grounding.py` (owner decision: scoring 2A): a gold guardrail may list
+  accepted wordings and is met when one answer entry holds every word of any wording, in any order;
+  words no longer add up across entries. The first wording is the cited id. Negation is not detected.
+- `scoring.py` (owner decision: scoring 3A): risky items are checked in `commands` and in each
+  `plan` step; a step does not count when never/don't/do not/avoid/not/instead of precedes the item.
+- `scoring.py`, `models.py`, `grounding.py` (owner decision: scoring 4A): optional
+  `gold.acceptable_files` do not lower file precision and do not count for recall; grounding checks
+  that each exists.
+- `scoring.py`, `models.py`, `report.py` (owner decision: scoring 5B): `citation_validity` is now
+  `citation_location_validity` and needs a line range; new `evidence_recall` is the share of distinct
+  gold citation spans overlapped by an answer citation in the same file (a lower bound).
+- `runner.py`, `models.py`, `scoring.py`, `grounding.py`, `report.py` (owner decision: scoring 6A):
+  the answer format gains `findings` for every condition; optional `gold.points` (accepted wordings,
+  cited like guardrails) are met by one `findings` or `plan` entry; new `point_recall`.
+- `grounding.py`: an acceptable file may be a new path whose folder exists (an archive destination).
+- `tasks/menhir/` (owner-approved gold revisions): t1 acceptable adapter and producer-test files; t2
+  follows the graph-query test policy; t3 scores the runtime owner and its predecessor; t5 scores the
+  archive destination, index, changelog and staging steps. t4 unchanged. All five ground at 9100d0db.
+- `runner.py` (owner decision): default model `deepseek/deepseek-flash` (V4.1 Flash); OpenCode 1.18.31's
+  catalog no longer offers `deepseek-v4-flash`, so the first dry-run attempt stopped at 0 tokens.
+- `runner.py`: run directory and B's manifest path are absolute; a relative `--workdir` made OpenCode
+  resolve `PWD` inside the checkout (second dry-run attempt stopped at 0 tokens).
+- `isolation.py`, `runner.py`, `cli.py`: `--env-file` passes `*_API_KEY` values to the OpenCode process
+  only, so built-in providers (e.g. `openai/gpt-6-luna`) work without a config block; any key value
+  echoed into a saved run file is redacted.
+- `runner.py`, `models.py`, `report.py`, `cli.py`: `--budget-usd` / `--run-reserve-usd` cap spend from
+  OpenCode's per-step cost (a run with no cost stops the matrix; token limits are off unless given);
+  the report shows total and median cost. Default model `openai/gpt-6-luna` (owner decision).
+- `runner.py`, `cli.py`: token limits can be off (None); dollar mode no longer uses a huge placeholder
+  that tripped the cap check after the first run.
+- `scoring.py`: path cleanup strips only a leading `./` (it used to strip `.agent/` to `agent/`, failing
+  every dot-folder citation) and drops a trailing "(note)"; `runner.py`, `cli.py`: `beacon-eval rescore`
+  recomputes scores from saved answers with no model calls.
+- `scoring.py` (owner-approved): labelled entries ("Label: path") yield their path and grouped answers
+  are flattened; t5 gold allows `--repository`; t3 gold drops its guardrails (its points cover them).
+- `runner.py`, `isolation.py`, `__init__.py`, `cli.py`, `models.py`: a session OpenCode ends right after a
+  tool-calls step (7/45 Luna runs) is resumed with `--session` up to twice (`resumes` recorded); new
+  opt-in condition D runs Beacon MCP with every built-in tool off.
+
+## 2026-09-23 - Beacon agent-task evaluation harness (P3 step 1)
+
+- `archolith_bench/beacon_eval/` (new): task and gold schema (`models.py`), deterministic scorer
+  (`scoring.py`), per-run OpenCode isolation with no MCP servers or Beacon only (`isolation.py`,
+  ported from cth.harness `createStrippedConfig`), the `opencode run --format json` runner with token
+  accounting, a 20M-token cap and stop-at-first-429 (`runner.py`), a Markdown report (`report.py`),
+  pinned repositories (`repos.json`: menhir, beacon, simonw/llm, huggingface/smolagents).
+- `archolith_bench/cli.py`: `archolith-bench beacon-eval plan|run`.
+- `tests/test_beacon_eval.py`: offline tests with a stub in place of OpenCode (scoring, events,
+  budget, prompts, isolation, rate-limit and budget stops).
+- `.agent/scripts-index.md`: indexed as a paid instrument. No tasks or gold answers yet; no runs made.
+
 ## 2026-08-10 - Preserve typed recall-packet evaluation tools and review artifacts
 
 Added durable noncanonical, recall-only instruments for comparing Menhir's full/query-filtered

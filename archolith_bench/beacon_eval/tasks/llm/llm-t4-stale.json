@@ -1,0 +1,142 @@
+{
+  "repo": "llm",
+  "task_id": "llm-t4-stale",
+  "kind": "stale_doc",
+  "prompt": "The root `AGENTS.md` tells agents to set up a development environment with `pip install -e '.[test]'` and then run `pytest`. Before you follow it to set up the repository and run the test suite, decide whether its setup instructions are current or superseded given the rest of the repository, and say which document and commands you should use instead.",
+  "reviewed": true,
+  "gold": {
+    "docs": [
+      "docs/contributing.md",
+      "pyproject.toml"
+    ],
+    "files": [
+      "AGENTS.md"
+    ],
+    "acceptable_files": [
+      "Justfile",
+      ".github/workflows/test.yml",
+      "docs/requirements.txt"
+    ],
+    "commands": [
+      "uv run pytest"
+    ],
+    "allowed_flags": [
+      "-x",
+      "-q",
+      "-k",
+      "-vv"
+    ],
+    "guardrails": [],
+    "points": [
+      [
+        "no test extra",
+        "test extra does not exist",
+        "no [test] extra",
+        "no optional-dependencies",
+        "no test optional dependencies"
+      ],
+      [
+        "dev dependency group",
+        "dependency group dev",
+        "--group dev",
+        "dependency-groups"
+      ],
+      [
+        "use docs/contributing.md",
+        "contributing.md instead",
+        "follow contributing.md"
+      ]
+    ],
+    "verdict": "superseded",
+    "risky": [
+      ".[test]"
+    ]
+  },
+  "gold_citations": [
+    {
+      "item": "docs/contributing.md",
+      "path": "docs/contributing.md",
+      "line_start": 4,
+      "line_end": 8,
+      "quote": "To contribute to this tool, first checkout the code. Then run the tests with `uv run`:"
+    },
+    {
+      "item": "pyproject.toml",
+      "path": "pyproject.toml",
+      "line_start": 45,
+      "line_end": 49,
+      "quote": "[dependency-groups]"
+    },
+    {
+      "item": "AGENTS.md",
+      "path": "AGENTS.md",
+      "line_start": 7,
+      "line_end": 10,
+      "quote": "pip install -e '.[test]'"
+    },
+    {
+      "item": "uv run pytest",
+      "path": "docs/contributing.md",
+      "line_start": 5,
+      "line_end": 8,
+      "quote": "uv run pytest"
+    },
+    {
+      "item": "uv run pytest",
+      "path": "Justfile",
+      "line_start": 4,
+      "line_end": 6,
+      "quote": "uv run pytest {{options}}"
+    },
+    {
+      "item": "no test extra",
+      "path": "pyproject.toml",
+      "line_start": 27,
+      "line_end": 46,
+      "quote": "[dependency-groups]"
+    },
+    {
+      "item": "dev dependency group",
+      "path": "pyproject.toml",
+      "line_start": 45,
+      "line_end": 49,
+      "quote": "dev = ["
+    },
+    {
+      "item": "dev dependency group",
+      "path": ".github/workflows/test.yml",
+      "line_start": 23,
+      "line_end": 25,
+      "quote": "pip install . --group dev"
+    },
+    {
+      "item": "superseded",
+      "path": "docs/contributing.md",
+      "line_start": 4,
+      "line_end": 8,
+      "quote": "Then run the tests with `uv run`:"
+    },
+    {
+      "item": "superseded",
+      "path": "pyproject.toml",
+      "line_start": 45,
+      "line_end": 49,
+      "quote": "[dependency-groups]"
+    },
+    {
+      "item": "use docs/contributing.md",
+      "path": "docs/contributing.md",
+      "line_start": 1,
+      "line_end": 4,
+      "quote": "# Contributing"
+    },
+    {
+      "item": ".[test]",
+      "path": "AGENTS.md",
+      "line_start": 9,
+      "line_end": 9,
+      "quote": "pip install -e '.[test]'"
+    }
+  ],
+  "notes": "pyproject.toml (lines 1-90) has no [project.optional-dependencies] table at all, so `.[test]` names a non-existent extra; the test tooling (pytest, pytest-recording, syrupy, httpx2-pytest, etc.) lives in the `dev` dependency group (lines 45-70), which uv includes by default and CI installs with `pip install . --group dev`. docs/contributing.md and the Justfile use `uv run pytest`. AGENTS.md's docs-build section (`cd docs; pip install -r requirements.txt; make html`) still refers to real files, but contributing.md prescribes `just docs`. Absence of the extra is shown by the full pyproject.toml rather than a single quotable line."
+}
