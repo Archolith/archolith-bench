@@ -14,7 +14,6 @@ import os
 import socket
 import subprocess
 import sys
-import threading
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -25,13 +24,14 @@ import pytest
 
 from archolith_bench.beacon_eval import CONDITIONS, DEFAULT_CONDITIONS
 from archolith_bench.beacon_eval import runner as runner_mod
-from archolith_bench.beacon_eval.isolation import beacon_remote_server
+from archolith_bench.beacon_eval.isolation import beacon_remote_server, empty_cwd
 from archolith_bench.beacon_eval.models import Gold, RepoPin, Task
 from archolith_bench.beacon_eval.report import render
 from archolith_bench.beacon_eval.runner import (
     BUILTIN_TOOLS,
     HTTP_READY_LINE,
     MCP_HTTP_READY_LINE,
+    SERVER_BIND_ATTEMPTS,
     SERVER_LOG,
     RunnerConfig,
     ServerNotReady,
@@ -41,9 +41,11 @@ from archolith_bench.beacon_eval.runner import (
     build_prompt,
     disabled_tools,
     export_beacon_snapshot,
+    off_origin_fetches,
     pick_free_port,
     rescore,
     run_matrix,
+    webfetch_hosts,
 )
 
 GOLD = Gold()
@@ -56,7 +58,9 @@ BEACON_SRC = os.environ.get("BEACON_EVAL_BEACON_SRC", "")
 BEACON_PYTHON = os.environ.get("BEACON_EVAL_BEACON_PYTHON", sys.executable)
 
 #: A stand-in server for lifecycle tests: binds the given host/port, prints its
-#: ready line, then serves (mode "ready") or stalls (modes "decoy"/"silent").
+#: ready line, then serves (mode "ready"/"selfport"/"nourl") or stalls (modes
+#: "decoy"/"silent"). Mode "selfport" is given port 0 and reports the port the OS
+#: picked on a ``url=http://host:port`` ready line; "nourl" omits it.
 STAND_IN = r"""
 import socket
 import sys
@@ -70,8 +74,38 @@ if mode == "silent":
     time.sleep(120)
 server = socket.socket()
 server.bind((host, port))
+if port == 0:
+    port = server.getsockname()[1]
 server.listen(4)
-print(f"STAND-IN ready on {host}:{port}", file=sys.stderr, flush=True)
+if mode == "nourl":
+    print(f"STAND-IN ready on {host}:{port}", file=sys.stderr, flush=True)
+else:
+    print(f"STAND-IN ready url=http://{host}:{port}", file=sys.stderr, flush=True)
+while True:
+    conn, _ = server.accept()
+    conn.close()
+"""
+
+#: A stand-in that refuses to start like Beacon's HTTP servers do: it exits with
+#: Beacon's ``http_bind_failed`` code (every start for "always-fail", the first for
+#: "fail-first"), counting its starts in a file. "serve" binds and serves.
+BINDFAIL_STAND_IN = r"""
+import socket
+import sys
+
+host, port, counter_path, mode = sys.argv[1], int(sys.argv[2]), sys.argv[3], sys.argv[4]
+count = int(open(counter_path, encoding="utf-8").read() or "0") + 1
+with open(counter_path, "w", encoding="utf-8") as handle:
+    handle.write(str(count))
+print(f"STAND-IN start {count} on port {port}", file=sys.stderr, flush=True)
+if mode == "always-fail" or (mode == "fail-first" and count == 1):
+    print("[beacon] error http_bind_failed: could not bind loopback HTTP server",
+          file=sys.stderr, flush=True)
+    sys.exit(2)
+server = socket.socket()
+server.bind((host, port))
+server.listen(4)
+print("STAND-IN ready", file=sys.stderr, flush=True)
 while True:
     conn, _ = server.accept()
     conn.close()
@@ -207,25 +241,27 @@ def test_port_selection_skips_bound_ports() -> None:
         held.close()
 
 
-def test_port_selection_is_distinct_under_concurrency() -> None:
-    picked: list[int] = []
-    errors: list[BaseException] = []
-    barrier = threading.Barrier(8)
-
-    def pick() -> None:
-        barrier.wait()
-        try:
-            picked.append(pick_free_port())
-        except BaseException as exc:  # noqa: BLE001 - reported below
-            errors.append(exc)
-
-    threads = [threading.Thread(target=pick) for _ in range(8)]
-    for thread in threads:
-        thread.start()
-    for thread in threads:
-        thread.join()
-    assert not errors
-    assert len(set(picked)) == len(picked) == 8
+def test_readiness_needs_the_server_s_own_ready_line_not_a_foreign_listener(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The dropped port-accepts shortcut would yield here: something listens, but it is
+    not our server, and the child never prints its ready line."""
+    held = socket.socket()
+    try:
+        held.bind(("127.0.0.1", 0))
+        held.listen(1)
+        taken = held.getsockname()[1]
+        monkeypatch.setattr(runner_mod, "pick_free_port", lambda: taken)
+        script = _stand_in(tmp_path)
+        with pytest.raises(ServerNotReady) as excinfo:
+            with beacon_http_process(
+                [sys.executable, str(script), "127.0.0.1", "{port}", "silent"],
+                tmp_path / SERVER_LOG, "NEVER PRINTED", timeout_s=2,
+            ):
+                pytest.fail("a foreign listener satisfied readiness")
+    finally:
+        held.close()
+    assert "was not ready within 2s" in str(excinfo.value)
 
 
 def test_the_server_is_stopped_when_the_body_raises(tmp_path: Path) -> None:
@@ -271,6 +307,60 @@ def test_an_exited_server_fails_with_the_stderr_tail(tmp_path: Path) -> None:
     assert "exited" in str(excinfo.value) and "snapshot blocked" in str(excinfo.value)
 
 
+def test_condition_h_reads_the_port_the_server_picked(tmp_path: Path) -> None:
+    """``--port 0``: the stand-in binds 0 itself and reports the port on its ready line."""
+    script = _stand_in(tmp_path)
+    log = tmp_path / SERVER_LOG
+    with beacon_http_process(
+        [sys.executable, str(script), "127.0.0.1", "0", "selfport"], log, "STAND-IN ready"
+    ) as port:
+        assert port > 0 and _port_accepts(port)
+        assert f"url=http://127.0.0.1:{port}" in log.read_text(encoding="utf-8")
+
+
+def test_a_ready_line_without_a_port_is_a_failure(tmp_path: Path) -> None:
+    script = _stand_in(tmp_path)
+    with pytest.raises(ServerNotReady, match="without a url=http://127.0.0.1"):
+        with beacon_http_process(
+            [sys.executable, str(script), "127.0.0.1", "0", "nourl"],
+            tmp_path / SERVER_LOG, "STAND-IN ready",
+        ):
+            pytest.fail("a ready line without a port cannot serve condition H")
+
+
+def test_a_bind_failure_is_retried_on_a_fresh_port(tmp_path: Path) -> None:
+    """Condition R cannot ask the OS for a port; a lost race costs one start, not the run."""
+    script = tmp_path / "bindfail_stand_in.py"
+    counter = tmp_path / "starts.txt"
+    script.write_text(BINDFAIL_STAND_IN, encoding="utf-8")
+    counter.write_text("0", encoding="utf-8")
+    log = tmp_path / SERVER_LOG
+    with beacon_http_process(
+        [sys.executable, str(script), "127.0.0.1", "{port}", str(counter), "fail-first"],
+        log, "STAND-IN ready",
+    ) as port:
+        assert port > 0 and _port_accepts(port)
+    assert counter.read_text(encoding="utf-8") == "2"
+    text = log.read_text(encoding="utf-8")
+    assert "http_bind_failed" in text
+    assert "start 1 on port" in text and f"start 2 on port {port}" in text
+
+
+def test_bind_failures_stop_after_three_attempts(tmp_path: Path) -> None:
+    script = tmp_path / "bindfail_stand_in.py"
+    counter = tmp_path / "starts.txt"
+    script.write_text(BINDFAIL_STAND_IN, encoding="utf-8")
+    counter.write_text("0", encoding="utf-8")
+    with pytest.raises(ServerNotReady) as excinfo:
+        with beacon_http_process(
+            [sys.executable, str(script), "127.0.0.1", "{port}", str(counter), "always-fail"],
+            tmp_path / SERVER_LOG, "STAND-IN ready",
+        ):
+            pytest.fail("a server that never binds cannot become ready")
+    assert counter.read_text(encoding="utf-8") == str(SERVER_BIND_ATTEMPTS) == "3"
+    assert "http_bind_failed" in str(excinfo.value)
+
+
 def test_managed_servers_bind_nothing_but_loopback(tmp_path: Path) -> None:
     config = RunnerConfig(workdir=tmp_path, beacon_python="py", opencode_cmd=["x"])
     manifest, snapshot = tmp_path / "m.yaml", tmp_path / "s.json"
@@ -280,9 +370,14 @@ def test_managed_servers_bind_nothing_but_loopback(tmp_path: Path) -> None:
     for condition, subcommand in (("H", "serve-http"), ("R", "serve")):
         cmd, ready_line, _env = _http_server_spec(config, condition, manifest, snapshot)
         assert cmd[cmd.index("--host") + 1] == "127.0.0.1"
-        assert "0.0.0.0" not in cmd and "{port}" in cmd
+        assert "0.0.0.0" not in cmd
         assert ("serve-http" if condition == "H" else "--transport") in cmd
         assert ready_line == (HTTP_READY_LINE if condition == "H" else MCP_HTTP_READY_LINE)
+    h_cmd, _ready, _env = _http_server_spec(config, "H", manifest, snapshot)
+    # H lets the OS pick the port; R's port is picked here and retried on a bind failure.
+    assert h_cmd[h_cmd.index("--port") + 1] == "0" and "{port}" not in h_cmd
+    r_cmd, _ready, _env = _http_server_spec(config, "R", manifest, snapshot)
+    assert "{port}" in r_cmd
 
 
 # ---------------------------------------------------------------------------
@@ -291,10 +386,25 @@ def test_managed_servers_bind_nothing_but_loopback(tmp_path: Path) -> None:
 
 STUB = r"""
 import json, os, sys
+
+def git_free(path):
+    path = os.path.abspath(path)
+    while True:
+        if os.path.exists(os.path.join(path, ".git")):
+            return False
+        parent = os.path.dirname(path)
+        if parent == path:
+            return True
+        path = parent
+
 prompt = sys.stdin.read()
 home = os.environ.get("XDG_CONFIG_HOME", "")
 config = json.load(open(os.path.join(home, "opencode", "opencode.json"), encoding="utf-8"))
 beacon = config.get("mcp", {}).get("beacon", {})
+url = os.environ.get("STUB_WEBFETCH_URL", "")
+if url:
+    print(json.dumps({"type": "tool_use", "part": {"type": "tool", "tool": "webfetch",
+                      "state": {"status": "completed", "input": {"url": url}}}}))
 answer = {
     "docs": [], "files": [], "commands": [], "guardrails": [], "verdict": "",
     "plan": [], "citations": [],
@@ -305,6 +415,8 @@ answer = {
         "beacon_url": beacon.get("url", ""),
         "http_paragraph": "served over HTTP at" in prompt,
         "config_keys": sorted(config),
+        "cwd": os.getcwd(),
+        "cwd_git_free": git_free(os.getcwd()),
     },
 }
 print(json.dumps({"type": "text", "part": {"type": "text", "text": "```json\n" + json.dumps(answer) + "\n```"}}))
@@ -361,11 +473,14 @@ def stub_harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     return config, _pin(_repo(tmp_path)), started, stopped
 
 
-def test_h_and_r_get_server_tools_prompt_and_lifecycle(stub_harness, tmp_path: Path) -> None:
+def test_h_and_r_get_server_tools_prompt_and_lifecycle(stub_harness, tmp_path: Path,
+                                                       monkeypatch: pytest.MonkeyPatch) -> None:
     config, pin, started, stopped = stub_harness
+    monkeypatch.setenv("STUB_WEBFETCH_URL", f"http://127.0.0.1:{FIXED_PORT}/.well-known/archolith-beacon")
     results, stopped_why = run_matrix(config, {"demo": pin}, [TASK], ("A", "D", "H", "R"))
     assert stopped_why == "" and all(r.answer is not None for r in results)
     records = {r.condition: r.answer["record"] for r in results}
+    by_condition = {r.condition: r for r in results}
 
     # Tool lists: H keeps only webfetch; R is like D; A keeps everything.
     assert records["A"]["tools_off"] == []
@@ -387,6 +502,24 @@ def test_h_and_r_get_server_tools_prompt_and_lifecycle(stub_harness, tmp_path: P
     d_prompt = (config.workdir / "runs" / f"demo-{TASK.task_id}-D-1" / "prompt.txt").read_text(encoding="utf-8")
     assert "served over HTTP" not in d_prompt
 
+    # Working directories: H and R run from a fresh empty temp directory outside every git
+    # repository (removed after the run); A and D still run inside the sealed checkout.
+    runs = config.workdir / "runs"
+    for condition in ("A", "D"):
+        checkout = (runs / f"demo-{TASK.task_id}-{condition}-1" / "checkout").resolve()
+        assert Path(records[condition]["cwd"]).resolve() == checkout
+        assert records[condition]["cwd_git_free"] is False  # the checkout is its own git repo
+    for condition in ("H", "R"):
+        checkout = (runs / f"demo-{TASK.task_id}-{condition}-1" / "checkout").resolve()
+        cwd = Path(records[condition]["cwd"]).resolve()
+        assert cwd != checkout and records[condition]["cwd_git_free"] is True
+        assert not cwd.exists()  # it was the run's temp working directory, now removed
+
+    # The H audit sees the managed origin and nothing else; no other condition is audited.
+    assert by_condition["H"].error == ""
+    assert by_condition["H"].fetched_hosts == [f"127.0.0.1:{FIXED_PORT}"]
+    assert by_condition["A"].fetched_hosts == [] and by_condition["R"].fetched_hosts == []
+
     # The managed server runs for exactly H and R, loopback-only, with a run-dir log.
     assert len(started) == len(stopped) == 2
     for cmd, ready_line, log_name in started:
@@ -394,7 +527,9 @@ def test_h_and_r_get_server_tools_prompt_and_lifecycle(stub_harness, tmp_path: P
         assert log_name == SERVER_LOG
     by_ready = {ready: cmd for cmd, ready, _ in started}
     assert by_ready[HTTP_READY_LINE][by_ready[HTTP_READY_LINE].index("serve-http") + 1] == "--manifest"
+    assert by_ready[HTTP_READY_LINE][by_ready[HTTP_READY_LINE].index("--port") + 1] == "0"
     assert by_ready[MCP_HTTP_READY_LINE][by_ready[MCP_HTTP_READY_LINE].index("--transport") + 1] == "http"
+    assert "{port}" in by_ready[MCP_HTTP_READY_LINE]
     assert stopped == [cmd for cmd, _, _ in started]  # every server was stopped
 
     # Reports and rescore handle the new conditions, server log or not.
@@ -440,25 +575,165 @@ def test_a_server_that_never_becomes_ready_fails_the_run_and_stops(
 
 
 # ---------------------------------------------------------------------------
+# The H/R working directory, the webfetch audit, redaction, recorded failures
+# ---------------------------------------------------------------------------
+
+
+def test_the_empty_working_directory_is_git_free_empty_and_removed() -> None:
+    with empty_cwd() as home:
+        assert home.is_dir() and list(home.iterdir()) == []
+        assert all(not (parent / ".git").exists() for parent in (home, *home.parents))
+    assert not home.exists()
+
+
+def test_the_webfetch_audit_passes_the_managed_origin_and_flags_anything_else(tmp_path: Path) -> None:
+    events = [
+        {"type": "tool_use", "part": {"tool": "webfetch",
+         "state": {"input": {"url": f"http://127.0.0.1:{FIXED_PORT}/.well-known/archolith-beacon"}}}},
+        {"type": "tool_use", "part": {"tool": "webfetch",
+         "state": {"input": {"url": "https://GitHub.com/Archolith/beacon?x=1#y"}}}},
+        {"type": "tool_use", "part": {"tool": "webfetch",
+         "state": {"input": {"url": "http://127.0.0.1:9999/sneak"}}}},
+        {"type": "tool_use", "part": {"tool": "grep", "state": {"input": {"pattern": "http://elsewhere.invalid"}}}},
+        {"type": "text", "part": {"text": "the answer may quote https://quoted.example/page in prose"}},
+    ]
+    (tmp_path / "events.jsonl").write_text(
+        "\n".join(json.dumps(event) for event in events) + "\n", encoding="utf-8"
+    )
+    hosts = webfetch_hosts(tmp_path)
+    assert hosts == [f"127.0.0.1:{FIXED_PORT}", "127.0.0.1:9999", "github.com"]
+    assert off_origin_fetches(hosts, f"127.0.0.1:{FIXED_PORT}") == ["127.0.0.1:9999", "github.com"]
+    assert off_origin_fetches([f"127.0.0.1:{FIXED_PORT}"], f"127.0.0.1:{FIXED_PORT}") == []
+    assert webfetch_hosts(tmp_path / "nowhere") == []
+
+
+def test_a_non_managed_webfetch_fails_only_the_h_run(stub_harness, monkeypatch: pytest.MonkeyPatch) -> None:
+    config, pin, _started, _stopped = stub_harness
+    monkeypatch.setenv("STUB_WEBFETCH_URL", "https://GitHub.com/Archolith/beacon")
+    results, stopped = run_matrix(config, {"demo": pin}, [TASK], ("A", "H"))
+    assert stopped == "" and all(r.answer is not None for r in results)
+    by_condition = {r.condition: r for r in results}
+    # Only H is audited, and only H's run fails; the host carries no path or query.
+    assert by_condition["A"].error == "" and by_condition["A"].fetched_hosts == []
+    assert by_condition["H"].error == "non-loopback fetch: github.com"
+    assert by_condition["H"].fetched_hosts == ["github.com"]
+    saved = json.loads(
+        (config.workdir / "runs" / f"demo-{TASK.task_id}-H-1" / "result.json").read_text(encoding="utf-8")
+    )
+    assert saved["error"] == "non-loopback fetch: github.com" and saved["fetched_hosts"] == ["github.com"]
+
+
+def test_beacon_server_log_is_redacted_with_the_other_saved_files(tmp_path: Path) -> None:
+    secret = "sk-test-0123456789abcdef"
+    (tmp_path / SERVER_LOG).write_text(
+        f"ready; upstream echoed Authorization: Bearer {secret}\n", encoding="utf-8"
+    )
+    (tmp_path / "events.jsonl").write_text(secret + "\n", encoding="utf-8")
+    runner_mod._redact(tmp_path, [secret])
+    for name in (SERVER_LOG, "events.jsonl"):
+        text = (tmp_path / name).read_text(encoding="utf-8")
+        assert secret not in text and "<redacted>" in text
+
+
+def test_the_server_not_ready_message_is_sanitized(
+    stub_harness, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config, pin, _started, _stopped = stub_harness
+    secret = "sk-test-0123456789abcdef"
+    env_file = tmp_path / "keys.env"
+    env_file.write_text(f"OPENAI_API_KEY={secret}\n", encoding="utf-8")
+    config.env_file = env_file
+    config.model = "openai/gpt-6-luna"  # a built-in provider: the key rides on the environment
+
+    @contextmanager
+    def leaking(cmd: list[str], log_path: Path, ready_line: str,
+                env: dict[str, str] | None = None, timeout_s: float = 30.0) -> Iterator[int]:
+        raise ServerNotReady(
+            f"the beacon server exited without reporting {ready_line!r}; "
+            f"its stderr ends with: upstream error for key {secret}"
+        )
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(runner_mod, "beacon_http_process", leaking)
+    results, stopped = run_matrix(config, {"demo": pin}, [TASK], ("H",))
+    assert secret not in stopped and "<redacted>" in stopped
+    saved = json.loads(
+        (config.workdir / "runs" / f"demo-{TASK.task_id}-H-1" / "result.json").read_text(encoding="utf-8")
+    )
+    assert secret not in saved["error"] and "<redacted>" in saved["error"]
+    assert results[0].answer is None  # the failed run is recorded, not lost
+
+
+def test_a_snapshot_export_failure_is_a_recorded_run(
+    stub_harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config, pin, _started, _stopped = stub_harness
+
+    def failing_export(config: RunnerConfig, pin: RepoPin) -> Path:
+        raise subprocess.CalledProcessError(
+            2, "beacon export", output="", stderr="snapshot blocked: unresolved publication warnings"
+        )
+
+    monkeypatch.setattr(runner_mod, "export_beacon_snapshot", failing_export)
+    results, stopped = run_matrix(config, {"demo": pin}, [TASK], ("R",))
+    assert "returned non-zero exit status 2" in stopped and "snapshot blocked" in stopped
+    assert len(results) == 1 and results[0].condition == "R" and results[0].answer is None
+    saved = json.loads(
+        (config.workdir / "runs" / f"demo-{TASK.task_id}-R-1" / "result.json").read_text(encoding="utf-8")
+    )
+    assert "returned non-zero exit status 2" in saved["error"] and "snapshot blocked" in saved["error"]
+
+
+def test_a_server_launch_failure_is_a_recorded_run(
+    stub_harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config, pin, _started, _stopped = stub_harness
+
+    @contextmanager
+    def unstartable(cmd: list[str], log_path: Path, ready_line: str,
+                    env: dict[str, str] | None = None, timeout_s: float = 30.0) -> Iterator[int]:
+        raise OSError("the beacon python is not executable")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(runner_mod, "beacon_http_process", unstartable)
+    results, stopped = run_matrix(config, {"demo": pin}, [TASK], ("H",))
+    assert "the beacon python is not executable" in stopped
+    saved = json.loads(
+        (config.workdir / "runs" / f"demo-{TASK.task_id}-H-1" / "result.json").read_text(encoding="utf-8")
+    )
+    assert "the beacon python is not executable" in saved["error"]
+    run_dir = config.workdir / "runs" / f"demo-{TASK.task_id}-H-1"
+    assert not (run_dir / "prompt.txt").exists()  # nothing ran, so nothing was prompted
+
+
+# ---------------------------------------------------------------------------
 # Real Beacon integration (skipped without a usable Beacon source)
 # ---------------------------------------------------------------------------
+
+
+def _probe_beacon_import() -> tuple[bool, str]:
+    """Whether ``beacon`` imports from the configured source, and its ``beacon.__file__``."""
+    try:
+        probe = subprocess.run(
+            [str(BEACON_PYTHON), "-c", "import beacon; print(beacon.__file__)"],
+            env={**os.environ, "PYTHONPATH": str(BEACON_SRC)},
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return False, f"Beacon is not importable from the configured source ({BEACON_SRC}): {exc}"
+    if probe.returncode != 0:
+        return False, f"Beacon is not importable from the configured source ({BEACON_SRC})"
+    lines = probe.stdout.strip().splitlines()
+    return True, (lines[-1] if lines else "")
 
 
 def _beacon_skip_reason() -> str:
     if not BEACON_SRC:
         return "set BEACON_EVAL_BEACON_SRC to a Beacon source tree with #26 phases 1-3"
-    try:
-        probe = subprocess.run(
-            [str(BEACON_PYTHON), "-c", "import beacon"],
-            env={**os.environ, "PYTHONPATH": str(BEACON_SRC)},
-            capture_output=True,
-            timeout=120,
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        return f"Beacon is not importable from the configured source ({BEACON_SRC}): {exc}"
-    if probe.returncode != 0:
-        return f"Beacon is not importable from the configured source ({BEACON_SRC})"
-    return ""
+    importable, reason = _probe_beacon_import()
+    return "" if importable else reason
 
 
 _SKIP_BEACON = _beacon_skip_reason()
@@ -467,6 +742,10 @@ _SKIP_BEACON = _beacon_skip_reason()
 @pytest.mark.skipif(_SKIP_BEACON != "", reason=_SKIP_BEACON)
 def test_real_beacon_serves_discovery_and_mcp_over_http(tmp_path: Path) -> None:
     pytest.importorskip("fastmcp")
+    importable, beacon_file = _probe_beacon_import()
+    assert importable
+    # The managed servers must serve the configured source tree, not an installed package.
+    assert Path(beacon_file).resolve().is_relative_to(Path(BEACON_SRC).resolve()), beacon_file
     config = RunnerConfig(
         workdir=tmp_path / "work", beacon_python=str(BEACON_PYTHON), beacon_src=str(BEACON_SRC),
         opencode_cmd=["unused-by-this-test"],

@@ -164,6 +164,29 @@ def remove_tree(path: Path) -> None:
         shutil.rmtree(path, onerror=clear_readonly)
 
 
+@contextmanager
+def empty_cwd() -> Iterator[Path]:
+    """A fresh empty working directory outside any git repository; removed on exit.
+
+    Conditions H and R start OpenCode here: with no project above the working directory,
+    OpenCode cannot auto-load the checkout's ``AGENTS.md``, ``CLAUDE.md`` or project
+    ``opencode.json`` (``--pure`` only disables plugins). The directory lives in the
+    system temp area; that area must itself sit outside every git repository, or
+    instructions found above it would still reach the agent, so that is verified rather
+    than assumed.
+    """
+    home = Path(tempfile.mkdtemp(prefix="beacon-eval-cwd-"))
+    try:
+        for parent in (home, *home.parents):
+            if (parent / ".git").exists():
+                raise IsolationError(
+                    f"the agent working directory {home} sits inside the git repository at {parent}"
+                )
+        yield home
+    finally:
+        remove_tree(home)
+
+
 def _seed_tools(data_home: Path, source_data_home: Path) -> None:
     """Link OpenCode's downloaded ripgrep into a fresh data home, so a run doesn't fetch it.
 

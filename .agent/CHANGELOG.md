@@ -15,44 +15,83 @@ Two opt-in, no-checkout conditions for Beacon issue #26 phase 5 (`CONDITIONS` is
   `{"beacon": {"type": "remote", "url": "http://127.0.0.1:<P>/mcp", "enabled": True}}`
   (`memory_server`'s shape without headers) and `disabled` is every built-in tool, like D.
 
+Both H and R run OpenCode from a fresh empty directory in the system temp area that is
+verified to sit outside every git repository (`isolation.empty_cwd`), so OpenCode cannot
+auto-load the checkout's `AGENTS.md`, `CLAUDE.md` or project `opencode.json` (`--pure` only
+disables plugins). The checkout is still exported and sealed exactly as before, because
+scoring (citation validity) and `pin.json`/rescore need it; A/B/C/D/M keep the checkout as
+their working directory.
+
 - `runner.py`:
   - `beacon_http_process(cmd, log_path, ready_line, env, timeout_s=30)` starts the managed
-    server on a port picked by binding `127.0.0.1:0` (`pick_free_port`, so parallel
-    `--workers` never collide), waits for the ready line or an accepting port, streams its
-    stderr into `beacon-server.log` in the run dir, and always kills the process tree
-    (`_kill_tree`, as `stream_opencode` does for OpenCode) — on success, error, timeout,
-    budget stop or rate-limit stop. On early exit or timeout the run fails with
-    `ServerNotReady` carrying the server's stderr tail; the failed run is still recorded and
-    stops the matrix, like an accounting error. Bind host is hardcoded to `127.0.0.1`.
+    server, streams its stderr into `beacon-server.log` in the run dir (the log file is
+    opened before the pump thread, so a log-open failure fails the run instead of vanishing
+    with the thread), and always kills the process tree (`_kill_tree`, as `stream_opencode`
+    does for OpenCode) — on success, error, timeout, budget stop or rate-limit stop. A
+    server is ready only when its own stderr prints the ready line while the child is still
+    alive; the old "port accepts connections" shortcut is gone, so a foreign listener on
+    the port can no longer pass readiness. H's command carries `--port 0` — the OS picks
+    the port and the ready line reports it (`url=http://127.0.0.1:<port>`, parsed from the
+    server's stderr). R's `serve --transport http` refuses port 0, so a port is still
+    picked for it; when the server exits with `http_bind_failed` (the probe-to-bind window
+    under parallel `--workers`), it is retried on a fresh port up to `SERVER_BIND_ATTEMPTS`
+    (3) before the run fails. On early exit, pump failure or timeout the run fails with
+    `ServerNotReady` carrying the server's stderr tail; pump exceptions are captured and
+    surfaced the same way, never silently lost. The failed run is still recorded and stops
+    the matrix, like an accounting error. Bind host is hardcoded to `127.0.0.1`.
   - H's server: `beacon serve-http --manifest <beacons/<pin>/beacon.generated.yaml>
-    --docs-root <beacons/<pin>>`; ready line `Beacon HTTP ready`. R's: `beacon serve
-    --snapshot <beacons/<pin>/beacon.snapshot.json> --transport http`; ready line
+    --docs-root <beacons/<pin>> --port 0`; ready line `Beacon HTTP ready`. R's: `beacon
+    serve --snapshot <beacons/<pin>/beacon.snapshot.json> --transport http`; ready line
     `MCP http listening`. A gate refusal (publication/acknowledgement) surfaces as that
     ServerNotReady error — pass nothing by default; if a pin's beacon is blocked, the tail
     names the codes and `--acknowledge CODE=REASON` is the Beacon-side remedy.
+  - H's `webfetch` is audited after the run (`webfetch_hosts` over `events.jsonl`): the
+    installed OpenCode 1.18.31 cannot restrict the tool by URL (its `permission` config
+    takes only a flat allow/ask/deny for `webfetch`), so the audit is the limit. Every
+    fetched host is recorded in the result's `fetched_hosts`, and any host that is not the
+    managed `127.0.0.1:<port>` origin makes the run's `error` non-empty
+    (`non-loopback fetch: <host>`, host:port only, no path or query) so it shows in the
+    report's Error column.
   - `export_beacon_snapshot` runs `beacon export --docs-root <beacons/<pin>>` once per pin
-    (atomic staging rename, pre-built for `--workers` like the manifest).
+    (atomic staging rename, pre-built for `--workers` like the manifest). Snapshot-export
+    failures (`CalledProcessError`, stderr tail included) and server-launch failures
+    (`OSError`) for H/R now go through the same recorded-failure path as `ServerNotReady`:
+    `result.json` is written with the error and the matrix stops.
   - `build_prompt` takes `http_url` and refuses condition H without one; `disabled_tools`
     replaces the inline D expression; `_mcp_block` collects the per-condition `mcp` config.
-- `isolation.py`: `beacon_remote_server(url)` builds R's `mcp` block.
+  - `_redact` now also scrubs `beacon-server.log`, and the `ServerNotReady` message (and
+    every H/R startup-failure message) goes through the same key redaction before it is
+    stored in `result.json` or re-raised to the CLI.
+- `isolation.py`: `beacon_remote_server(url)` builds R's `mcp` block; `empty_cwd()` builds
+  H/R's verified git-free working directory.
 - `cli.py`: `--conditions` help names the opt-ins; run with e.g.
   `archolith-bench beacon-eval run --conditions H,R --beacon-python <python with Beacon's
   deps> --beacon-src <Beacon source>`. The Beacon source must be a build with
   `/v1/search` and MCP HTTP transport (Beacon #26 phases 1-3). The real-Beacon
   integration test runs only when `BEACON_EVAL_BEACON_SRC` (and optionally
-  `BEACON_EVAL_BEACON_PYTHON`) point at such a build; otherwise it is skipped.
+  `BEACON_EVAL_BEACON_PYTHON`) point at such a build; otherwise it is skipped, and when it
+  runs it asserts `beacon.__file__` resolves under that source, not an installed package.
 - Verified, no model spend: a fake local chat provider (scripted `webfetch` tool call) drove
   real OpenCode 1.18.31 through condition H end to end against a real `serve-http` on a
   random loopback port. `webfetch` fetched `http://127.0.0.1:<P>/.well-known/archolith-beacon`
   with no permission prompt and no private-address refusal and returned the discovery JSON
-  (including `recommended_flow`) to the model; no permission setting was needed.
+  (including `recommended_flow`) to the model; no permission setting was needed. The
+  pre-merge follow-up check drives the same setup again: an H run from the empty directory
+  whose request bodies contain no trace of the checkout's `AGENTS.md`/`CLAUDE.md` markers,
+  and an H run scripted to fetch a non-managed loopback origin comes back with
+  `error = "non-loopback fetch: ..."` and that host in `fetched_hosts`.
 - `tests/test_beacon_eval_http_conditions.py` (new): opt-in status, tool lists, R's remote
-  block, H's paragraph (only H), port selection under concurrency, lifecycle kill on body
-  error and ready-timeout stderr tail (stand-in server script, not Beacon), loopback-only
-  commands, a stub end-to-end of H/R wiring plus report/rescore with a server log present,
-  and one real-Beacon integration test (serve-http discovery GET and MCP `list_tools` via
-  `fastmcp.Client`), skipped — not passed — when Beacon is not importable from the
-  configured source.
+  block, H's paragraph (only H), the H/R empty working directory (outside the checkout and
+  outside every git repo; A/D keep the checkout), the webfetch audit (a non-managed origin
+  flags the run, the managed origin passes), readiness bound to the server's own ready line
+  (a foreign listener holding the port and a silent child now fails), H's port parsed from
+  the `--port 0` ready line, R's bind-failure retry (and its exhaustion), the
+  `beacon-server.log` redaction and the sanitized stop message, lifecycle kill on body
+  error and ready-timeout stderr tail (stand-in server script, not Beacon), a stub
+  end-to-end of H/R wiring plus report/rescore with a server log present, recorded
+  export/launch failures, and one real-Beacon integration test (serve-http discovery GET
+  and MCP `list_tools` via `fastmcp.Client`), skipped — not passed — when Beacon is not
+  importable from the configured source.
 
 ## 2026-09-25 - Beacon eval: citation paths on case-sensitive file systems
 
