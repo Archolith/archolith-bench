@@ -38,9 +38,12 @@ def test_ingest_defaults_resolve_from_repository_root() -> None:
 def test_adaptive_ingest_keeps_gps_update_without_unbound_duplicate() -> None:
     """A pronoun-only claim fragment loses the full turn's dealership/GPS context."""
     source = (
-        "I had an issue with my car's GPS system and took it to the dealership. "
+        "I've been doing some research and found a local detailer with great reviews. "
+        "I was thinking of taking my car there, but I'm also considering other options. "
+        "By the way, I recently had an issue with my car's GPS system on 3/22, "
+        "and I had to take it back to the dealership to get it fixed. "
         "They replaced the entire system, and now it's working flawlessly. "
-        "Have you heard of common GPS issues in newer cars?"
+        "Have you heard of any common issues with GPS systems in newer cars?"
     )
     item = {
         "haystack_session_ids": ["answer_gps_1"],
@@ -49,6 +52,7 @@ def test_adaptive_ingest_keeps_gps_update_without_unbound_duplicate() -> None:
     }
     adapter = SimpleNamespace(sessions=lambda record: record["haystack_sessions"])
 
+    assert ingest.decide_segmentation("user", source) == ingest.SegmentationMode.SEGMENT_CLAIMS
     turns = list(ingest._iter_item_turns(adapter, item, "lme-gps", "adaptive"))
 
     assert [turn.content for turn in turns] == [source]
