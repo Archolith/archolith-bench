@@ -1,0 +1,163 @@
+# Declared benchmark-affecting surface.
+#
+# Every path glob here is code or data that can move a LongMemEval score. When a run
+# launches, each matching file is hashed into that run's provenance, so comparing two
+# runs answers "what could have caused this delta?" with file-level evidence instead of
+# a commit-range guess.
+#
+# Why hashes and not just commit SHAs: the assistant-turn gate in claim_segmenter.py was
+# authored untracked, then swept into git by `f49ab59 chore(bench): track 12 previously
+# -untracked LME scripts`. A commit-range diff attributes it to a bookkeeping commit on
+# the wrong date. Content hashes catch untracked and dirty-tree edits; commit SHAs cannot.
+#
+# Bias: BROAD. A path listed here that turns out not to matter costs one extra line in a
+# blame report. A path missing from here makes a real behavior change invisible, which is
+# the failure this file exists to prevent. When in doubt, include it.
+#
+# Stages tag where in the pipeline a file acts, so blame output can be read in pipeline
+# order: a recall-stage change cannot explain an ingest-stage episode-count delta.
+
+version: 1
+
+# Line endings are normalized (CRLF -> LF) before hashing so the same content checked out
+# on Windows and Linux fingerprints identically. Nothing else is normalized.
+normalize_line_endings: true
+
+repos:
+  bench:
+    # Resolved relative to this manifest's repo root (archolith-bench).
+    root: "."
+  menhir:
+    # Override with MENHIR_ROOT. Default assumes the standard sibling checkout.
+    root: "../menhir"
+    env_override: MENHIR_ROOT
+
+stages:
+
+  fixture:
+    description: >
+      The questions and gold answers themselves. A change here invalidates comparison
+      against every prior run, which is why fixture_sha256 is already immutable in
+      run_provenance identity.
+    paths:
+      - repo: bench
+        glob: "fixtures/longmemeval/*.json"
+
+  ingest:
+    description: >
+      Turn segmentation, claim extraction, and everything that decides what becomes an
+      episode. Changes here move episode counts and what is recallable at all.
+    paths:
+      - repo: bench
+        glob: "scripts/longmemeval/lib/claim_segmenter.py"
+      - repo: bench
+        glob: "scripts/longmemeval/lib/ingest.py"
+      - repo: bench
+        glob: "scripts/longmemeval/lib/backfill_dates.py"
+      - repo: bench
+        glob: "scripts/longmemeval/lib/expected.py"
+      - repo: menhir
+        glob: "src/menhir/services/ingest*.py"
+      - repo: menhir
+        glob: "src/menhir/services/assertion_pipeline.py"
+      - repo: menhir
+        glob: "src/menhir/services/enrichment_steps.py"
+      - repo: menhir
+        glob: "src/menhir/domain/ingest.py"
+      - repo: menhir
+        glob: "src/menhir/core/ingest_guard.py"
+      # Graphiti patches rewrite extraction behavior in place; they are load-bearing
+      # and easy to forget because they live under infrastructure/.
+      - repo: menhir
+        glob: "src/menhir/infrastructure/graphiti_*.py"
+      - repo: menhir
+        glob: "src/menhir/infrastructure/llm.py"
+      - repo: menhir
+        glob: "src/menhir/infrastructure/episode_*.py"
+
+  consolidate:
+    description: >
+      Scalar state, supersession, folds, and conflict resolution - the layer that decides
+      which of several competing values is current. Knowledge-update scores are dominated
+      by this.
+    paths:
+      - repo: menhir
+        glob: "src/menhir/services/scalar_*.py"
+      - repo: menhir
+        glob: "src/menhir/services/*scalar*.py"
+      - repo: menhir
+        glob: "src/menhir/services/event_*.py"
+      - repo: menhir
+        glob: "src/menhir/services/lifecycle_*.py"
+      - repo: menhir
+        glob: "src/menhir/services/correction_resolver.py"
+      - repo: menhir
+        glob: "src/menhir/services/quantstate_consolidator.py"
+      - repo: menhir
+        glob: "src/menhir/services/perception*.py"
+      - repo: menhir
+        glob: "src/menhir/services/merge_coordinator.py"
+      - repo: menhir
+        glob: "src/menhir/domain/fold_algebra.py"
+      - repo: menhir
+        glob: "src/menhir/domain/belief*.py"
+      - repo: menhir
+        glob: "src/menhir/domain/merge_delta.py"
+      - repo: menhir
+        glob: "src/menhir/domain/event_history.py"
+      - repo: menhir
+        glob: "src/menhir/infrastructure/consolidation_*.py"
+
+  recall:
+    description: >
+      Retrieval, ranking, and context packing. Changes here move the score without
+      changing a single stored episode, so they are invisible to graph snapshots.
+    paths:
+      - repo: menhir
+        glob: "src/menhir/services/recall_*.py"
+      - repo: menhir
+        glob: "src/menhir/services/hybrid_retrieval.py"
+      - repo: menhir
+        glob: "src/menhir/services/retrieval_oracles.py"
+      - repo: menhir
+        glob: "src/menhir/services/context_builder.py"
+      - repo: menhir
+        glob: "src/menhir/services/scoring_service.py"
+      - repo: menhir
+        glob: "src/menhir/services/shadow_context_composition.py"
+      - repo: menhir
+        glob: "src/menhir/domain/brief_builder.py"
+      - repo: menhir
+        glob: "src/menhir/domain/diversity.py"
+      - repo: menhir
+        glob: "src/menhir/domain/intent_affinity.py"
+      - repo: menhir
+        glob: "src/menhir/domain/facet*.py"
+      - repo: menhir
+        glob: "src/menhir/infrastructure/embedding_*.py"
+
+  score:
+    description: >
+      The harness that asks the questions and judges the answers. A change here moves the
+      number with no change to memory behavior at all - the most misleading kind of delta.
+    paths:
+      - repo: bench
+        glob: "scripts/longmemeval/lib/validate_run.py"
+      - repo: bench
+        glob: "scripts/longmemeval/recall_ab.sh"
+      - repo: bench
+        glob: "scripts/longmemeval/analysis/answer_ab.py"
+      - repo: bench
+        glob: "scripts/longmemeval/analysis/brief_ab.py"
+
+  harness:
+    description: >
+      Launch wrappers and settings plumbing. These do not compute anything themselves but
+      decide which knobs the run used, and a changed default silently re-specifies a run.
+    paths:
+      - repo: bench
+        glob: "scripts/longmemeval/*.sh"
+      - repo: bench
+        glob: "scripts/longmemeval/lib/run_provenance.py"
+      - repo: menhir
+        glob: "src/menhir/config/settings*.py"

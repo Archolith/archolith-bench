@@ -1,0 +1,18 @@
+{
+  "run_id": "scalar-temporal-evidence-recall-v2-20260730",
+  "source": [
+    "harness_recall/.checkpoint_longmemeval-menhir_oracle_gpt-4o.jsonl"
+  ],
+  "primary_arm": null,
+  "arms": {
+    "menhir_recall": {
+      "n": 78,
+      "correct": 65,
+      "score": 0.833333,
+      "input_tokens": 115697,
+      "output_tokens": 1456
+    }
+  },
+  "duplicate_entries_collapsed": 0,
+  "malformed_lines": 0
+}

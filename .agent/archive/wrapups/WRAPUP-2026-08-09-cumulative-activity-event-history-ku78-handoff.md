@@ -117,3 +117,16 @@ Do not tune broadly to the seven misses. Three were v4 passes whose evidence rem
 - KU78 v6 failed task IDs: `f9e8c073`, `c4ea545c`, `e61a7584`, `a2f3aa27`, `26bdc477`, `031748ae_abs`, `07741c45`.
 - Versus v4, v6 fixed `5a4f22c0`, `6a1eabeb`, `89941a94`, `c7dc5443`, and `d7c942c3`; `c4ea545c`, `e61a7584`, and `f9e8c073` regressed. Net: +2 versus v4 and +3 versus the prior canonical baseline.
 - Bench `master` also contains independent local-extraction-provider support at `b7b16f77aa6c54f810497ac1a344fdf66b57c945`; it is not part of the scalar/KU78 acceptance claim.
+
+---
+
+## Disposition - 2026-09-12 (post-archive closure verification)
+
+The handoff is superseded by shipped work. The bench side (`c9d304e7` et al.) is in
+`master` history; the menhir side (commits through `bb436d3e`, 2026-08-10) predates the
+public-repo history rewrite at launch (`7274cccb`) and sits only on `private-history/main`,
+but the delivered feature content survived into public HEAD: the cumulative ACTIVITY
+TOTALS / OCCURRENCES / FREQUENCY scalar rules are live in menhir
+`services/typed_scalar_rules.py` (activity-count accumulation, delta semantics, object
+binding), and the KU78 fixtures/results are present under `results/lme-ku-buildout/`.
+Ledger entry appended 2026-09-12.

@@ -86,6 +86,12 @@ export MENHIR_LOG_DIR="${LME_RESULTS_DIR}/scalar-e2e-logs"; mkdir -p "${MENHIR_L
 # that shares it is BLOCKED by the operator's live menhir which already holds the lease -> the
 # scheduler never starts -> no consolidation -> no scalar Views. A per-run telemetry DB gives this
 # instance its own (empty) lease table so its scheduler acquires the lease and ticks.
+# Decision-point evidence, same rationale as the LME builds (see config.sh): the scalar fold's
+# drop reasons and vote distributions are emitted to telemetry lifecycle_events by
+# consolidation_audit, not to the log, so without this an abstaining pass leaves no record of why.
+export MENHIR_PERSONAL_MEMORY_CONSOLIDATION_AUDIT_ENABLED="${SS_CONSOLIDATION_AUDIT:-1}"
+export MENHIR_PERSONAL_MEMORY_RECALL_AUDIT_ENABLED="${SS_RECALL_AUDIT:-1}"
+export MENHIR_LOG_LEVEL="${MENHIR_LOG_LEVEL:-${SS_LOG_LEVEL:-INFO}}"
 export MENHIR_MCP_TELEMETRY_DB="${MENHIR_LOG_DIR}/scalar-e2e-telemetry-$$.db"
 rm -f "${MENHIR_MCP_TELEMETRY_DB}" 2>/dev/null || true
 export MENHIR_API_HOST=127.0.0.1 MENHIR_API_PORT="${SS_PORT}"

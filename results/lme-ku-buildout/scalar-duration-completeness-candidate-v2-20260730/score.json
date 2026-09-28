@@ -1,0 +1,25 @@
+{
+  "run_id": "scalar-duration-completeness-candidate-v2-20260730",
+  "source": [
+    "harness_recall/.checkpoint_longmemeval-menhir_oracle_gpt-4o.jsonl"
+  ],
+  "primary_arm": null,
+  "arms": {
+    "menhir_recall": {
+      "n": 78,
+      "correct": 58,
+      "score": 0.74359,
+      "input_tokens": 35357,
+      "output_tokens": 1118
+    },
+    "no_memory": {
+      "n": 78,
+      "correct": 5,
+      "score": 0.064103,
+      "input_tokens": 5552,
+      "output_tokens": 312
+    }
+  },
+  "duplicate_entries_collapsed": 0,
+  "malformed_lines": 0
+}

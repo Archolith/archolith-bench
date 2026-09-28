@@ -1,0 +1,18 @@
+{
+  "run_id": "scalar-canonical-ku78-v1-20260806-duration-display-single-6a1eabeb-v2-20260808",
+  "source": [
+    ".checkpoint_longmemeval-menhir_oracle_gpt-4o-mini.jsonl"
+  ],
+  "primary_arm": null,
+  "arms": {
+    "menhir_recall": {
+      "n": 1,
+      "correct": 1,
+      "score": 1.0,
+      "input_tokens": 5036,
+      "output_tokens": 17
+    }
+  },
+  "duplicate_entries_collapsed": 0,
+  "malformed_lines": 0
+}

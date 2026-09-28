@@ -1,0 +1,38 @@
+# Runs deliberately NOT in the buildout scoreboard.
+#
+# `ledger.py validate` reports any run directory holding a readable score with no ledger row,
+# because a measurement that never reached the scoreboard is invisible to anyone reading it.
+# That check is right, but some of those runs are not buildout runs at all -- they are recall
+# panels, rescores of an existing graph, and diagnostics. Listing them here records the
+# decision once, so the finding does not reappear every run and get re-litigated.
+#
+# Format: <run_id>  <reason>
+# A reason is REQUIRED. An entry without one is refused, because "excluded" with no stated
+# ground is how a real result gets quietly hidden -- which is the exact failure this file's
+# own check exists to prevent. Excluded runs are still counted and reported in one line, so
+# they never become fully invisible, and a run listed here that ALSO has a ledger row is a
+# contradiction and fails.
+#
+# Decided 2026-09-08 by the owner: none of these belong in the scoreboard. Their scores are
+# real and remain on disk in each run's score.json; they are simply not buildout results.
+
+# --- recall/packet panels against the canonical graph (small n, not a buildout) ---
+scalar-canonical-ku78-v1-20260806-852ce960-packet-shapes3x5-20260808  packet-shape panel, n=5, rescore of the canonical graph
+scalar-canonical-ku78-v1-20260806-852ce960-variance5-20260808  variance panel, n=5, rescore of the canonical graph
+scalar-canonical-ku78-v1-20260806-duration-display-single-6a1eabeb-20260808  single-item duration probe, n=1
+scalar-canonical-ku78-v1-20260806-duration-display-single-6a1eabeb-v2-20260808  single-item duration probe, n=1
+scalar-canonical-ku78-v1-20260806-query-filtered-packet-v1-sample5-no-tentative-20260808  query-filtered packet panel, n=5
+scalar-canonical-ku78-v1-20260806-query-filtered-packet-v1-sample5-rerun-20260808  query-filtered packet panel, n=5
+scalar-canonical-ku78-v1-20260806-query-filtered-packet-v1-sample5-rerun2-20260808  query-filtered packet panel, n=5
+scalar-canonical-ku78-v1-20260806-typed-packet-corrected-other4-20260808  typed-packet panel, n=4
+scalar-canonical-ku78-v1-20260806-typed-packet-v1-rescore  typed-packet rescore of the canonical graph, not a fresh ingest
+
+# --- recall-only runs against an existing graph (no buildout of their own) ---
+scalar-current-code-recall-v1-20260806  recall-only, no_memory baseline arm only, 41 items
+scalar-current-code-recall-v2-20260806  recall-only against an existing graph; 0.923 is not comparable to a fresh-buildout score
+scalar-authority-recall-v1-20260730  recall-only authority probe
+scalar-temporal-evidence-recall-v2-20260730  recall-only temporal-evidence probe
+
+# --- targeted diagnostics ---
+scalar-duration-completeness-candidate-v2-20260730  duration-completeness diagnostic
+scalar-write-repair-targeted-v1-20260730  targeted write-repair diagnostic

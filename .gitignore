@@ -1,4 +1,20 @@
-results/
+# results/ holds 3.8G of benchmark evidence -- graph snapshots, serve logs, telemetry DBs --
+# which must never be committed. The exceptions below are the narrow set of files that ARE the
+# record rather than its byproducts: the ledger, and the per-run score.json that
+# `ledger.py validate` cross-checks recorded scores against. Without tracking those, a clone
+# can check the ledger's schema but never its numbers.
+#
+# `/results/**` rather than `results/` on purpose: a trailing-slash ignore makes git skip the
+# directory entirely, so no `!` exception inside it can ever be reached.
+/results/**
+!/results/lme-ku-buildout/
+!/results/lme-ku-buildout/LEDGER.md
+!/results/lme-ku-buildout/ledger.csv
+!/results/lme-ku-buildout/ledger-excluded.txt
+# Run directories are re-included only so git descends into them; their contents stay ignored
+# by the rule above except for the one file named here.
+!/results/lme-ku-buildout/*/
+!/results/lme-ku-buildout/*/score.json
 fixtures/local/
 __pycache__/
 .pytest_cache/
@@ -17,3 +33,8 @@ logs/
 # Regenerate: python scripts/longmemeval/lib/make_smoke_fixture.py {date|multi}
 scripts/longmemeval/fixtures/date-smoke-*.json
 scripts/longmemeval/fixtures/multi-smoke-*.json
+
+# Benchmark outputs that land under scripts/ rather than the root results/ tree. Nothing here
+# is tracked, and leaving them merely untracked made build_graph.sh's untracked-source preflight
+# refuse canonical builds over a stale gate JSON.
+scripts/longmemeval/results/

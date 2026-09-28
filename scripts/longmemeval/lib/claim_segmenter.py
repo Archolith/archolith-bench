@@ -520,15 +520,48 @@ def is_purely_interrogative(text: str) -> bool:
 # Assistant turn classification
 # ---------------------------------------------------------------------------
 
-# Patterns that suggest an assistant message contains durable content
-# (not just generic advice/filler).
+# Patterns that suggest an assistant message contains durable content (not generic advice).
+#
+# Every alternative here must bind the claim to a *user-owned entity*, because the failure
+# mode measured on the KU fixture was advice prose matching on incidental vocabulary. The
+# earlier version of this pattern ended with a bare alternation of past participles --
+# (confirmed|completed|finished|done|approved|accepted|rejected|denied|cancelled) -- which
+# matched 51 of 58 assistant turns on nothing more than a word appearing anywhere in the
+# message: "tasks that need to be completed", "you've already done 2,000 miles on your
+# current wheels", "they'll be more likely to be accepted by the thrift store". Unanchored
+# participles have no subject, so they cannot establish who did what to whose records. That
+# alternation is deleted rather than narrowed; there is no defensible true-positive form of
+# it that the anchored alternatives below do not already cover.
+#
+# Measured on fixtures/longmemeval/knowledge_update_subset.json (915 assistant turns):
+# 58 matches before, all false positives; 0 after. The KU corpus has no tool-using
+# assistant, so the transactional forms kept below have no validated true positive *here* --
+# they are retained because removing a general-purpose pattern for not firing on one
+# conversational fixture is overfitting, which this file's plan explicitly warned against.
 _ASSISTANT_DURABLE_PATTERNS = re.compile(
-    r"\b(?:I(?:'ve| have) (?:scheduled|booked|reserved|ordered|created|set up|"
-    r"configured|deployed|committed|pushed|merged|installed)|"
-    r"(?:your|the) (?:appointment|reservation|booking|order|subscription|"
-    r"membership|account|profile|settings?) (?:is|are|has been|was)|"
-    r"I(?:'ll| will) (?:remember|note|keep track|make a note)|"
-    r"(?:confirmed|completed|finished|done|approved|accepted|rejected|denied|cancelled))\b",
+    # A completed action on something the user owns. The trailing possessive is load-bearing:
+    # without it, "I've created a suggested schedule" and "I've created a 20-mile route" match,
+    # which is the assistant generating advice content, not recording a fact about the user.
+    r"\bI(?:'ve| have) (?:scheduled|booked|reserved|ordered|created|set up|"
+    r"configured|deployed|committed|pushed|merged|installed) your\b"
+    r"|"
+    # A user record reported in a terminal state. The state word is load-bearing: a bare
+    # copula matched instructional prose -- "Ensure your profile is complete, including a
+    # profile picture" and "make sure your account is set to a Business or Creator profile".
+    #
+    # `completed` is listed but bare `complete` is not, and the distinction is the difference
+    # between an action that finished and a description of fullness. "Ensure your profile is
+    # complete, including a profile picture" is advice about filling in fields and was still
+    # matching after the first pass at this pattern. The cost is missing "your booking is
+    # complete"; precision is the stated priority here, so that recall loss is accepted.
+    r"\b(?:your|the) (?:appointment|reservation|booking|order|subscription|"
+    r"membership|account|profile|settings?) (?:is|are|has been|was) "
+    r"(?:confirmed|booked|scheduled|reserved|cancelled|canceled|active|ready|"
+    r"processed|completed|approved|rejected|denied|suspended|closed)\b"
+    r"|"
+    # An explicit commitment to remember. No match on the KU fixture; kept as a general
+    # agentic form rather than pruned for fixture silence.
+    r"\bI(?:'ll| will) (?:remember|note|keep track|make a note)\b",
     re.IGNORECASE,
 )
 

@@ -285,10 +285,16 @@ record_phase_end(){
 }
 
 # ---- record run provenance ----
+# Fingerprint the declared surface BEFORE writing the attempt record, so `begin` can treat the
+# digest as immutable identity for a canonical run and refuse a resume that would mix two code
+# states. Empty on failure, which `run_provenance.py` reads as "absent" rather than as a digest
+# of "" -- fingerprinting stays non-fatal, consistent with the attach call further down.
+SURFACE_DIGEST="$("${BENCH_PY}" "${SCRIPT_DIR}/lib/bench_surface.py" fingerprint --digest-only 2>/dev/null || true)"
 cat > "${ATTEMPT_RECORD}" <<EOF
 {
   "run_id": "${RUN_ID}",
   "arm": "${ARM}",
+  "surface_digest": "${SURFACE_DIGEST}",
   "started_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
   "resumed": $([ "${LME_KU_ALLOW_RESUME}" = "1" ] && echo true || echo false),
   "menhir_commit": "${MENHIR_COMMIT}",
@@ -339,9 +345,29 @@ PROVENANCE_BEGIN_ARGS=()
 [ "${LME_NONCANONICAL}" = "1" ] && PROVENANCE_BEGIN_ARGS+=("--noncanonical")
 "${BENCH_PY}" "${PROVENANCE_TOOL}" begin "${PROVENANCE_PATH}" "${ATTEMPT_RECORD}" \
   "${PROVENANCE_BEGIN_ARGS[@]}" ||
-  die "provenance refused this attempt; see the error above"
+  die "provenance refused this attempt (identity, commit, or surface mismatch); see above"
 rm -f "${ATTEMPT_RECORD}"
 log "provenance recorded: ${PROVENANCE_PATH}"
+
+# Hash the declared benchmark-affecting surface into this attempt's record. Commit SHAs
+# cannot do this job: a dirty tree or an untracked file leaves the SHA unchanged while the
+# executed code differs, which is how the assistant-turn gate in claim_segmenter.py ended
+# up attributed to a `chore: track untracked scripts` commit. Content hashes make a later
+# `bench_surface.py blame A B` name the files that actually differ.
+#
+# Non-fatal: a fingerprint is evidence about a run, not a precondition for it. Refusing to
+# launch here would trade a recorded gap for no run at all. The gap is recorded instead,
+# and `blame` reports a run with no fingerprint as not-comparable rather than guessing.
+SURFACE_TOOL="${SCRIPT_DIR}/lib/bench_surface.py"
+if [ -f "${SURFACE_TOOL}" ]; then
+  if "${BENCH_PY}" "${SURFACE_TOOL}" attach "${PROVENANCE_PATH}"; then
+    :
+  else
+    log "WARNING: surface fingerprint failed; this run will not be attributable by file"
+  fi
+else
+  log "WARNING: ${SURFACE_TOOL} missing; no surface fingerprint recorded"
+fi
 
 MENHIR_PID=""
 cleanup_all(){
@@ -474,6 +500,25 @@ if [ -f "${RECALL_OUT}/results.md" ]; then
   cat "${RECALL_OUT}/results.md" >&2
 fi
 
+# Emit the score as machine-readable per-arm evidence alongside the rendered markdown.
+# results.md is the only score artifact this harness used to write, which is why every
+# LEDGER.md number was read by a human and retyped -- and why six runs with real scores
+# never reached the scoreboard. score.json is computed from the harness checkpoint (one line
+# per arm+task), so `ledger.py validate` can check the recorded number against the run's own
+# evidence instead of taking it on trust.
+#
+# Non-fatal and deliberately after the provenance/`complete` bookkeeping: this is a
+# derivation from artifacts already on disk, so it can be re-run later with
+# `score_extract.py <run-dir>` and must never be able to fail a run that already scored.
+SCORE_TOOL="${SCRIPT_DIR}/lib/score_extract.py"
+if [ -f "${SCORE_TOOL}" ]; then
+  if "${BENCH_PY}" "${SCORE_TOOL}" "${LME_RESULTS_DIR}" >&2; then
+    log "per-arm scores: ${LME_RESULTS_DIR}/score.json"
+  else
+    log "WARNING: score.json not written; add this run's ledger row by hand"
+  fi
+fi
+
 # Record completion
 record_phase_end recall-qa "$([ "${HARNESS_EXIT}" = "0" ] && echo completed || echo failed)" \
   "harness_exit=${HARNESS_EXIT}"
@@ -495,7 +540,15 @@ if [ -n "${HARNESS_CHECKPOINT}" ]; then
     --output "${LME_RESULTS_DIR}/run_llm_usage.json" >/dev/null
   log "combined LLM usage: ${LME_RESULTS_DIR}/run_llm_usage.json"
 else
-  log "WARNING: no harness checkpoint found; run_llm_usage.json was not written"
+  # No checkpoint means the harness produced nothing to aggregate -- but the ingest usage is
+  # already in the telemetry DB and build_graph.sh has written the ingest-only summary. Saying
+  # "not written" here would be wrong, and discarding the ingest cost because the scoring half
+  # failed is how the expensive half of a run becomes unknown.
+  if [ -f "${LME_RESULTS_DIR}/run_llm_usage.json" ]; then
+    log "no harness checkpoint; keeping the ingest-only usage summary from build_graph.sh"
+  else
+    log "WARNING: no harness checkpoint and no ingest usage summary; cost is unrecorded"
+  fi
 fi
 log "done. Results in ${LME_RESULTS_DIR}"
 if [ "${LME_KU_KEEP_NEO4J_UP}" = "1" ]; then

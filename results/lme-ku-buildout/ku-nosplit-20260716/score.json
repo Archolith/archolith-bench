@@ -1,0 +1,25 @@
+{
+  "run_id": "ku-nosplit-20260716",
+  "source": [
+    "harness_recall/.checkpoint_longmemeval-menhir_oracle_gpt-4o.jsonl"
+  ],
+  "primary_arm": null,
+  "arms": {
+    "menhir_recall": {
+      "n": 15,
+      "correct": 5,
+      "score": 0.333333,
+      "input_tokens": 7301,
+      "output_tokens": 155
+    },
+    "no_memory": {
+      "n": 15,
+      "correct": 0,
+      "score": 0.0,
+      "input_tokens": 1054,
+      "output_tokens": 60
+    }
+  },
+  "duplicate_entries_collapsed": 0,
+  "malformed_lines": 0
+}

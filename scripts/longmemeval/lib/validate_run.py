@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -54,6 +55,7 @@ def validate(
     *,
     telemetry_db: Path | None = None,
     expected_items: int | None = None,
+    require_fresh_clean: bool = False,
 ) -> dict[str, Any]:
     checks: list[dict[str, Any]] = []
 
@@ -67,35 +69,44 @@ def validate(
 
     # ---- Commit immutability ----
     attempts = provenance.get("attempts") or []
-    if len(attempts) <= 1:
+    commit_errors = []
+    for key in ("menhir_commit", "bench_commit"):
+        expected = provenance.get(key)
+        if not isinstance(expected, str) or not re.fullmatch(r"[0-9a-fA-F]{7,40}", expected):
+            commit_errors.append(f"{key} missing or invalid")
+        for index, attempt in enumerate(attempts):
+            if not isinstance(attempt, dict) or attempt.get(key) != expected:
+                commit_errors.append(f"attempt {index + 1} {key} differs")
+    if not attempts:
+        commit_errors.append("no attempts recorded")
+    checks.append(_check(
+        "commit_immutability", not commit_errors,
+        "; ".join(commit_errors) if commit_errors else
+        f"{len(attempts)} attempt(s) match both recorded commits",
+    ))
+
+    if require_fresh_clean:
+        phase_settings = [p.get("effective_settings") for p in provenance.get("phases", [])
+                          if isinstance(p, dict) and p.get("phase") == "ingest-graph"]
+        clean = bool(phase_settings) and all(
+            isinstance(settings, dict)
+            and settings.get("menhir_dirty") is False
+            and settings.get("bench_dirty") is False
+            and settings.get("menhir_untracked") == 0
+            and settings.get("bench_untracked") == 0
+            for settings in phase_settings
+        )
+        fresh = (provenance.get("graph_fresh") is True
+                 and provenance.get("volume_pre_existed") is False
+                 and provenance.get("require_fresh") == 1)
+        digest = provenance.get("surface_digest")
+        fingerprinted = isinstance(digest, str) and bool(re.fullmatch(r"[0-9a-fA-F]{64}", digest))
         checks.append(_check(
-            "commit_immutability", True,
-            f"single attempt (commit={provenance.get('menhir_commit', 'unknown')})",
+            "fresh_clean_provenance",
+            fresh and clean and fingerprinted and provenance.get("noncanonical") is not True,
+            f"fresh={fresh}, clean={clean}, surface_fingerprinted={fingerprinted}, "
+            f"canonical={provenance.get('noncanonical') is not True}",
         ))
-    else:
-        menhir_commits = {a.get("menhir_commit") for a in attempts} - {None}
-        bench_commits = {a.get("bench_commit") for a in attempts} - {None}
-        menhir_ok = len(menhir_commits) <= 1
-        bench_ok = len(bench_commits) <= 1
-        if menhir_ok and bench_ok:
-            checks.append(_check(
-                "commit_immutability", True,
-                f"{len(attempts)} attempts, all same commits "
-                f"(menhir={menhir_commits.pop() if menhir_commits else 'unknown'}, "
-                f"bench={bench_commits.pop() if bench_commits else 'unknown'})",
-            ))
-        else:
-            drift = []
-            if not menhir_ok:
-                drift.append(f"menhir: {sorted(menhir_commits)}")
-            if not bench_ok:
-                drift.append(f"bench: {sorted(bench_commits)}")
-            is_noncanonical = provenance.get("noncanonical", False)
-            checks.append(_check(
-                "commit_immutability", False,
-                f"commit drift across {len(attempts)} attempts: {'; '.join(drift)}"
-                + (" [noncanonical=true]" if is_noncanonical else ""),
-            ))
 
     # Noncanonical label
     checks.append(_check(
@@ -130,16 +141,28 @@ def validate(
                     f"{actual} items (no expected count specified)",
                 ))
 
-            # Failed episodes
-            failed = [
-                row for row in manifest
-                if isinstance(row, dict) and row.get("status") == "FAILED"
-            ]
+            # Ingest writes per-namespace counts, not an episode-level status.
+            # Missing or malformed counts are unknown, never evidence of success.
+            failed = []
+            unknown = []
+            timed_out = []
+            for index, row in enumerate(manifest):
+                if not isinstance(row, dict):
+                    unknown.append(index)
+                    continue
+                count = row.get("failed_remaining")
+                if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+                    unknown.append(index)
+                elif count > 0:
+                    failed.append((index, count))
+                if row.get("drain_timed_out") is True:
+                    timed_out.append(index)
             checks.append(_check(
                 "zero_failed_episodes",
-                len(failed) == 0,
-                f"{len(failed)} failed episodes" if failed
-                else f"all {actual} episodes succeeded",
+                not failed and not unknown and not timed_out,
+                f"failed={failed[:5]}, unknown_counts={unknown[:5]}, "
+                f"drain_timed_out={timed_out[:5]}" if failed or unknown or timed_out
+                else f"all {actual} manifest items have zero failed episodes",
             ))
 
             # Namespace isolation: every namespace starts with the configured prefix
@@ -210,12 +233,14 @@ def validate(
 
     # ---- Source-time integrity (from provenance phases) ----
     phases = provenance.get("phases") or []
-    interrupted = [p for p in phases if p.get("status") == "interrupted"]
+    unfinished = [p for p in phases if not isinstance(p, dict)
+                  or p.get("status") != "completed"]
     checks.append(_check(
         "no_interrupted_phases",
-        len(interrupted) == 0,
-        f"{len(interrupted)} interrupted phase(s)" if interrupted
-        else f"all {len(phases)} phases completed or recorded",
+        bool(phases) and not unfinished,
+        f"{len(unfinished)} non-completed phase(s)" if unfinished
+        else f"all {len(phases)} phases completed" if phases
+        else "no phases recorded",
     ))
 
     return _report(checks)
@@ -239,6 +264,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("manifest", type=Path, help="manifest.json")
     parser.add_argument("--telemetry-db", type=Path, default=None)
     parser.add_argument("--expected-items", type=int, default=None)
+    parser.add_argument("--require-fresh-clean", action="store_true")
     parser.add_argument("--output", type=Path, default=None,
                         help="write report JSON here (also printed to stdout)")
     args = parser.parse_args(argv)
@@ -248,6 +274,7 @@ def main(argv: list[str] | None = None) -> int:
         args.manifest,
         telemetry_db=args.telemetry_db,
         expected_items=args.expected_items,
+        require_fresh_clean=args.require_fresh_clean,
     )
 
     text = json.dumps(report, indent=2)

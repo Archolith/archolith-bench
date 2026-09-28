@@ -55,11 +55,22 @@ export LME_MANIFEST_PATH="${LME_MANIFEST_PATH:-${HERE}/results/manifest-datesmok
 
 log(){ printf '[date-smoke] %s\n' "$*" >&2; }
 
+# Sourced here, not only before the verify step below: the --clean block needs LME_RESULTS_DIR to
+# remove this graph's provenance record, and under `set -u` an unsourced config aborted --clean
+# AFTER it had already destroyed the container and volume. config.sh is side-effect free and every
+# value it sets is ${VAR:-default}, so the exports above still win.
+source "${HERE}/config.sh"
+
 if [ "${1:-}" = "--clean" ] || [ "${LME_SMOKE_CLEAN:-0}" = "1" ]; then
   log "removing previous smoke container/volume/manifest..."
   docker rm -f "${LME_NEO4J_NAME}" >/dev/null 2>&1 || true
   docker volume rm "${LME_NEO4J_VOL}" >/dev/null 2>&1 || true
   rm -f "${LME_MANIFEST_PATH}" || true
+  # The graph provenance too. Provenance is append-only and records failed attempts on purpose,
+  # so a refused run leaves a record carrying that attempt's surface_digest. Keeping it across an
+  # explicit --clean made the next run look like a mixed-code RESUME of a graph that no longer
+  # exists, and the canonical surface gate refused it -- correctly, on stale evidence.
+  rm -f "${LME_RESULTS_DIR}/graph-provenance-${LME_NEO4J_NAME}.json" || true
 fi
 
 log "container=${LME_NEO4J_NAME} bolt=${LME_BOLT} fixture=${LME_FIXTURE_PATH}"

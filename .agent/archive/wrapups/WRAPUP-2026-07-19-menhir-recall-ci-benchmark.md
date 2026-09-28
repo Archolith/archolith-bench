@@ -98,3 +98,28 @@ The bench harness and baseline are overlaid from `main` after the PR is checked 
 5. **Write bash equivalent** (`scripts/bench-pr.sh`) for Linux/mac
 6. **Hash-pin question IDs** in the baseline file so the stratified slice is deterministic across dataset re-publishes
 7. **Add to menhir's `pyproject.toml`** a `bench` optional dependency that installs `archolith-bench` for developers who want to run the bench locally
+
+---
+
+## Disposition - 2026-09-12 (post-remediation verification of the 2026-07-19 F/F review)
+
+The original review (ledger row 335, 2026-07-19) scored this work 35/F, 45/F with 2x P1,
+2x P2, and the wrapup was left READY FOR REVIEW. All of those findings were remediated
+nine days later in bench commit `7d13e6b` (2026-07-28, "harden bounded Menhir benchmark
+runs") but never re-reviewed or recorded:
+
+- **P1a (worktree added from the archolith-bench repository, so `python -m menhir serve`
+  could not resolve Menhir; dry-run logged `No module named menhir` while reporting
+  healthy): FIXED.** `scripts/bench-pr.ps1:159` now creates the worktree from the menhir
+  repository, and `orchestrator.py` serves the PR code via `PYTHONPATH=<worktree>/src`
+  plus the menhir venv interpreter with `cwd=menhir_dir`.
+- **P1b (any already-running service on the port accepted as healthy): FIXED.**
+  `_wait_for_health` requires `proc.poll() is None` before and after the HTTP 200.
+- **P2 (budget checks post-request only, no active mid-run kill): FIXED.** `budget_proxy`
+  returns 429 on cap exceeded and signals the parent to kill via the `on_killed`
+  callback; the orchestrator checks `proxy.is_killed()` after each slice.
+
+Independent verification 2026-09-12: `pytest tests/test_ci_orchestrator.py
+tests/test_ci_card.py tests/test_ci_compare.py tests/test_ci_stratified.py` - 18 passed;
+`bench-pr.ps1` tracked and clean; commit `f094799` and `7d13e6b` both in `master`
+history. Disposition ledger entry appended 2026-09-12.

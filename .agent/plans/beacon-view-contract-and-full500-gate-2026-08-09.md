@@ -9,6 +9,15 @@ release plus Menhir/evaluation workstreams)
 `1fa57955b24f90d08550c911f26133e5b14cbb89`; Bench
 `d5e97cc4fc322564c624a749e2cb25dccdf9c2ea`
 
+> **DEFERRED 2026-09-15 (ctharvey).** The runtime `MenhirBeaconProvider` this plan defines is a
+> much-later item. Menhir integrates into Beacon at **build time** first — as a source adapter whose
+> output is baked into the snapshot — per
+> `beacon/.agent/plans/beacon-build-pipeline-and-source-adapters-plan-2026-09-15.md` §7 Q1. This plan is
+> deferred, not rejected: the normalized envelope and View read boundary it specifies remain the
+> intended contract, and the build-time adapter should consume the same envelope so the runtime provider
+> can layer on later without rework. Do not start Phase 1 until the build-time path has shipped and the
+> revisit conditions recorded in that plan's Q1 apply.
+
 ## Objective
 
 Prove that Beacon can consume a small, generic Menhir View projection for real project knowledge

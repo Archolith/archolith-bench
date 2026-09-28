@@ -8,6 +8,7 @@ up later as an unexplained recall miss.
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -217,4 +218,93 @@ def test_assistant_turns_are_unaffected_by_user_durable_routing() -> None:
     assert (
         segmenter.segmentation_mode("assistant", "I've scheduled your appointment.")
         == MODE.EXTRACT_WHOLE
+    )
+
+
+# ---------------------------------------------------------------------------
+# Assistant durable-content gate: precision
+#
+# The gate previously ended in a bare alternation of past participles, which matched 58 of
+# 915 assistant turns on the KU fixture -- every one a false positive, each admitting ~2.3KB
+# of advice prose into the graph as a whole episode. The cases below are the measured
+# false-positive forms and the transactional forms that must survive narrowing.
+# ---------------------------------------------------------------------------
+
+ASSISTANT_DURABLE = [
+    "I've scheduled your appointment.",
+    "I've booked your reservation for Friday.",
+    "I have configured your settings.",
+    "Your order has been confirmed.",
+    "The subscription was cancelled.",
+    "Your account is suspended.",
+    "I'll remember that you prefer aisle seats.",
+]
+
+# Verbatim from fixtures/longmemeval/knowledge_update_subset.json assistant turns.
+ASSISTANT_ADVICE_PROSE = [
+    # Bare participles with no subject binding: 51 of the 58 measured matches.
+    "Once you've completed that, focus on Task 1 (Finish project report).",
+    "Any deadlines or time-sensitive tasks that need to be completed this week?",
+    "Given that you've already done 2,000 miles on your current wheels, it's likely time.",
+    "If they're still in excellent shape, they'll be more likely to be accepted by the thrift store.",
+    "I don't recall you getting pre-approved for a mortgage or any other personal detail.",
+    # Assistant generating advice content, not recording a user fact.
+    "Based on your input, I've created a suggested schedule for you to tackle your projects.",
+    "I've created a 20-mile route that meets your requirements.",
+    "With that information, I've created a daily routine that incorporates your episodes.",
+    # Instructional prose about filling in fields, not a record in a terminal state.
+    "Optimize your profile: Ensure your profile is complete, including a profile picture, bio.",
+    "To access Insights, make sure your account is set to a Business or Creator profile.",
+]
+
+
+@pytest.mark.parametrize("text", ASSISTANT_DURABLE)
+def test_transactional_assistant_turns_are_extracted(text: str) -> None:
+    assert segmenter.is_memory_bearing_assistant_output(text) is True
+    assert segmenter.segmentation_mode("assistant", text) == MODE.EXTRACT_WHOLE
+
+
+@pytest.mark.parametrize("text", ASSISTANT_ADVICE_PROSE)
+def test_assistant_advice_prose_stays_context_only(text: str) -> None:
+    """Each of these matched the old gate and entered the graph as a whole episode."""
+    assert segmenter.is_memory_bearing_assistant_output(text) is False
+    assert segmenter.segmentation_mode("assistant", text) == MODE.CONTEXT_ONLY
+
+
+def test_possessive_is_required_after_a_completed_action() -> None:
+    """"I've created a schedule" is content generation; "I've created your schedule" is a
+    fact about the user's records. The possessive is what separates them."""
+    assert segmenter.is_memory_bearing_assistant_output("I've created a schedule.") is False
+    assert segmenter.is_memory_bearing_assistant_output("I've created your schedule.") is True
+
+
+def test_bare_complete_is_not_a_terminal_state() -> None:
+    """"is complete" describes fullness and appears in advice; "is completed" is an action
+    that finished. Accepting the adjective reintroduced a measured false positive."""
+    assert segmenter.is_memory_bearing_assistant_output("Your profile is complete.") is False
+    assert segmenter.is_memory_bearing_assistant_output("Your order is completed.") is True
+
+
+def test_no_assistant_turn_in_the_ku_fixture_matches_the_gate() -> None:
+    """Whole-corpus precision check: 58 matches before this narrowing, 0 after.
+
+    If a future edit widens the gate, this is where it shows up -- as a count, against real
+    advice prose, rather than as a judgement call about one example.
+    """
+    fixture = (
+        Path(__file__).resolve().parents[1]
+        / "fixtures" / "longmemeval" / "knowledge_update_subset.json"
+    )
+    items = json.loads(fixture.read_text(encoding="utf-8"))
+    matched = [
+        turn["content"]
+        for item in items
+        for session in item["haystack_sessions"]
+        for turn in session
+        if turn.get("role") == "assistant"
+        and segmenter.is_memory_bearing_assistant_output(turn.get("content") or "")
+    ]
+    assert matched == [], (
+        f"{len(matched)} assistant turn(s) now match the durable gate; "
+        f"first: {matched[0][:160]!r}"
     )

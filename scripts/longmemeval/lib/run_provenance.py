@@ -54,6 +54,19 @@ COMMIT_KEYS = (
     "bench_commit",
 )
 
+# The content fingerprint of the benchmark-affecting surface (see bench_surface.py). Immutable
+# in canonical mode for the same reason the commits are, and it catches strictly more: a dirty
+# tree or an untracked edit changes behavior while leaving both SHAs identical, which is how
+# the assistant-turn gate in claim_segmenter.py came to be attributed to the wrong commit.
+#
+# Treated as absent when empty or missing, not as a digest of "". Fingerprinting is non-fatal
+# at launch by design -- evidence about a run, not a precondition for it -- so a run that could
+# not compute one must still be resumable. The cost is that such a run is not gated; `validate`
+# and `blame` both report a missing fingerprint rather than letting it pass as agreement.
+SURFACE_KEYS = (
+    "surface_digest",
+)
+
 # Phase statuses. "interrupted" is assigned retroactively: a phase recorded as started that
 # never recorded an end means the process died inside it.
 STATUS_STARTED = "started"
@@ -114,6 +127,13 @@ def commits_of(document: dict[str, Any]) -> dict[str, Any]:
     return {key: source[key] for key in COMMIT_KEYS if key in source}
 
 
+def surface_of(document: dict[str, Any]) -> dict[str, Any]:
+    """The surface fingerprint carried by *document*, ignoring empty or missing values."""
+    stored = document.get("identity")
+    source = stored if isinstance(stored, dict) else document
+    return {key: source[key] for key in SURFACE_KEYS if source.get(key)}
+
+
 def assert_same_run(
     previous: dict[str, Any],
     attempt: dict[str, Any],
@@ -164,6 +184,35 @@ def assert_same_run(
                 "refusing canonical resume: code commits changed since the original attempt "
                 f"({details}). Set LME_NONCANONICAL=1 to permit mixed-code development runs."
             )
+
+        # Surface drift. Checked after the commits so the clearer diagnosis wins when both
+        # moved; when only this one moved, the commits are identical and the cause is an
+        # uncommitted or untracked edit -- which no SHA comparison can see.
+        established_surface = surface_of(previous)
+        incoming_surface = surface_of(attempt)
+        for key, recorded in established_surface.items():
+            attempted = incoming_surface.get(key)
+            if attempted is None:
+                raise ProvenanceMismatch(
+                    f"refusing canonical resume: the original attempt recorded {key} "
+                    f"{recorded[:12]}... but this attempt recorded none, so it cannot show it "
+                    "is running the same code. Set LME_NONCANONICAL=1 to permit it."
+                )
+            if attempted != recorded:
+                same_commits = commits_of(previous) == commits_of(attempt)
+                cause = (
+                    " The commits are identical, so this is an uncommitted or untracked edit "
+                    "to a declared surface file -- run `bench_surface.py fingerprint` to see "
+                    "the current surface, and `git status` to find the change."
+                    if same_commits else
+                    " The commits also differ; see the commit error above."
+                )
+                raise ProvenanceMismatch(
+                    f"refusing canonical resume: {key} changed since the original attempt "
+                    f"(recorded={recorded[:12]}... attempted={attempted[:12]}...). Resuming "
+                    "would build one graph from two different code states, making its score "
+                    f"unattributable.{cause} Set LME_NONCANONICAL=1 to permit it."
+                )
 
 
 def mark_interrupted(phases: list[dict[str, Any]], at: str) -> int:
@@ -229,6 +278,7 @@ def begin(
         document = dict(attempt)
         document["identity"] = identity_of(attempt)
         document["identity"].update(commits_of(attempt))
+        document["identity"].update(surface_of(attempt))
         document["first_started_at"] = started_at
         document["phases"] = []
         document["attempts"] = [{**snapshot, "attempt": 1, "phases_interrupted": 0}]

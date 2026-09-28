@@ -115,30 +115,23 @@ unlike consolidation) and does **not** change existing recall-only A/B results �
 pass `include_session=True`, so the nodes were always visible; promotion only *also* exposes them
 to `build_context` and plain recall.
 
-### ⚠️ Temporal grounding: dates need a backfill (now automatic as of 2026-07-15)
+### Temporal grounding: verify dates from the ingest
 
-**Known bug, still present in graphiti-core 0.29.2 (re-verified 2026-07-15):** the ingest path
-does **not** honor `occurred_at` on graphiti's own Episodic nodes/`RELATES_TO` edges — an episode
-ingested with the session's historical date still lands `valid_at = now()` even though menhir's
-own Episodic nodes correctly carry the backdated `reference_time`. So a **freshly built graph has
-fake temporal grounding on the graphiti side** (episodes/edges stamped with the build date), which
-breaks temporal-reasoning and the BriefBuilder Timeline.
+The ingest now projects the session's historical `reference_time` into Graphiti. The earlier
+missing projection was fixed in Menhir (`27d9bad`). `build_graph.sh` defaults to
+`LME_BACKFILL_DATES=0`, so a fresh graph must have correct `valid_at` values without a repair.
+Before accepting a candidate, run the isolated date smoke (`run_date_smoke.sh`) and inspect its
+fixture comparison. This uses a separate container and volume and keeps backfill disabled.
 
-**As of 2026-07-15, `build_graph.sh` runs the backfill automatically as the last build step** —
-no manual follow-up needed for a normal `lme.sh build`. It's still available standalone for a
-partial/legacy build or to preview changes first:
+The backfill remains available for an explicitly chosen legacy repair, with a dry-run first:
 
 ```bash
 ./scripts/longmemeval/lme.sh backfill-dates --dry-run   # preview counts
 ./scripts/longmemeval/lme.sh backfill-dates             # apply (writes a revert snapshot first)
 ```
 
-Only `valid_at` (world-time) is rewritten; `created_at`/`expired_at` (belief-time = ingestion) are
-correct as-is. Genuine LLM-extracted edge dates are preserved (only ingestion-defaulted edges are
-touched). Idempotent — safe to run again even if already backfilled (a fully-backfilled graph
-reports `0 to backfill`). A revert snapshot is written to `results/lme-ingest/date-backfill-revert.json`
-(or `date-backfill-revert-<LME_NEO4J_NAME>.json` for a non-canonical container — see
-`config.sh:LME_REVERT_SNAPSHOT_PATH`) before any mutation.
+Do not use a backfill as proof that a new ingest handles historical dates. A repair writes a
+revert snapshot under `results/lme-ingest/`; see `config.sh:LME_REVERT_SNAPSHOT_PATH`.
 
 ## run_manifest.json Contract
 
@@ -177,16 +170,20 @@ later from these immutable token counts and the price schedule being evaluated.
 ## Acceptance Validation
 
 `lme.sh validate [--expected N]` runs `lib/validate_run.py` against the current provenance file,
-manifest, and telemetry DB. It emits a machine-readable JSON report covering:
+manifest, and telemetry DB. This acceptance command requires fresh-graph, clean-commit,
+fingerprinted provenance. It emits a machine-readable JSON report covering:
 
 - **manifest cardinality** (expected vs actual items)
-- **zero failed episodes** (strict zero-tolerance policy)
+- **zero failed episodes** (`failed_remaining` is known and zero for every manifest item;
+  timed-out drains fail)
 - **projection counts** (assertions, scalar_state Views)
 - **namespace isolation** (all namespaces start with the configured prefix)
 - **commit immutability** (all attempts ran the same Menhir and bench code)
+- **fresh, clean provenance** (new volume, required freshness, clean tracked/untracked source,
+  and a recorded surface fingerprint)
 - **canonical label** (warns if the run is marked noncanonical)
 - **telemetry presence** (DB exists and has lifecycle events)
-- **no interrupted phases** (all phases completed cleanly)
+- **completed phases** (every recorded phase completed; empty phase history fails)
 
 Exit 0 on PASS; exit 1 on any FAIL check. The report is also written to
 `$LME_RESULTS_DIR/acceptance-report.json`.
@@ -219,6 +216,234 @@ Each phase entry records the state it inherited and the settings it truly ran un
 
 A phase is closed only on the success path, so a killed run leaves its phase `started`; the next
 attempt's `begin` marks it `interrupted`. That is a fact worth seeing, not an error.
+
+## Ledger: `ledger.csv` is the source, `LEDGER.md`'s table is generated
+
+`LEDGER.md` carries real analysis — regression breakdowns, per-item tables, findings — and
+that prose stays prose, hand-maintained. Its *scoreboard* was different: tabular data being
+hand-typed, which meant nothing could join a score delta to a provenance delta without a
+human reading both files.
+
+So the scoreboard lives in `results/lme-ku-buildout/ledger.csv` and the markdown table is
+generated from it. Edit the CSV, then render. Only the region between the
+`BEGIN/END GENERATED SCOREBOARD` markers is rewritten; if those markers are missing the
+generator refuses rather than guessing where the table is, because guessing would overwrite
+analysis.
+
+```bash
+LIB=scripts/longmemeval/lib
+
+python $LIB/ledger.py render     # CSV -> the table in LEDGER.md
+python $LIB/ledger.py validate   # rows vs. the closed vocabulary and the filesystem
+python $LIB/ledger.py join A B   # score delta + surface blame, in one command
+```
+
+`join` is the question the ledger could not answer before: a score moved, where do I look
+first? The delta comes from the CSV, the attribution from the surface fingerprints in each
+run's provenance.
+
+### Schema
+
+The columns refuse to launder messy reality into clean numbers:
+
+- `score` is empty unless the run produced exactly one usable score. A row reporting two arms
+  (`v2c 0.667 / v2h 0.679`) keeps both in `score_raw` and leaves `score` empty — any single
+  float there would be a fabrication.
+- `status` is a closed vocabulary (`scored`, `multi_arm`, `killed`, `aborted`, `invalid`,
+  `partial`, `measure_only`, `offline`), so an empty score always has a stated reason and is
+  never ambiguous between *unscored* and *scored zero*.
+- `canonical` is `""`, `superseded`, or `current`, and **at most one row may be `current`** —
+  two rows claiming to be the current canonical evidence is an unresolved claim, not a
+  formatting detail.
+
+### `score.json`: the number, checkable
+
+The buildout harness writes only `harness_recall/results.md` — rendered markdown. That is
+why every `LEDGER.md` score was read by a human and retyped, and why six runs with real
+scores never reached the scoreboard. `lib/score_extract.py` reads the authoritative source
+instead — `harness_recall/.checkpoint_*.jsonl`, one line per (arm, task) carrying
+`result.correct` — and writes per-arm `score.json` into the run directory. The buildout
+wrapper now calls it after the harness; run it by hand on any older directory:
+
+```bash
+python scripts/longmemeval/lib/score_extract.py results/lme-ku-buildout/<run>
+```
+
+It reproduces the hand-typed history exactly: 0.467, 0.346, 0.333 and 0.872 for the four
+runs whose ledger rows carry a score and whose checkpoint survives, including
+`68/78 recall vs 6/78 (0.077) no-memory` for the canonical run.
+
+**It never picks a primary arm.** A run carries up to six (`no_memory`, `menhir_recall`,
+`menhir_value_recall`, the v2/v3 variants), and which one a row quotes is a judgement:
+`value-arm-verify-20260717` records **0.679**, its `menhir_value_recall` arm, while its
+`menhir_recall` arm scored **0.333**. Auto-picking by name order publishes the wrong number.
+So the ledger has a `primary_arm` column, and `validate` cross-checks the recorded score
+against `score.json` for that arm — which catches a typo, a stale copy, and a number quoted
+from the wrong arm. Two further guards: a declared arm absent from `score.json` fails, and an
+arm whose item count disagrees with `items_total` warns.
+
+`score_extract.py` also refuses to turn absence into zero — a run with no checkpoint raises
+rather than reporting 0.0, because an aborted launch and a run that genuinely scored 0.0 are
+different facts. It de-duplicates by (arm, task) with last-wins, since `--resume` appends and
+a re-scored task would otherwise be counted twice.
+
+### Severity model
+
+`FAIL` means the ledger asserts something false; `WARN` means it is incomplete. Only `FAIL`
+exits non-zero (use `--strict` to fail on warnings too), which keeps `validate` usable as a
+gate instead of permanently red.
+
+Validation runs in **both directions**. Rows → disk catches a row claiming a results directory
+that is not there. Disk → rows catches the more dangerous case: a run that executed, wrote
+provenance, and never reached the scoreboard, so its evidence exists but is invisible to
+anyone reading the table. Note that `manifest.json` and `harness_recall/` are deliberately
+*not* treated as score evidence — they prove ingest or recall ran, not that a number was
+produced.
+
+Both directions' checks need the evidence tree. `results/` is gitignored, so a fresh
+checkout (CI included) has `ledger.csv` and none of the run directories: validate then skips
+the on-disk cross-checks and says so in one WARN, while every schema and self-consistency
+check still runs. Without that distinction, each row recording `has_results_dir=true` would
+fail in CI for the one reason that is not a defect — the evidence was never committed. An
+absent tree is *cannot check*, not *the claim is false*.
+
+CI runs these as a named step (`Ledger and benchmark-surface reports`) on top of the suite's
+own gates, so a red build names the offending row or file instead of reporting "a test
+failed", and the WARN tier the tests ignore stays visible.
+
+### Deliberate exclusions (`ledger-excluded.txt`)
+
+Some run directories hold a real score but are not buildout results -- recall panels against an
+existing graph, rescores, single-item diagnostics. Listing them in
+`results/lme-ku-buildout/ledger-excluded.txt` as `<run_id>  <reason>` records that decision once
+so the orphan finding stops reappearing and getting re-litigated.
+
+Exclusion is kept honest by three guards, because "not in the scoreboard" must never become a
+way to hide a result:
+
+- **A reason is required.** An entry without one is refused outright.
+- **Excluded runs are still counted** in one summary WARN, so the decision stays visible and
+  their scores remain in each run's `score.json`.
+- **A run that is both excluded and recorded FAILs**, and an exclusion naming a directory that
+  no longer exists WARNs as stale.
+
+**Current state of the real ledger: 0 FAIL, 24 WARN** (15 runs excluded as of 2026-09-08). The warnings are honest debt, not
+noise: 24 rows cover 51 run directories, 9 directories hold a readable score with no row
+(small-sample packet-shape and rescore panels — decide whether they belong in a *buildout*
+scoreboard), and most pre-fingerprint runs cannot have their deltas attributed to files.
+
+## Run cost: both halves, recorded
+
+Recall/QA cost was always provider-reported in `harness_recall/results.md`. Ingest cost -- the
+expensive half -- was not surfaced at all, so a 78-item buildout had an exactly-known $0.40
+recall figure and an ingest figure nobody could state.
+
+Menhir records the raw usage itself: `llm_usage_events` in the run's `mcp_telemetry.db`, written
+via `infrastructure/telemetry/llm_usage_store.py`. That landed **2026-08-10**, which is why runs
+before it (including `scalar-canonical-ku78-v1-20260806`) have no ingest tokens -- a date
+problem, not a missing feature, and not backfillable.
+
+`build_graph.sh` now writes `run_llm_usage.json` after every ingest, so a graph build records its
+own cost whether or not anything later scores it. A wrapper that does score the graph overwrites
+that file with the combined menhir+harness summary. When the harness produces no checkpoint the
+buildout wrapper keeps the ingest-only summary rather than discarding it: losing the expensive
+half because the scoring half failed is the failure this closes.
+
+```bash
+python scripts/longmemeval/lib/summarize_llm_usage.py <run>/mcp_telemetry.db   --run-id <id> --output <run>/run_llm_usage.json          # ingest only
+#   ... --harness-checkpoint <run>/harness_recall/.checkpoint_*.jsonl   # + recall
+```
+
+Rates live in `INGEST_RATES_USD_PER_1M` in that script: static and dated, matching
+`core/metrics.py`'s convention. They are deliberately **not** `core.metrics.PRICING_DEFAULTS`,
+which is keyed by provider and whose `openai` entry is gpt-4o ($2.50/$10.00), the answer model;
+ingest runs on gpt-4o-mini, 16x cheaper on input, so pricing ingest there would overstate a
+buildout by roughly an order of magnitude.
+
+**Cached input is priced at the cache rate.** Provider usage reports `input_tokens` as the FULL
+prompt with `cached_input_tokens` as a SUBSET of it, so costing all input at the full rate
+overcharges every cached call. That is not a rounding detail here: the 1-item smoke below had
+33% of its input served from cache, and ignoring it overstated the run by 17%.
+
+**An unknown model is reported, never priced at zero.** `unpriced_models` and `unpriced_calls`
+say what could not be costed, and that row's `cost_usd` is `null` rather than `0.0` -- costing an
+unrecognised model at zero would make a run carrying one look *cheaper* than one without it.
+When `unpriced_calls` is non-zero, `cost_usd` is a floor.
+
+**Measured 2026-09-08** (1-item date smoke, 23 turns): 96 chat calls + 23 embedding calls,
+124,457 input / 5,334 output tokens of which **41,472 input (33%) were cache reads**, 0 calls
+missing usage. Cost **$0.018759** cache-aware. The canonical 78-item run recorded 11,178 chat
+calls (~143/item), which at that per-call rate is roughly **$2.20 ingest + $0.40 recall**.
+Re-measure rather than trusting that extrapolation: the smoke item is one fixture item, not the
+78-item average, and cache hit rate varies with how much prompt prefix repeats.
+
+## Benchmark Surface Fingerprint (`bench-surface.yaml`)
+
+A commit SHA does not establish what code a run executed. Two runs can share a SHA and
+differ — a dirty tree, or an untracked file — and a file can change behavior in one commit
+while `git log` attributes it to another. The assistant-turn gate in `claim_segmenter.py` is
+the worked example: it was authored untracked, then swept into git by
+`f49ab59 chore(bench): track 12 previously-untracked LME scripts`, so a commit-range diff
+dates it wrongly and never names it.
+
+`bench-surface.yaml` declares the paths that can move a score, tagged by pipeline stage
+(`fixture` → `ingest` → `consolidate` → `recall` → `score` → `harness`).
+`lib/bench_surface.py` hashes them into each run's provenance, so comparing two runs yields
+file-level evidence instead of a commit-range guess.
+
+```bash
+# What is the surface right now?
+python scripts/longmemeval/lib/bench_surface.py fingerprint
+
+# Why do these two runs differ?
+python scripts/longmemeval/lib/bench_surface.py blame \
+  results/lme-ku-buildout/<run-a>/run_provenance.json \
+  results/lme-ku-buildout/<run-b>/run_provenance.json
+```
+
+`run_knowledge_update_buildout.sh` calls `attach` after `begin`, recording the fingerprint
+against the running attempt — per attempt, because separate attempts of one run may execute
+different code.
+
+Three properties it holds, because it is evidence and not a convenience:
+
+- **A declared-but-absent file is recorded, not skipped.** Deleting a surface file changes
+  the digest; a skipped path would leave it unchanged.
+- **The manifest hashes itself** (`manifest_sha256` feeds `surface_digest`). Narrowing the
+  surface is itself a change to what is tracked, so a shrunken declaration cannot go on
+  looking stable.
+- **A missing repo is an error, not a column of nulls** — an absent checkout would otherwise
+  fingerprint as "every file deleted", which is wrong *and* stable across runs.
+
+**Canonical resumes are gated on it.** Both wrappers compute the digest before writing their
+attempt record (`fingerprint --digest-only`), so `run_provenance.py begin` treats it as immutable
+identity alongside `menhir_commit`/`bench_commit`. A resume whose surface moved is refused with
+exit 2: resuming would build one graph from two code states, making its score unattributable.
+When the commits are identical the message says so explicitly, because that is the dirty-tree or
+untracked-edit case no SHA comparison can see, and it names the two commands that find it.
+`LME_NONCANONICAL=1` permits the drift and labels the run `noncanonical`.
+
+Three boundaries on that gate:
+
+- **Fingerprinting is non-fatal at launch.** A fingerprint is evidence about a run, not a
+  precondition for it; refusing to launch would trade a recorded gap for no run at all. An empty
+  digest therefore reads as *absent*, never as a digest of `""` -- otherwise two runs that both
+  failed to fingerprint would look like they agreed on a code state.
+- **A baseline without a digest stays resumable.** Only keys the earlier record actually carried
+  are compared, so runs predating the fingerprint do not become unresumable.
+- **A resume that drops the digest is refused.** If the baseline had one, an attempt without one
+  cannot demonstrate it is running the same code.
+
+When editing the surface: bias **broad**. A path listed that turns out not to matter costs
+one extra line in a blame report; a path missing makes a real behavior change invisible.
+`tests/test_lme_bench_surface.py` fails if any checked-in glob matches nothing, which catches
+a renamed or deleted module silently shrinking coverage.
+
+**Historical runs predate this.** Of 51 run directories, 16 have no `run_provenance.json` at
+all, 18 of the remaining 35 record no dirty flag, 14 carry no `fixture_sha256`, and 5 ran with
+a dirty tree. `blame` reports a run with no fingerprint as not-comparable rather than guessing.
+Fingerprints are reconstructible via `git show` only for the runs that were clean *and* recorded
+a full SHA; the 5 dirty runs and the 16 with no provenance are permanently unattributable.
 
 ## Menhir Recall Lab integration
 
