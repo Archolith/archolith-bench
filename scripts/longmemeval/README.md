@@ -128,6 +128,9 @@ For a bounded Oracle preflight, set `LME_FIXTURE_PATH` to an explicit JSON fixtu
 starting Docker, records both in provenance, and passes that exact fixture to the ingester.
 Use a distinct container, volume, ports, and manifest for each attempt. A bare `build 5`
 without a fixture selects the dataset's first five items and is not a per-type smoke.
+The build accepts `OPENAI_API_KEY` from the process environment; it falls back to the bench
+checkout's `.env` only when that variable is unset. Keep credentials out of fixtures and
+provenance.
 
 The backfill remains available for an explicitly chosen legacy repair, with a dry-run first:
 

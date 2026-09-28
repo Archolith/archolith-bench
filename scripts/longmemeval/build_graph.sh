@@ -50,10 +50,14 @@ PY
   LME_FIXTURE_COUNT="${ACTUAL_FIXTURE_COUNT}"
 fi
 
-OPENAI_KEY="$("${MENHIR_FRONTIER_PY}" - "${BENCH_DIR}/.env" OPENAI_API_KEY <<'PY'
+OPENAI_KEY="${OPENAI_API_KEY:-}"
+if [ -z "${OPENAI_KEY}" ]; then
+  OPENAI_KEY="$("${MENHIR_FRONTIER_PY}" - "${BENCH_DIR}/.env" OPENAI_API_KEY <<'PY'
 import sys; from dotenv import dotenv_values; print(dotenv_values(sys.argv[1]).get(sys.argv[2],""))
 PY
-)"; [ -n "${OPENAI_KEY}" ] || die "no OPENAI_API_KEY in ${BENCH_DIR}/.env"
+  )"
+fi
+[ -n "${OPENAI_KEY}" ] || die "OPENAI_API_KEY is unset and absent from ${BENCH_DIR}/.env"
 
 # ---- persistent Neo4j (reuse if already up) ----
 # Freshness provenance: "graph_fresh" must mean the DATA is new, not just that the
