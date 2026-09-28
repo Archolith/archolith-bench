@@ -269,8 +269,9 @@ def test_cached_exceeding_total_cannot_credit_the_bill(tmp_path) -> None:
 def test_batch_slug_is_half_the_sync_rate(tmp_path) -> None:
     """Priced for comparison only -- :batch is an async submit-and-poll API that Menhir's
     sequentially-dependent ingest cannot use."""
-    rows = lambda model: [("a", "t", "r", "chat", model, "chat", "completed",
-                           1_000_000, 1_000_000, 2_000_000, 0, 0)]
+    def rows(model):
+        return [("a", "t", "r", "chat", model, "chat", "completed",
+                 1_000_000, 1_000_000, 2_000_000, 0, 0)]
     sync = summarize_llm_usage(_usage_db(tmp_path / "s", rows("openai/gpt-5.6-luna")), run_id="r")
     batch = summarize_llm_usage(
         _usage_db(tmp_path / "b", rows("openai/gpt-5.6-luna:batch")), run_id="r"
@@ -279,8 +280,9 @@ def test_batch_slug_is_half_the_sync_rate(tmp_path) -> None:
 
 
 def test_luna_and_luna_pro_are_priced_identically(tmp_path) -> None:
-    rows = lambda model: [("a", "t", "r", "chat", model, "chat", "completed",
-                           500_000, 10_000, 510_000, 0, 0)]
+    def rows(model):
+        return [("a", "t", "r", "chat", model, "chat", "completed",
+                 500_000, 10_000, 510_000, 0, 0)]
     a = summarize_llm_usage(_usage_db(tmp_path / "a", rows("openai/gpt-5.6-luna")), run_id="r")
     b = summarize_llm_usage(
         _usage_db(tmp_path / "p", rows("openai/gpt-5.6-luna-pro")), run_id="r"
