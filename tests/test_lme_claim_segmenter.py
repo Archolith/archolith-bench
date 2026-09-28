@@ -308,3 +308,16 @@ def test_no_assistant_turn_in_the_ku_fixture_matches_the_gate() -> None:
         f"{len(matched)} assistant turn(s) now match the durable gate; "
         f"first: {matched[0][:160]!r}"
     )
+
+
+@pytest.mark.parametrize(
+    "claim",
+    [
+        "I switched to a new GPS system in my car yesterday.",
+        "Toyota switched to a new GPS system in its cars yesterday.",
+        "IT switched the database to PostgreSQL yesterday.",
+    ],
+)
+def test_heuristic_keeps_claims_with_explicit_subjects(claim: str) -> None:
+    source = f"{claim} I plan to test it tomorrow."
+    assert claim in [segment.text for segment in segmenter._heuristic_extract_claims(source, "user")]

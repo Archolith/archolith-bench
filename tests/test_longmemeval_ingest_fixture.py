@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -32,6 +33,31 @@ verify = _load_script(
 def test_ingest_defaults_resolve_from_repository_root() -> None:
     assert ingest.BENCH_ROOT == ROOT
     assert Path(ingest.DEFAULT_MANIFEST) == ROOT / "results" / "lme-ingest" / "manifest.json"
+
+
+def test_adaptive_ingest_keeps_gps_update_without_unbound_duplicate() -> None:
+    """A pronoun-only claim fragment loses the full turn's dealership/GPS context."""
+    source = (
+        "I've been doing some research and found a local detailer with great reviews. "
+        "I was thinking of taking my car there, but I'm also considering other options. "
+        "By the way, I recently had an issue with my car's GPS system on 3/22, "
+        "and I had to take it back to the dealership to get it fixed. "
+        "They replaced the entire system, and now it's working flawlessly. "
+        "Have you heard of any common issues with GPS systems in newer cars?"
+    )
+    item = {
+        "haystack_session_ids": ["answer_gps_1"],
+        "haystack_dates": ["2023/04/10 (Mon) 14:47"],
+        "haystack_sessions": [[{"role": "user", "content": source}]],
+    }
+    adapter = SimpleNamespace(sessions=lambda record: record["haystack_sessions"])
+
+    assert ingest.decide_segmentation("user", source) == ingest.SegmentationMode.SEGMENT_CLAIMS
+    turns = list(ingest._iter_item_turns(adapter, item, "lme-gps", "adaptive"))
+
+    assert [turn.content for turn in turns] == [source]
+    assert turns[0].evidence_text == source
+    assert turns[0].role == "user"
 
 
 def test_ingest_parser_accepts_fixture_and_namespace_prefix() -> None:
