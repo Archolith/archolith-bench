@@ -115,30 +115,23 @@ unlike consolidation) and does **not** change existing recall-only A/B results �
 pass `include_session=True`, so the nodes were always visible; promotion only *also* exposes them
 to `build_context` and plain recall.
 
-### ⚠️ Temporal grounding: dates need a backfill (now automatic as of 2026-07-15)
+### Temporal grounding: verify dates from the ingest
 
-**Known bug, still present in graphiti-core 0.29.2 (re-verified 2026-07-15):** the ingest path
-does **not** honor `occurred_at` on graphiti's own Episodic nodes/`RELATES_TO` edges — an episode
-ingested with the session's historical date still lands `valid_at = now()` even though menhir's
-own Episodic nodes correctly carry the backdated `reference_time`. So a **freshly built graph has
-fake temporal grounding on the graphiti side** (episodes/edges stamped with the build date), which
-breaks temporal-reasoning and the BriefBuilder Timeline.
+The ingest now projects the session's historical `reference_time` into Graphiti. The earlier
+missing projection was fixed in Menhir (`27d9bad`). `build_graph.sh` defaults to
+`LME_BACKFILL_DATES=0`, so a fresh graph must have correct `valid_at` values without a repair.
+Before accepting a candidate, run the isolated date smoke (`run_date_smoke.sh`) and inspect its
+fixture comparison. This uses a separate container and volume and keeps backfill disabled.
 
-**As of 2026-07-15, `build_graph.sh` runs the backfill automatically as the last build step** —
-no manual follow-up needed for a normal `lme.sh build`. It's still available standalone for a
-partial/legacy build or to preview changes first:
+The backfill remains available for an explicitly chosen legacy repair, with a dry-run first:
 
 ```bash
 ./scripts/longmemeval/lme.sh backfill-dates --dry-run   # preview counts
 ./scripts/longmemeval/lme.sh backfill-dates             # apply (writes a revert snapshot first)
 ```
 
-Only `valid_at` (world-time) is rewritten; `created_at`/`expired_at` (belief-time = ingestion) are
-correct as-is. Genuine LLM-extracted edge dates are preserved (only ingestion-defaulted edges are
-touched). Idempotent — safe to run again even if already backfilled (a fully-backfilled graph
-reports `0 to backfill`). A revert snapshot is written to `results/lme-ingest/date-backfill-revert.json`
-(or `date-backfill-revert-<LME_NEO4J_NAME>.json` for a non-canonical container — see
-`config.sh:LME_REVERT_SNAPSHOT_PATH`) before any mutation.
+Do not use a backfill as proof that a new ingest handles historical dates. A repair writes a
+revert snapshot under `results/lme-ingest/`; see `config.sh:LME_REVERT_SNAPSHOT_PATH`.
 
 ## run_manifest.json Contract
 
@@ -177,16 +170,20 @@ later from these immutable token counts and the price schedule being evaluated.
 ## Acceptance Validation
 
 `lme.sh validate [--expected N]` runs `lib/validate_run.py` against the current provenance file,
-manifest, and telemetry DB. It emits a machine-readable JSON report covering:
+manifest, and telemetry DB. This acceptance command requires fresh-graph, clean-commit,
+fingerprinted provenance. It emits a machine-readable JSON report covering:
 
 - **manifest cardinality** (expected vs actual items)
-- **zero failed episodes** (strict zero-tolerance policy)
+- **zero failed episodes** (`failed_remaining` is known and zero for every manifest item;
+  timed-out drains fail)
 - **projection counts** (assertions, scalar_state Views)
 - **namespace isolation** (all namespaces start with the configured prefix)
 - **commit immutability** (all attempts ran the same Menhir and bench code)
+- **fresh, clean provenance** (new volume, required freshness, clean tracked/untracked source,
+  and a recorded surface fingerprint)
 - **canonical label** (warns if the run is marked noncanonical)
 - **telemetry presence** (DB exists and has lifecycle events)
-- **no interrupted phases** (all phases completed cleanly)
+- **completed phases** (every recorded phase completed; empty phase history fails)
 
 Exit 0 on PASS; exit 1 on any FAIL check. The report is also written to
 `$LME_RESULTS_DIR/acceptance-report.json`.

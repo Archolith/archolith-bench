@@ -65,7 +65,9 @@ def _manifest(tmp_path: Path, items: list[dict] | None = None) -> Path:
     if items is None:
         items = [
             {"namespace": "lme-postcards", "question_id": "postcards",
-             "typed_assertions": 2, "scalar_views": 1},
+             "typed_assertions": 2, "scalar_views": 1,
+             "episodes": 2, "ready": 2, "failed_remaining": 0,
+             "drain_timed_out": False},
         ]
     path = tmp_path / "manifest.json"
     path.write_text(json.dumps(items), encoding="utf-8")
@@ -135,6 +137,34 @@ def test_commit_drift_detected(tmp_path: Path) -> None:
     assert "menhir" in immutability["detail"]
 
 
+def test_unknown_or_missing_attempt_commit_fails(tmp_path: Path) -> None:
+    for overrides in ({"menhir_commit": "unknown"}, {"attempts": []},
+                      {"attempts": [{"menhir_commit": "aaaa111"}]}):
+        report = validator.validate(_provenance(tmp_path, **overrides),
+                                    _manifest(tmp_path))
+        check = next(c for c in report["checks"] if c["check"] == "commit_immutability")
+        assert check["status"] == "FAIL"
+
+
+def test_fresh_clean_provenance_required_for_acceptance(tmp_path: Path) -> None:
+    settings = {"menhir_dirty": False, "bench_dirty": False,
+                "menhir_untracked": 0, "bench_untracked": 0}
+    valid = {"graph_fresh": True, "volume_pre_existed": False,
+             "require_fresh": 1, "surface_digest": "a" * 64,
+             "phases": [{"phase": "ingest-graph", "status": "completed",
+                         "effective_settings": settings}]}
+    for changes, expected in (({}, "PASS"),
+                              ({"graph_fresh": False}, "FAIL"),
+                              ({"surface_digest": ""}, "FAIL"),
+                              ({"phases": [{"phase": "ingest-graph", "status": "completed",
+                                            "effective_settings": {**settings,
+                                                                   "bench_dirty": True}}]}, "FAIL")):
+        report = validator.validate(_provenance(tmp_path, **(valid | changes)),
+                                    _manifest(tmp_path), require_fresh_clean=True)
+        check = next(c for c in report["checks"] if c["check"] == "fresh_clean_provenance")
+        assert check["status"] == expected
+
+
 def test_noncanonical_label_is_warning(tmp_path: Path) -> None:
     report = validator.validate(
         _provenance(tmp_path, noncanonical=True),
@@ -166,13 +196,34 @@ def test_failed_episodes_detected(tmp_path: Path) -> None:
     report = validator.validate(
         _provenance(tmp_path),
         _manifest(tmp_path, items=[
-            {"namespace": "lme-a", "status": "OK"},
-            {"namespace": "lme-b", "status": "FAILED"},
+            {"namespace": "lme-a", "failed_remaining": 0},
+            {"namespace": "lme-b", "failed_remaining": 2},
         ]),
     )
 
     failed = next(c for c in report["checks"] if c["check"] == "zero_failed_episodes")
     assert failed["status"] == "FAIL"
+    assert "2" in failed["detail"]
+
+
+def test_missing_or_malformed_failure_count_is_not_success(tmp_path: Path) -> None:
+    for row in ({"namespace": "lme-a"},
+                {"namespace": "lme-a", "failed_remaining": None},
+                {"namespace": "lme-a", "failed_remaining": "0"},
+                {"namespace": "lme-a", "failed_remaining": -1}):
+        report = validator.validate(_provenance(tmp_path), _manifest(tmp_path, [row]))
+        check = next(c for c in report["checks"] if c["check"] == "zero_failed_episodes")
+        assert check["status"] == "FAIL"
+
+
+def test_timed_out_drain_is_not_success(tmp_path: Path) -> None:
+    report = validator.validate(
+        _provenance(tmp_path),
+        _manifest(tmp_path, [{"namespace": "lme-a", "failed_remaining": 0,
+                              "drain_timed_out": True}]),
+    )
+    check = next(c for c in report["checks"] if c["check"] == "zero_failed_episodes")
+    assert check["status"] == "FAIL"
 
 
 def test_namespace_isolation_violation(tmp_path: Path) -> None:
@@ -250,6 +301,15 @@ def test_interrupted_phases_detected(tmp_path: Path) -> None:
 
     phases = next(c for c in report["checks"] if c["check"] == "no_interrupted_phases")
     assert phases["status"] == "FAIL"
+
+
+def test_failed_started_or_missing_phases_are_not_complete(tmp_path: Path) -> None:
+    for phases in ([{"phase": "ingest-graph", "status": "failed"}],
+                   [{"phase": "ingest-graph", "status": "started"}], []):
+        report = validator.validate(_provenance(tmp_path, phases=phases),
+                                    _manifest(tmp_path))
+        check = next(c for c in report["checks"] if c["check"] == "no_interrupted_phases")
+        assert check["status"] == "FAIL"
 
 
 # ---------------------------------------------------------------------------
