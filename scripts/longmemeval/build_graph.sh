@@ -27,6 +27,29 @@ if [ "${LME_INGEST_STOP_AFTER_ITEMS}" -gt 0 ]; then
   INGEST_TARGET="${LME_INGEST_STOP_AFTER_ITEMS}"
 fi
 
+# A fixture is part of the graph identity, not just a provenance label. Check it before
+# starting Docker or spending model calls, then pass the same path to the ingester.
+if [ -n "${LME_FIXTURE_PATH:-}" ]; then
+  [ -f "${LME_FIXTURE_PATH}" ] || die "fixture not found: ${LME_FIXTURE_PATH}"
+  FIXTURE_FACTS="$("${BENCH_PY}" - "${LME_FIXTURE_PATH}" "${LIMIT}" <<'PY'
+import hashlib, json, sys
+from pathlib import Path
+path = Path(sys.argv[1])
+items = json.loads(path.read_text(encoding="utf-8"))
+if not isinstance(items, list) or len(items) < int(sys.argv[2]):
+    raise SystemExit("fixture must be a list with at least the requested item count")
+print(hashlib.sha256(path.read_bytes()).hexdigest(), len(items))
+PY
+  )" || die "invalid fixture: ${LME_FIXTURE_PATH}"
+  read -r ACTUAL_FIXTURE_SHA256 ACTUAL_FIXTURE_COUNT <<< "${FIXTURE_FACTS}"
+  [ -z "${LME_FIXTURE_SHA256:-}" ] || [ "${LME_FIXTURE_SHA256}" = "${ACTUAL_FIXTURE_SHA256}" ] ||
+    die "LME_FIXTURE_SHA256 does not match fixture bytes"
+  [ -z "${LME_FIXTURE_COUNT:-}" ] || [ "${LME_FIXTURE_COUNT}" = "${ACTUAL_FIXTURE_COUNT}" ] ||
+    die "LME_FIXTURE_COUNT does not match fixture items"
+  LME_FIXTURE_SHA256="${ACTUAL_FIXTURE_SHA256}"
+  LME_FIXTURE_COUNT="${ACTUAL_FIXTURE_COUNT}"
+fi
+
 OPENAI_KEY="$("${MENHIR_FRONTIER_PY}" - "${BENCH_DIR}/.env" OPENAI_API_KEY <<'PY'
 import sys; from dotenv import dotenv_values; print(dotenv_values(sys.argv[1]).get(sys.argv[2],""))
 PY
@@ -312,6 +335,9 @@ INGEST_ARGS=(
   --segmentation "${LME_SEGMENTATION}"
   --namespace-window "${LME_INGEST_CONCURRENCY}"
 )
+if [ -n "${LME_FIXTURE_PATH:-}" ]; then
+  INGEST_ARGS+=(--fixture "${LME_FIXTURE_PATH}")
+fi
 if [ "${LME_INGEST_STOP_AFTER_ITEMS}" -gt 0 ]; then
   INGEST_ARGS+=(--manifest-item-limit "${LME_INGEST_STOP_AFTER_ITEMS}")
 fi
