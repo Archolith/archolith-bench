@@ -171,6 +171,9 @@ _SUBJECT_PATTERN = re.compile(
     r"(?:^|[.!?]\s+)(?:My\s+(?:friend|sister|brother|mom|dad|wife|husband|partner)\s+)?"
     r"([A-Z][a-z]{2,})",
 )
+_UNBOUND_SEGMENT_START = re.compile(
+    r"^(?:he|she|it|they)\b", re.IGNORECASE
+)
 _FIRST_PERSON = re.compile(r"\b[Ii]\b")
 
 # Common sentence-starting words that are not proper-noun subjects.
@@ -673,6 +676,11 @@ def _heuristic_extract_claims(content: str, role: str) -> list[ClaimSegment]:
         has_correction = bool(_CORRECTION_MARKERS.search(sent))
         has_state_change = bool(_STATE_CHANGE_VERBS.search(sent))
         if has_correction or has_state_change:
+            # A standalone claim beginning with an anaphoric subject loses its antecedent.
+            # The full source turn is already ingested by the adaptive caller, so keep the
+            # fact there instead of submitting a duplicate that cannot be grounded alone.
+            if _UNBOUND_SEGMENT_START.match(sent):
+                continue
             claim_type = "state_update" if has_correction else "new_fact"
             # Try to identify the subject
             subj_match = _SUBJECT_PATTERN.search(sent)
