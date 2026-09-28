@@ -172,7 +172,7 @@ _SUBJECT_PATTERN = re.compile(
     r"([A-Z][a-z]{2,})",
 )
 _UNBOUND_SEGMENT_START = re.compile(
-    r"^(?:he|she|it|they)\b", re.IGNORECASE
+    r"^(?:[Hh]e|[Ss]he|[Ii]t|[Tt]hey)\b"
 )
 _FIRST_PERSON = re.compile(r"\b[Ii]\b")
 

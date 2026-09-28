@@ -315,6 +315,7 @@ def test_no_assistant_turn_in_the_ku_fixture_matches_the_gate() -> None:
     [
         "I switched to a new GPS system in my car yesterday.",
         "Toyota switched to a new GPS system in its cars yesterday.",
+        "IT switched the database to PostgreSQL yesterday.",
     ],
 )
 def test_heuristic_keeps_claims_with_explicit_subjects(claim: str) -> None:
