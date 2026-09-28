@@ -205,6 +205,16 @@ def test_blank_run_id_fails(tmp_path: Path) -> None:
 # Cross-check against what is on disk
 # ---------------------------------------------------------------------------
 
+def test_score_only_checkout_does_not_claim_full_run_evidence(tmp_path: Path) -> None:
+    results = tmp_path / "results"
+    run = results / "another-run"
+    run.mkdir(parents=True)
+    (run / "score.json").write_text("{}", encoding="utf-8")
+    findings = _validate(tmp_path, [_row(has_results_dir="true")], results=results)
+    assert not _messages(findings, "FAIL")
+    assert any("no full run directories" in m for m in _messages(findings, "WARN"))
+
+
 def test_claiming_a_results_directory_that_is_absent_fails(tmp_path: Path) -> None:
     # The tree must be materialized for this to be a contradiction rather than "cannot
     # check" -- an empty results/ is a fresh checkout, where the evidence was never
@@ -618,7 +628,7 @@ def test_a_checkout_without_the_evidence_tree_does_not_fail(tmp_path: Path) -> N
         results=results,
     )
     assert _messages(findings, "FAIL") == []
-    assert any("no run directories under" in m for m in _messages(findings, "WARN"))
+    assert any("no full run directories under" in m for m in _messages(findings, "WARN"))
 
 
 def test_schema_checks_still_run_without_the_evidence_tree(tmp_path: Path) -> None:

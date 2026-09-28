@@ -194,7 +194,8 @@ def test_tokens_are_summed_per_arm(tmp_path: Path) -> None:
 CANONICAL = ROOT / "results" / "lme-ku-buildout" / "scalar-canonical-ku78-v1-20260806"
 
 
-@pytest.mark.skipif(not CANONICAL.is_dir(), reason="canonical run directory not on disk")
+@pytest.mark.skipif(not score_extract.find_checkpoints(CANONICAL),
+                    reason="canonical run checkpoints not on disk")
 def test_reproduces_the_canonical_runs_recorded_score() -> None:
     """LEDGER.md records 0.872 for this run, with the note "68/78 recall vs 6/78 (0.077)".
 

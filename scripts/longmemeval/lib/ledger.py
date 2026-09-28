@@ -391,18 +391,21 @@ def validate(
     def report(level: str, run_id: str, message: str) -> None:
         findings.append({"level": level, "run_id": run_id, "message": message})
 
-    # `results/` is gitignored: a fresh checkout carries ledger.csv and LEDGER.md and none of
-    # the run directories. Without this, every row recording has_results_dir=true fails in CI
-    # for the one reason that is not a defect -- the evidence was never committed. An absent
-    # tree is "cannot check", not "the claim is false"; the on-disk cross-checks below are
-    # skipped and said so once, while every schema and self-consistency check still runs.
+    # A fresh checkout carries some committed score.json summaries but not the full run
+    # directories. A directory containing only that summary is not materialized run evidence.
+    # An absent evidence tree is "cannot check", not "the claim is false"; schema and
+    # self-consistency checks still run.
     evidence_present = results_dir.is_dir() and any(
-        child.is_dir() for child in results_dir.iterdir()
+        child.is_dir() and not (
+            (child / "score.json").is_file()
+            and len(list(child.iterdir())) == 1
+        ) for child in results_dir.iterdir()
     )
     if not evidence_present:
         report(
             "WARN", "(ledger)",
-            f"no run directories under {results_dir} -- results/ is gitignored, so the "
+            f"no full run directories under {results_dir} -- only score summaries may be "
+            "checked in, so the "
             "on-disk cross-checks (results dir, provenance, score.json, orphan runs) are "
             "skipped here; schema checks still ran",
         )
