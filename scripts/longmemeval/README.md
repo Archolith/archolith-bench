@@ -123,6 +123,12 @@ missing projection was fixed in Menhir (`27d9bad`). `build_graph.sh` defaults to
 Before accepting a candidate, run the isolated date smoke (`run_date_smoke.sh`) and inspect its
 fixture comparison. This uses a separate container and volume and keeps backfill disabled.
 
+For a bounded Oracle preflight, set `LME_FIXTURE_PATH` to an explicit JSON fixture and
+`LME_REQUIRE_FRESH=1` before building. The build checks the fixture count and SHA-256 before
+starting Docker, records both in provenance, and passes that exact fixture to the ingester.
+Use a distinct container, volume, ports, and manifest for each attempt. A bare `build 5`
+without a fixture selects the dataset's first five items and is not a per-type smoke.
+
 The backfill remains available for an explicitly chosen legacy repair, with a dry-run first:
 
 ```bash
