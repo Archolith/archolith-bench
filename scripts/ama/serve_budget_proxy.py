@@ -28,6 +28,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--max-calls", type=int, default=20_000)
     ap.add_argument("--max-seconds", type=float, default=6 * 3600)
     ap.add_argument("--out", type=Path, required=True)
+    ap.add_argument("--reasoning-effort", default=None,
+                    help="inject reasoning.effort into every chat request (e.g. low, none)")
     args = ap.parse_args(argv)
 
     key = os.getenv(args.key_env, "")
@@ -49,9 +51,11 @@ def main(argv: list[str] | None = None) -> int:
         max_calls=args.max_calls,
         max_usd=args.max_usd,
         max_seconds=args.max_seconds,
+        body_overrides={"reasoning": {"effort": args.reasoning_effort}} if args.reasoning_effort else None,
     )
     proxy.start()
-    print(f"budget proxy on {proxy.base_url}/v1 -> {args.upstream} cap=${args.max_usd}", flush=True)
+    print(f"budget proxy on {proxy.base_url}/v1 -> {args.upstream} cap=${args.max_usd} "
+          f"reasoning_effort={args.reasoning_effort or 'provider default'}", flush=True)
     reported = False
     try:
         while True:

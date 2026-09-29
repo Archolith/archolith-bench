@@ -53,8 +53,11 @@ class BudgetState:
         price_input_per_1m: float = DEFAULT_PRICE_INPUT_PER_1M,
         price_output_per_1m: float = DEFAULT_PRICE_OUTPUT_PER_1M,
         on_killed: Callable[[], None] | None = None,
+        body_overrides: dict | None = None,
     ) -> None:
         self.api_key = api_key
+        # Merged into every forwarded chat-completion body (e.g. {"reasoning": {"effort": "low"}}).
+        self.body_overrides = dict(body_overrides or {})
         self.upstream = upstream.rstrip("/")
         self.trace_file = trace_file
         self.budget_file = budget_file
@@ -202,6 +205,17 @@ class _ProxyHandler(BaseHTTPRequestHandler):
 
         length = int(self.headers.get("Content-Length", "0"))
         body = self.rfile.read(length) if length > 0 else b""
+        self._call_meta = {}
+        if path == "/v1/chat/completions" and body:
+            try:
+                parsed = json.loads(body)
+                schema = ((parsed.get("response_format") or {}).get("json_schema") or {}).get("name")
+                self._call_meta = {"schema": schema or (parsed.get("response_format") or {}).get("type") or "text"}
+                if self.state.body_overrides:
+                    parsed.update(self.state.body_overrides)
+                    body = json.dumps(parsed).encode("utf-8")
+            except (json.JSONDecodeError, AttributeError, TypeError):
+                pass
 
         self._forward("POST", body, path=path)
 
@@ -220,13 +234,15 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             return
 
         # Try to extract usage for cost accounting
+        in_tok = out_tok = reasoning_tok = 0
         try:
             resp_json = json.loads(resp.content)
             usage = resp_json.get("usage", {})
             in_tok = int(usage.get("prompt_tokens") or usage.get("input_tokens") or 0)
             out_tok = int(usage.get("completion_tokens") or usage.get("output_tokens") or 0)
+            reasoning_tok = int(((usage.get("completion_tokens_details") or {}).get("reasoning_tokens")) or 0)
             self.state.record_usage(in_tok, out_tok)
-        except (json.JSONDecodeError, ValueError, TypeError):
+        except (json.JSONDecodeError, ValueError, TypeError, AttributeError):
             # The call was already reserved before forwarding it. Unknown usage
             # remains a zero-cost observation, but still consumes a call slot.
             pass
@@ -237,6 +253,10 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             "status": resp.status_code,
             "calls": self.state.calls,
             "usd": round(self.state.usd, 6),
+            **getattr(self, "_call_meta", {}),
+            "in_tok": in_tok,
+            "out_tok": out_tok,
+            "reasoning_tok": reasoning_tok,
         })
         self.state.write_budget()
 
@@ -270,6 +290,7 @@ class BudgetProxy:
         max_usd: float = 5.0,
         max_seconds: float = 900.0,
         on_killed: Callable[[], None] | None = None,
+        body_overrides: dict | None = None,
     ) -> None:
         self.state = BudgetState(
             api_key=api_key,
@@ -280,6 +301,7 @@ class BudgetProxy:
             max_usd=max_usd,
             max_seconds=max_seconds,
             on_killed=on_killed,
+            body_overrides=body_overrides,
         )
         self.port = port
         self._server: ThreadingHTTPServer | None = None

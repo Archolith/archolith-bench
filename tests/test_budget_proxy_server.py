@@ -74,3 +74,35 @@ def test_proxy_forwards_counts_lists_models_and_stops_at_the_cap(upstream, tmp_p
         assert third.status_code == 429 and proxy.state.calls == 2
     finally:
         proxy.stop()
+
+
+def test_body_overrides_reach_upstream_and_trace_records_schema_and_tokens(tmp_path):
+    seen = {}
+
+    class Recording(_Upstream):
+        def do_POST(self):  # noqa: N802
+            seen["body"] = json.loads(self.rfile.read(int(self.headers.get("Content-Length", "0"))))
+            self._reply({"choices": [{"message": {"content": "{}"}}],
+                         "usage": {"prompt_tokens": 7, "completion_tokens": 5,
+                                   "completion_tokens_details": {"reasoning_tokens": 3}}})
+
+    server = ThreadingHTTPServer(("127.0.0.1", _free_port()), Recording)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    proxy = BudgetProxy(
+        api_key="k", upstream=f"http://127.0.0.1:{server.server_address[1]}", port=_free_port(),
+        trace_file=tmp_path / "trace.jsonl", budget_file=tmp_path / "budget.json", max_usd=1.0,
+        body_overrides={"reasoning": {"effort": "low"}},
+    )
+    proxy.start()
+    try:
+        httpx.post(f"{proxy.base_url}/v1/chat/completions", timeout=10, json={
+            "model": "m", "messages": [], "response_format": {"type": "json_schema", "json_schema": {"name": "PatchedCombinedExtraction"}}})
+    finally:
+        proxy.stop()
+        server.shutdown()
+        server.server_close()
+    assert seen["body"]["reasoning"] == {"effort": "low"} and seen["body"]["model"] == "m"
+    trace = [json.loads(line) for line in (tmp_path / "trace.jsonl").read_text().splitlines()]
+    last = trace[-1]
+    assert last["schema"] == "PatchedCombinedExtraction"
+    assert (last["in_tok"], last["out_tok"], last["reasoning_tok"]) == (7, 5, 3)

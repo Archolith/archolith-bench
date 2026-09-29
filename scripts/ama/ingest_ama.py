@@ -111,12 +111,13 @@ def load_crafted(crafted_dir: Path, episode: dict) -> list[dict]:
 
 def ingest_episode(
     base_url: str, episode: dict, *, reset: bool, tries: int = 3, crafted_dir: Path | None = None,
+    prefix: str | None = None,
 ) -> dict:
     if crafted_dir is not None:
-        namespace = namespace_for(episode["episode_id"], CRAFTED_PREFIX)
+        namespace = namespace_for(episode["episode_id"], prefix or CRAFTED_PREFIX)
         steps = crafted_turns(load_crafted(crafted_dir, episode))
     else:
-        namespace = namespace_for(episode["episode_id"], RAW_PREFIX)
+        namespace = namespace_for(episode["episode_id"], prefix or RAW_PREFIX)
         steps = render_steps(episode)
     if reset:
         _reset_namespace(base_url, namespace)
@@ -185,8 +186,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--dry-run", action="store_true", help="print the plan; ingest nothing")
     ap.add_argument("--crafted-dir", type=Path, default=None,
                     help="ingest memory-agent memories from this dir (craft_memories.py) instead of raw steps")
+    ap.add_argument("--namespace-prefix", default=None,
+                    help="override the namespace prefix (e.g. for side-by-side measurement runs)")
     args = ap.parse_args(argv)
-    prefix = CRAFTED_PREFIX if args.crafted_dir is not None else RAW_PREFIX
+    prefix = args.namespace_prefix or (CRAFTED_PREFIX if args.crafted_dir is not None else RAW_PREFIX)
 
     if not args.dataset:
         print(f"ERROR: pass --dataset or set {DATASET_ENV}", file=sys.stderr)
@@ -241,7 +244,8 @@ def main(argv: list[str] | None = None) -> int:
     def run(episode: dict) -> dict:
         from neo4j import GraphDatabase
 
-        result = ingest_episode(args.menhir_url, episode, reset=args.reset, crafted_dir=args.crafted_dir)
+        result = ingest_episode(args.menhir_url, episode, reset=args.reset, crafted_dir=args.crafted_dir,
+                                prefix=prefix)
         with GraphDatabase.driver(args.neo4j_uri, auth=(args.neo4j_user, password)) as driver:
             result["settled"] = wait_until_settled(
                 lambda: driver.execute_query(_UNSETTLED, ns=result["namespace"]).records[0]["c"]
