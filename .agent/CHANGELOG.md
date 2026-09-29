@@ -1,5 +1,17 @@
 # archolith-bench Changelog
 
+## 2026-09-29 - OpenRouter Batch API client (half-price non-live calls)
+
+- **`archolith_bench/core/openrouter_batch.py`:** `run_batch()` submits chat-completion requests to
+  OpenRouter's `/api/beta/batches` (the protocol cth.painscan uses in production), checkpoints the
+  batch id before anything else so a rerun resumes instead of resubmitting, polls until a terminal
+  status, and maps results by `custom_id` wherever the provider nests the reply. It fails closed on
+  any non-completed status and on duplicate or unexpected result ids, returns per-request errors
+  rather than guessed text, refuses to submit when a conservative estimate at the live `:batch`
+  catalog price exceeds the caller's cap, reports the provider's actual cost, and tolerates the
+  short 404 window right after a batch is created.
+- **`tests/test_openrouter_batch.py`:** fake-router tests for all of the above.
+
 ## 2026-09-29 - Always record TurnEvidence for user-turn ingest (Menhir legacy scalar fallback removal)
 
 Menhir is removing its legacy typed-scalar fallback that selected `:Episodic`
