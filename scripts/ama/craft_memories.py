@@ -46,17 +46,29 @@ def _csv(value: str) -> tuple[str, ...]:
     return tuple(s.strip() for s in value.split(",") if s.strip())
 
 
+REQUEST_TIMEOUT_S = 600.0
+TIMEOUT_RETRIES = 3
+
+
 def ask(client: httpx.Client, base_url: str, api_key: str, model: str, messages: list[dict]) -> str:
-    resp = client.post(
-        base_url.rstrip("/") + "/chat/completions",
-        headers={"Authorization": f"Bearer {api_key}"},
-        json={"model": model, "messages": messages, "response_format": {"type": "json_object"}},
-        timeout=180.0,
-    )
-    if resp.status_code == 429:
-        raise RateLimited(resp.text[:300])
-    resp.raise_for_status()
-    return resp.json()["choices"][0]["message"].get("content") or ""
+    """One memory-agent call. A slow reply is retried (a single 180s stall used to fail the episode)."""
+    for attempt in range(TIMEOUT_RETRIES):
+        try:
+            resp = client.post(
+                base_url.rstrip("/") + "/chat/completions",
+                headers={"Authorization": f"Bearer {api_key}"},
+                json={"model": model, "messages": messages, "response_format": {"type": "json_object"}},
+                timeout=REQUEST_TIMEOUT_S,
+            )
+        except httpx.TimeoutException:
+            if attempt == TIMEOUT_RETRIES - 1:
+                raise
+            continue
+        if resp.status_code == 429:
+            raise RateLimited(resp.text[:300])
+        resp.raise_for_status()
+        return resp.json()["choices"][0]["message"].get("content") or ""
+    raise RuntimeError("unreachable")
 
 
 def craft_episode(episode: dict, out_dir: Path, *, base_url: str, api_key: str, model: str) -> dict:

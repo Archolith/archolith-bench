@@ -100,7 +100,7 @@ def ingest_episode(
         _reset_namespace(base_url, namespace)
     failed: list[int] = []
     t0 = time.time()
-    with HttpMenhirClient(base_url, timeout=300.0) as client, httpx.Client(timeout=300.0) as http:
+    with HttpMenhirClient(base_url, timeout=900.0) as client, httpx.Client(timeout=900.0) as http:
         for index, turn in enumerate(steps):
             for attempt in range(tries):
                 try:

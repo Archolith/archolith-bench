@@ -221,3 +221,26 @@ def test_ingest_refuses_incomplete_crafted_memories(tmp_path: Path):
         ingest_ama.load_crafted(tmp_path, EPISODES[0])
     with pytest.raises(FileNotFoundError):
         ingest_ama.load_crafted(tmp_path, EPISODES[1])
+
+
+def test_memory_agent_retries_a_timed_out_call():
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts" / "ama"))
+    import httpx
+
+    import craft_memories
+
+    calls = {"n": 0}
+
+    def handler(request):  # noqa: ANN001
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise httpx.ReadTimeout("slow", request=request)
+        return httpx.Response(200, json={"choices": [{"message": {"content": '{"memories": []}'}}]})
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        assert craft_memories.ask(client, "http://x/v1", "k", "m", []) == '{"memories": []}'
+    assert calls["n"] == 3
+
+    calls["n"] = -10  # never recovers
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client, pytest.raises(httpx.TimeoutException):
+        craft_memories.ask(client, "http://x/v1", "k", "m", [])
