@@ -244,3 +244,63 @@ def test_memory_agent_retries_a_timed_out_call():
     calls["n"] = -10  # never recovers
     with httpx.Client(transport=httpx.MockTransport(handler)) as client, pytest.raises(httpx.TimeoutException):
         craft_memories.ask(client, "http://x/v1", "k", "m", [])
+
+
+def _tl_episode():
+    return {
+        "episode_id": 7, "domain": "SOFTWARE", "task": "fix bug",
+        "trajectory": [
+            {"turn_idx": 0, "action": "run tests", "observation": "3 failed, 10 passed in 2.1s"},
+            {"turn_idx": 1, "action": "edit card.py", "observation": "File edited successfully."},
+            {"turn_idx": 2, "action": "run tests", "observation": "13 passed in 2.0s"},
+            {"turn_idx": 3, "action": "run tests", "observation": "13 passed in 1.9s"},
+        ],
+    }
+
+
+def test_verify_timelines_keeps_only_quoted_ordered_changes():
+    from archolith_bench.harness.ama_bench import verify_timelines
+
+    raw = json.dumps({"timelines": [
+        {"subject": "test suite", "attribute": "result", "states": [
+            {"step": 0, "value": "3 failing", "evidence": "3 failed, 10 passed"},
+            {"step": 2, "value": "all passing", "evidence": "13 passed in 2.0s"},
+            {"step": 3, "value": "all passing", "evidence": "13 passed in 1.9s"},    # repeat, not a change
+            {"step": 1, "value": "invented", "evidence": "tests are green now"},      # not in step 1
+        ]},
+        {"subject": "x", "attribute": "y", "states": [                              # one real state only
+            {"step": 1, "value": "edited", "evidence": "File edited successfully"},
+            {"step": 2, "value": "made up", "evidence": "never appears anywhere"},
+        ]},
+    ]})
+    kept, stats = verify_timelines(_tl_episode(), raw)
+    assert [(s["step"], s["value"]) for s in kept[0]["states"]] == [(0, "3 failing"), (2, "all passing")]
+    assert len(kept) == 1 and stats["timelines_kept"] == 1 and stats["states_proposed"] == 6
+    assert verify_timelines(_tl_episode(), "not json") == ([], {"timelines_proposed": 0, "states_proposed": 0,
+                                                                "states_verified": 0, "timelines_kept": 0})
+
+
+def test_gold_questions_templates_current_previous_timeline():
+    from archolith_bench.harness.ama_bench import gold_questions
+
+    states = [{"step": 0, "value": "3 failing", "evidence": "e"}, {"step": 2, "value": "flaky", "evidence": "e"},
+              {"step": 5, "value": "all passing", "evidence": "e"}]
+    qs = {q["question_type"]: q for q in gold_questions(_tl_episode(), [{"subject": "test suite", "attribute": "result", "states": states}])}
+    assert qs["current"]["answer"] == "all passing" and qs["current"]["stale_answers"] == ["3 failing", "flaky"]
+    assert qs["previous"]["answer"] == "flaky" and qs["previous"]["stale_answers"] == ["3 failing"]
+    assert qs["timeline"]["answer"] == "3 failing -> flaky -> all passing"
+    assert "namespace" not in qs["current"]
+
+
+def test_wait_until_settled_needs_two_quiet_polls_and_times_out():
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts" / "ama"))
+    import ingest_ama
+
+    seq = iter([3, 0, 1, 0, 0])
+    assert ingest_ama.wait_until_settled(lambda: next(seq), sleep=lambda s: None) is True
+    now = {"t": 0.0}
+
+    def tick(s):  # noqa: ANN001
+        now["t"] += s
+
+    assert ingest_ama.wait_until_settled(lambda: 1, poll_s=10, timeout_s=30, sleep=tick, clock=lambda: now["t"]) is False

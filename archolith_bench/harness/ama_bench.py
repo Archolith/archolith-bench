@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -99,6 +100,105 @@ def crafted_turns(crafted: list[dict]) -> list[dict]:
 
 def step_time(step_idx: int) -> str:
     return (STEP_TIME_BASE + timedelta(minutes=step_idx)).isoformat()
+
+
+# ---- Supersession gold: verified state timelines -> templated questions ----
+
+TIMELINE_SYSTEM = (
+    "You read an AI agent's complete task trajectory and extract STATE TIMELINES: things whose "
+    "state changed during the task (for example a test result, a file's contents, a form field, "
+    "the agent's location, an error, a count, which approach the agent is using). For each, list "
+    "every distinct state it took, in step order. Every state needs the step it was observed in "
+    "and an evidence quote copied EXACTLY, character for character, from that step's action or "
+    "observation (a short span, 3 to 20 words). Only include timelines with at least two different "
+    "states. Values must be short and concrete. Reply with JSON only: "
+    '{"timelines": [{"subject": "...", "attribute": "...", "states": '
+    '[{"step": 3, "value": "...", "evidence": "..."}]}]}'
+)
+TIMELINE_STEP_CHARS = 4_000
+_WS = re.compile(r"\s+")
+
+
+def _norm(text: str) -> str:
+    return _WS.sub(" ", str(text or "")).strip().lower()
+
+
+def timeline_messages(episode: dict) -> list[dict]:
+    steps = "\n\n".join(
+        f"Step {s.get('turn_idx')}\nAction: {_clip(s.get('action', ''), TIMELINE_STEP_CHARS // 4)}\n"
+        f"Observation: {_clip(s.get('observation', ''), TIMELINE_STEP_CHARS)}"
+        for s in episode.get("trajectory", [])
+    )
+    user = f"Task:\n{_clip(episode.get('task', ''), MAX_TASK_CHARS)}\n\nTrajectory:\n{steps}"
+    return [{"role": "system", "content": TIMELINE_SYSTEM}, {"role": "user", "content": user}]
+
+
+def verify_timelines(episode: dict, raw: str) -> tuple[list[dict], dict]:
+    """Keep only states whose quote appears verbatim (whitespace/case-folded) in their own step,
+    in strictly increasing step order; keep timelines with >= 2 distinct verified values."""
+    stats = {"timelines_proposed": 0, "states_proposed": 0, "states_verified": 0, "timelines_kept": 0}
+    try:
+        data = json.loads(raw.strip().strip("`").removeprefix("json").strip())
+    except (json.JSONDecodeError, AttributeError):
+        return [], stats
+    proposed = data.get("timelines") if isinstance(data, dict) else None
+    if not isinstance(proposed, list):
+        return [], stats
+    text_by_step = {
+        int(s.get("turn_idx")): _norm(f"{s.get('action', '')} {s.get('observation', '')}")
+        for s in episode.get("trajectory", [])
+    }
+    kept: list[dict] = []
+    for tl in proposed:
+        if not isinstance(tl, dict) or not isinstance(tl.get("states"), list):
+            continue
+        stats["timelines_proposed"] += 1
+        states: list[dict] = []
+        for st in tl["states"]:
+            stats["states_proposed"] += 1
+            try:
+                step = int(st["step"])
+                value, evidence = str(st["value"]).strip(), str(st["evidence"]).strip()
+            except (KeyError, TypeError, ValueError):
+                continue
+            if not value or len(_norm(evidence)) < 8 or _norm(evidence) not in text_by_step.get(step, ""):
+                continue
+            if states and step <= states[-1]["step"]:
+                continue
+            if states and _norm(value) == _norm(states[-1]["value"]):
+                continue  # same state observed again, not a change
+            states.append({"step": step, "value": value, "evidence": evidence})
+        stats["states_verified"] += len(states)
+        if len({_norm(s["value"]) for s in states}) >= 2:
+            kept.append({"subject": str(tl.get("subject", "")).strip(),
+                         "attribute": str(tl.get("attribute", "")).strip(), "states": states})
+    stats["timelines_kept"] = len(kept)
+    return kept, stats
+
+
+def gold_questions(episode: dict, timelines: list[dict]) -> list[dict]:
+    """Templated current / previous / timeline questions from verified timelines."""
+    items: list[dict] = []
+    for n, tl in enumerate(timelines):
+        subject, attribute, states = tl["subject"], tl["attribute"], tl["states"]
+        if not subject or not attribute:
+            continue
+        last, prev = states[-1], states[-2]
+        base = {"episode_id": episode["episode_id"], "domain": episode["domain"],
+                "subject": subject, "attribute": attribute}
+        stale = [s["value"] for s in states[:-1]]
+        items += [
+            {**base, "question_id": f"ep{episode['episode_id']}-t{n}-current", "question_type": "current",
+             "question": f"By the end of the task, what is the latest {attribute} of {subject}?",
+             "answer": last["value"], "stale_answers": stale, "states": states},
+            {**base, "question_id": f"ep{episode['episode_id']}-t{n}-previous", "question_type": "previous",
+             "question": f"Before the {attribute} of {subject} became \"{last['value']}\", what was it?",
+             "answer": prev["value"], "stale_answers": [s["value"] for s in states[:-2]], "states": states},
+            {**base, "question_id": f"ep{episode['episode_id']}-t{n}-timeline", "question_type": "timeline",
+             "question": f"List, in order, each {attribute} that {subject} had during the task.",
+             "answer": " -> ".join(s["value"] for s in states), "stale_answers": [], "states": states},
+        ]
+    return items
 
 
 def load_episodes(path: str | Path) -> list[dict]:

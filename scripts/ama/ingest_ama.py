@@ -63,6 +63,28 @@ _PROMOTE_EDGES = (
 )
 
 
+_UNSETTLED = (
+    "MATCH (e:Episodic {namespace: $ns}) WHERE e.processing_state IS NOT NULL "
+    "AND NOT e.processing_state IN ['READY', 'FAILED'] RETURN count(e) AS c"
+)
+
+
+def wait_until_settled(count_unsettled, *, poll_s: float = 10.0, timeout_s: float = 6 * 3600,  # noqa: ANN001
+                       sleep=time.sleep, clock=time.monotonic) -> bool:
+    """Block until the namespace has no episode still pending or enriching (twice in a row).
+
+    Posting returns before enrichment finishes, so promoting at that point left everything
+    extracted afterwards SESSION-scoped and invisible to recall.
+    """
+    deadline, settled = clock() + timeout_s, 0
+    while clock() < deadline:
+        settled = settled + 1 if count_unsettled() == 0 else 0
+        if settled >= 2:
+            return True
+        sleep(poll_s)
+    return False
+
+
 def promote_namespace(bolt_uri: str, user: str, password: str, namespace: str) -> dict:
     """SESSION -> PERSISTENT for one episode namespace, as LME's promote_persistent.sh does.
 
@@ -217,7 +239,13 @@ def main(argv: list[str] | None = None) -> int:
     results: list[dict] = []
 
     def run(episode: dict) -> dict:
+        from neo4j import GraphDatabase
+
         result = ingest_episode(args.menhir_url, episode, reset=args.reset, crafted_dir=args.crafted_dir)
+        with GraphDatabase.driver(args.neo4j_uri, auth=(args.neo4j_user, password)) as driver:
+            result["settled"] = wait_until_settled(
+                lambda: driver.execute_query(_UNSETTLED, ns=result["namespace"]).records[0]["c"]
+            )
         result["promoted"] = promote(result["namespace"])
         return result
 
