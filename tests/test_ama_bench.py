@@ -304,3 +304,40 @@ def test_wait_until_settled_needs_two_quiet_polls_and_times_out():
         now["t"] += s
 
     assert ingest_ama.wait_until_settled(lambda: 1, poll_s=10, timeout_s=30, sleep=tick, clock=lambda: now["t"]) is False
+
+
+def test_stale_answers_never_equal_the_gold_answer():
+    from archolith_bench.harness.ama_bench import gold_questions
+
+    states = [{"step": i, "value": v, "evidence": "e"} for i, v in enumerate(["True", "False", "True"])]
+    qs = {q["question_type"]: q for q in gold_questions(_tl_episode(), [{"subject": "s", "attribute": "a", "states": states}])}
+    assert qs["current"]["answer"] == "True" and qs["current"]["stale_answers"] == ["False"]
+    assert qs["previous"]["answer"] == "False" and qs["previous"]["stale_answers"] == []
+
+
+def test_apply_check_drops_off_subject_and_refinements_and_fails_closed():
+    from archolith_bench.harness.ama_bench import apply_check
+
+    tl = {"subject": "s", "attribute": "a", "states": [
+        {"step": 1, "value": "CMU", "evidence": "e"},
+        {"step": 2, "value": "CMU, Tech Street", "evidence": "e"},   # refinement
+        {"step": 3, "value": "other row", "evidence": "e"},          # off subject
+        {"step": 4, "value": "Pitt", "evidence": "e"},
+    ]}
+    raw = json.dumps({"states": [
+        {"step": 1, "about_subject": True, "real_change": True},
+        {"step": 2, "about_subject": True, "real_change": False},
+        {"step": 3, "about_subject": False, "real_change": True},
+        {"step": 4, "about_subject": True, "real_change": True},
+    ]})
+    assert [s["value"] for s in apply_check(tl, raw)["states"]] == ["CMU", "Pitt"]
+    assert apply_check(tl, "garbage") is None
+    assert apply_check(tl, json.dumps({"states": [{"step": 1, "about_subject": True, "real_change": True}]})) is None
+
+
+def test_long_flip_flop_timelines_get_no_timeline_question():
+    from archolith_bench.harness.ama_bench import MAX_TIMELINE_STATES, gold_questions
+
+    states = [{"step": i, "value": "open" if i % 2 else "closed", "evidence": "e"} for i in range(MAX_TIMELINE_STATES + 1)]
+    kinds = [q["question_type"] for q in gold_questions(_tl_episode(), [{"subject": "menu", "attribute": "state", "states": states}])]
+    assert kinds == ["current", "previous"]

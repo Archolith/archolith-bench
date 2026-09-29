@@ -176,8 +176,75 @@ def verify_timelines(episode: dict, raw: str) -> tuple[list[dict], dict]:
     return kept, stats
 
 
+CHECK_SYSTEM = (
+    "You check a proposed state timeline extracted from an AI agent's trajectory. For each state "
+    "you get the step, the proposed value, the quoted evidence and the text around it. Decide two "
+    "things per state: about_subject = the evidence is really about the given subject and "
+    "attribute (not a different item, size, row or case); real_change = the value is a genuinely "
+    "different state from the previous kept state, not a rewording, a refinement that adds detail "
+    "to the same state, or a partial view of it (always true for the first state). Reply with JSON "
+    'only: {"states": [{"step": 3, "about_subject": true, "real_change": true}]}'
+)
+CHECK_CONTEXT_CHARS = 400
+MAX_TIMELINE_STATES = 8
+
+
+def _context(episode: dict, step: int, evidence: str) -> str:
+    raw = next((f"{s.get('action', '')} {s.get('observation', '')}" for s in episode.get("trajectory", [])
+                if int(s.get("turn_idx", -1)) == step), "")
+    flat = _WS.sub(" ", str(raw))
+    at = flat.lower().find(_norm(evidence)[:40])
+    start = max(0, at - CHECK_CONTEXT_CHARS) if at >= 0 else 0
+    return flat[start:start + 2 * CHECK_CONTEXT_CHARS + len(evidence)]
+
+
+def check_messages(episode: dict, timeline: dict) -> list[dict]:
+    states = "\n\n".join(
+        f"State at step {s['step']}: value = {s['value']!r}\nEvidence: {s['evidence']!r}\n"
+        f"Text around it: {_context(episode, s['step'], s['evidence'])}"
+        for s in timeline["states"]
+    )
+    user = f"Subject: {timeline['subject']}\nAttribute: {timeline['attribute']}\n\n{states}"
+    return [{"role": "system", "content": CHECK_SYSTEM}, {"role": "user", "content": user}]
+
+
+def apply_check(timeline: dict, raw: str) -> dict | None:
+    """Keep states judged about the subject; drop non-changes; None unless >= 2 distinct values
+    remain. Fail closed: a state with no verdict, or unparseable output, is dropped."""
+    try:
+        data = json.loads(raw.strip().strip("`").removeprefix("json").strip())
+        verdicts = {int(v["step"]): v for v in data["states"] if isinstance(v, dict)}
+    except (json.JSONDecodeError, KeyError, TypeError, ValueError, AttributeError):
+        return None
+    kept: list[dict] = []
+    for st in timeline["states"]:
+        v = verdicts.get(st["step"])
+        if not v or v.get("about_subject") is not True:
+            continue
+        if kept and (v.get("real_change") is not True or _norm(st["value"]) == _norm(kept[-1]["value"])):
+            continue
+        kept.append(st)
+    if len({_norm(s["value"]) for s in kept}) < 2:
+        return None
+    return {**timeline, "states": kept}
+
+
+def _distinct_except(values: list[str], *exclude: str) -> list[str]:
+    skip = {_norm(v) for v in exclude}
+    out: list[str] = []
+    for v in values:
+        if _norm(v) not in skip and _norm(v) not in {_norm(o) for o in out}:
+            out.append(v)
+    return out
+
+
 def gold_questions(episode: dict, timelines: list[dict]) -> list[dict]:
-    """Templated current / previous / timeline questions from verified timelines."""
+    """Templated current / previous / timeline questions from verified timelines.
+
+    Stale answers are earlier values that DIFFER from the gold answer (a value that returns later,
+    e.g. True -> False -> True, is not stale for "current"). Timelines longer than
+    MAX_TIMELINE_STATES get no timeline question (flip-flop lists are noise, not memory).
+    """
     items: list[dict] = []
     for n, tl in enumerate(timelines):
         subject, attribute, states = tl["subject"], tl["attribute"], tl["states"]
@@ -186,18 +253,22 @@ def gold_questions(episode: dict, timelines: list[dict]) -> list[dict]:
         last, prev = states[-1], states[-2]
         base = {"episode_id": episode["episode_id"], "domain": episode["domain"],
                 "subject": subject, "attribute": attribute}
-        stale = [s["value"] for s in states[:-1]]
+        values = [s["value"] for s in states]
         items += [
             {**base, "question_id": f"ep{episode['episode_id']}-t{n}-current", "question_type": "current",
              "question": f"By the end of the task, what is the latest {attribute} of {subject}?",
-             "answer": last["value"], "stale_answers": stale, "states": states},
+             "answer": last["value"], "stale_answers": _distinct_except(values[:-1], last["value"]),
+             "states": states},
             {**base, "question_id": f"ep{episode['episode_id']}-t{n}-previous", "question_type": "previous",
              "question": f"Before the {attribute} of {subject} became \"{last['value']}\", what was it?",
-             "answer": prev["value"], "stale_answers": [s["value"] for s in states[:-2]], "states": states},
-            {**base, "question_id": f"ep{episode['episode_id']}-t{n}-timeline", "question_type": "timeline",
-             "question": f"List, in order, each {attribute} that {subject} had during the task.",
-             "answer": " -> ".join(s["value"] for s in states), "stale_answers": [], "states": states},
+             "answer": prev["value"], "stale_answers": _distinct_except(values[:-2], prev["value"], last["value"]),
+             "states": states},
         ]
+        if len(states) <= MAX_TIMELINE_STATES:
+            items.append(
+                {**base, "question_id": f"ep{episode['episode_id']}-t{n}-timeline", "question_type": "timeline",
+                 "question": f"List, in order, each {attribute} that {subject} had during the task.",
+                 "answer": " -> ".join(values), "stale_answers": [], "states": states})
     return items
 
 

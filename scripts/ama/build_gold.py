@@ -22,6 +22,8 @@ from pathlib import Path
 import httpx
 
 from archolith_bench.harness.ama_bench import (
+    apply_check,
+    check_messages,
     DATASET_ENV,
     DEFAULT_EXCLUDE_DOMAINS,
     DEFAULT_MAX_TOKENS,
@@ -41,22 +43,38 @@ def _csv(value: str) -> tuple[str, ...]:
     return tuple(s.strip() for s in value.split(",") if s.strip())
 
 
-def build_episode(episode: dict, out_dir: Path, *, base_url: str, api_key: str, model: str) -> dict:
-    path = out_dir / f"ep{episode['episode_id']}.json"
-    if path.exists():
-        cached = json.loads(path.read_text(encoding="utf-8"))
-        return cached["stats"] | {"episode_id": episode["episode_id"], "questions": len(cached["questions"]), "cached": True}
-    if STOP.is_set():
-        raise RuntimeError("stopped")
-    with httpx.Client() as client:
-        raw = ask(client, base_url, api_key, model, timeline_messages(episode))
-    timelines, stats = verify_timelines(episode, raw)
-    questions = gold_questions(episode, timelines)
+def _save(path: Path, record: dict) -> None:
     tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps({"raw": raw, "timelines": timelines, "stats": stats, "questions": questions}, indent=1),
-                   encoding="utf-8")
+    tmp.write_text(json.dumps(record, indent=1), encoding="utf-8")
     os.replace(tmp, path)
-    return stats | {"episode_id": episode["episode_id"], "questions": len(questions), "cached": False}
+
+
+def build_episode(episode: dict, out_dir: Path, *, base_url: str, api_key: str, model: str) -> dict:
+    """Extract (cached) -> quote-verify -> subject/change check (cached) -> templated questions."""
+    path = out_dir / f"ep{episode['episode_id']}.json"
+    record = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    with httpx.Client() as client:
+        if "raw" not in record:
+            if STOP.is_set():
+                raise RuntimeError("stopped")
+            record["raw"] = ask(client, base_url, api_key, model, timeline_messages(episode))
+            _save(path, record)
+        timelines, stats = verify_timelines(episode, record["raw"])
+        checks: dict[str, str] = record.get("checks", {})
+        for n, tl in enumerate(timelines):
+            if str(n) not in checks:
+                if STOP.is_set():
+                    raise RuntimeError("stopped")
+                checks[str(n)] = ask(client, base_url, api_key, model, check_messages(episode, tl))
+                record["checks"] = checks
+                _save(path, record)
+    checked = [c for n, tl in enumerate(timelines) if (c := apply_check(tl, checks[str(n)])) is not None]
+    stats = stats | {"timelines_after_check": len(checked),
+                     "states_after_check": sum(len(t["states"]) for t in checked)}
+    questions = gold_questions(episode, checked)
+    record |= {"timelines": checked, "stats": stats, "questions": questions}
+    _save(path, record)
+    return stats | {"episode_id": episode["episode_id"], "questions": len(questions)}
 
 
 def main(argv: list[str] | None = None) -> int:
