@@ -29,6 +29,7 @@ from pathlib import Path
 import httpx
 
 ALLOWED_PATHS = frozenset({"/v1/chat/completions", "/v1/embeddings"})
+ALLOWED_GET_PATHS = frozenset({"/v1/models"})
 
 # Per-1M-token pricing for cost cap. Defaults to gpt-4o-mini; override via env.
 # These are conservative — actual pricing may vary by deployment.
@@ -174,6 +175,11 @@ class _ProxyHandler(BaseHTTPRequestHandler):
         self._handle()
 
     def do_GET(self) -> None:  # noqa: N802
+        path = self.path.split("?")[0]
+        if path in ALLOWED_GET_PATHS:
+            # Free metadata (model listing for client startup checks): forwarded, never counted.
+            self._forward("GET", b"", path=path)
+            return
         self.state.write_trace({"blocked": self.path, "method": "GET", "reason": "method not allowed"})
         self._send_json(403, {"error": f"only POST to {sorted(ALLOWED_PATHS)} allowed by bench proxy"})
 
@@ -281,13 +287,12 @@ class BudgetProxy:
         self._client = httpx.Client(timeout=120.0)
 
     def start(self) -> None:
-        def handler_factory(*args, **kwargs):  # noqa: ANN002, ANN003
-            handler = _ProxyHandler(*args, **kwargs)
-            handler.state = self.state
-            handler.client = self._client
-            return handler
-
-        self._server = ThreadingHTTPServer(("127.0.0.1", self.port), handler_factory)
+        # BaseHTTPRequestHandler serves the request inside __init__, so state must exist on the
+        # class before construction; assigning it afterwards left every request without it.
+        handler_cls = type(
+            "_BoundProxyHandler", (_ProxyHandler,), {"state": self.state, "client": self._client}
+        )
+        self._server = ThreadingHTTPServer(("127.0.0.1", self.port), handler_cls)
         self._thread = threading.Thread(
             target=self._server.serve_forever,
             name=f"budget-proxy-{self.port}",
