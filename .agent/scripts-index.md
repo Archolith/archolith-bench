@@ -155,3 +155,18 @@ answers in `tasks/<repo>/<task>.json` (only owner-`reviewed` tasks run unless
 `IdeaProjects/.agent/plans/beacon-p3-agent-task-evaluation-plan-2026-09-23.md`. Offline tests:
 `tests/test_beacon_eval.py` (a stub replaces OpenCode).
 
+## AMA-Bench State Updating (agentic supersession)
+
+Answers: does Menhir recall return the latest state from a long agent trajectory? Dataset:
+AMA-Bench (MIT, `AMA-bench/AMA-bench` on Hugging Face, kept outside the repo; point
+`AMA_BENCH_DATASET` at `open_end_qa_set.jsonl`). Type `C` questions only by default.
+- `scripts/ama/ingest_ama.py`: ingests each selected episode once into `ama-ep<id>`: the task, then
+  one memory per step, in order, `wait=true`, step-ordered synthetic source times; episodes run in
+  parallel (`--workers`). Default subset: 5 episodes per domain, at most 60k tokens, OPENWORLD_QA
+  excluded (`--episode-ids` overrides). `--dry-run` prints the plan.
+- `archolith-bench harness ama-bench-state --recall-only --arms menhir_recall --scorer llm-judge`:
+  answers the questions against those namespaces (items carry their own `namespace`).
+- `scripts/ama/serve_budget_proxy.py`: foreground `ci/budget_proxy.py` with a hard USD cap; point
+  Menhir's LLM, the answer model and the judge at it.
+No user turns, so the scalar lane never sees this data. Offline tests: `tests/test_ama_bench.py`.
+
