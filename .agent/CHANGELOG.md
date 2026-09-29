@@ -1,5 +1,31 @@
 # archolith-bench Changelog
 
+## 2026-09-29 - Always record TurnEvidence for user-turn ingest (Menhir legacy scalar fallback removal)
+
+Menhir is removing its legacy typed-scalar fallback that selected `:Episodic`
+content starting with "user:", so its scalar lane reads user input ONLY from
+`:TurnEvidence`. Bench must therefore record evidence on every path that can
+feed scalars:
+
+- **`harness/memory_ab.py`:** the ingest loop now calls
+  `client.record_turn_evidence(...)` for every user-role turn before
+  `client.ingest(..., turn_evidence_uuid=<turn_id>)` (mirroring
+  `scripts/longmemeval/lib/ingest.py` and `harness/scalar_phase_d.py`).
+  A new `record_turn_evidence: bool = True` keyword (CLI:
+  `--no-record-turn-evidence`) keeps the old ungrounded behavior reachable;
+  with it off, Menhir's scalar lane receives no user input at all. Note:
+  `HttpMenhirClient.ingest` drops the "user: " text prefix when
+  `turn_evidence_uuid` is passed, so episode text for user turns changes.
+- **Evidence-required is now the default:** `LME_REQUIRE_TURN_EVIDENCE`
+  defaults to 1 in `scripts/longmemeval/config.sh` and in
+  `scripts/longmemeval/lib/ingest.py`, so a failed evidence capture stops the
+  build instead of silently ingesting without evidence. The explicit override
+  (`LME_REQUIRE_TURN_EVIDENCE=0`) still works, including in
+  `run_date_smoke.sh` (whose default also flipped to 1).
+- **Comparability:** graphs built before evidence capture are NOT valid for
+  scalar runs against a Menhir without the legacy fallback and must be
+  rebuilt.
+
 ## 2026-09-26 - Beacon eval: run lifecycle fixes (PR #3 review findings 5, 8, 9, 10, 11; reworked per the PR #4 review)
 
 Deferred lower-severity findings from the astra review of PR #3, reworked after the

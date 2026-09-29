@@ -96,7 +96,7 @@ LME_REQUIRE_FRESH="${LME_REQUIRE_FRESH:-0}"
 # resume a partially-built graph after a code change. The provenance file and all output will be
 # labelled noncanonical.
 LME_NONCANONICAL="${LME_NONCANONICAL:-0}"
-LME_REQUIRE_TURN_EVIDENCE="${LME_REQUIRE_TURN_EVIDENCE:-0}"
+LME_REQUIRE_TURN_EVIDENCE="${LME_REQUIRE_TURN_EVIDENCE:-1}"
 
 # ---- Evidence capture: ON for every run, not just the KU buildout ----
 # WHY THESE DEFAULT ON. The decision points that explain a scalar result are recorded through the

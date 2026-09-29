@@ -82,7 +82,7 @@ def _heuristic_extract_claims_sync(content: str, role: str) -> list[ClaimSegment
 # Throwaway lme Neo4j (must match _lme_build_db.sh).
 NEO4J_CONTAINER = os.getenv("LME_NEO4J_CONTAINER", "menhir-lme-neo4j")
 NEO4J_PW = os.getenv("LME_NEO4J_PW", "lmedata123")
-REQUIRE_TURN_EVIDENCE = os.getenv("LME_REQUIRE_TURN_EVIDENCE", "0").strip().lower() in {
+REQUIRE_TURN_EVIDENCE = os.getenv("LME_REQUIRE_TURN_EVIDENCE", "1").strip().lower() in {
     "1", "true", "yes", "on",
 }
 
