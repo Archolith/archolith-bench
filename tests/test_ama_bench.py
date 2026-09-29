@@ -341,3 +341,62 @@ def test_long_flip_flop_timelines_get_no_timeline_question():
     states = [{"step": i, "value": "open" if i % 2 else "closed", "evidence": "e"} for i in range(MAX_TIMELINE_STATES + 1)]
     kinds = [q["question_type"] for q in gold_questions(_tl_episode(), [{"subject": "menu", "attribute": "state", "states": states}])]
     assert kinds == ["current", "previous"]
+
+
+def _gold_rows():
+    return [
+        {"question_id": "ep7-t0-current", "episode_id": 7, "domain": "SOFTWARE", "question_type": "current",
+         "question": "latest result?", "answer": "all passing", "stale_answers": ["3 failing"]},
+        {"question_id": "ep7-t0-timeline", "episode_id": 7, "domain": "SOFTWARE", "question_type": "timeline",
+         "question": "list results", "answer": "3 failing -> all passing", "stale_answers": []},
+        {"question_id": "ep8-t0-current", "episode_id": 8, "domain": "WEB", "question_type": "current",
+         "question": "latest page?", "answer": "checkout", "stale_answers": ["cart"]},
+    ]
+
+
+def test_gold_items_use_the_current_namespace_prefix_and_episode_filter(tmp_path: Path, monkeypatch):
+    from archolith_bench.harness.ama_bench import AmaBenchStateAdapter
+
+    path = tmp_path / "gold.jsonl"
+    path.write_text("\n".join(json.dumps(r) for r in _gold_rows()), encoding="utf-8")
+    monkeypatch.setenv("AMA_GOLD_PATH", str(path))
+    monkeypatch.setenv("AMA_NAMESPACE_PREFIX", "ama-crafted-ep")
+    monkeypatch.delenv("AMA_EPISODE_IDS", raising=False)
+    items = AmaBenchStateAdapter().load_items()
+    assert [(i["question_id"], i["namespace"]) for i in items] == [
+        ("ep7-t0-current", "ama-crafted-ep7"), ("ep7-t0-timeline", "ama-crafted-ep7"), ("ep8-t0-current", "ama-crafted-ep8")]
+    monkeypatch.setenv("AMA_EPISODE_IDS", "8")
+    assert [i["question_id"] for i in AmaBenchStateAdapter().load_items()] == ["ep8-t0-current"]
+
+
+def test_scorer_labels_fail_closed_and_summarize(tmp_path: Path, monkeypatch):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts" / "ama"))
+    import score_gold
+
+    assert score_gold.parse_label('{"label": "stale"}', "current") == "stale"
+    assert score_gold.parse_label('{"label": "partial"}', "current") == "unscored"   # not a state label
+    assert score_gold.parse_label('{"label": "partial"}', "timeline") == "partial"
+    assert score_gold.parse_label("nonsense", "current") == "unscored"
+
+    gold = tmp_path / "gold.jsonl"
+    gold.write_text("\n".join(json.dumps(r) for r in _gold_rows()), encoding="utf-8")
+    answers = tmp_path / "answers.json"
+    answers.write_text(json.dumps({"arms": {"menhir_recall": {"results": [
+        {"task_id": "ep7-t0-current", "response_text": "3 tests fail"},
+        {"task_id": "ep7-t0-timeline", "response_text": "failing then passing"},
+    ]}}}), encoding="utf-8")
+    verdicts = {"latest result?": "stale", "list results": "correct"}
+
+    def fake_ask(client, base_url, api_key, model, messages):  # noqa: ANN001
+        q = next(line for line in messages[1]["content"].splitlines() if line.startswith("Question: "))
+        return json.dumps({"label": verdicts[q.removeprefix("Question: ")]})
+
+    monkeypatch.setattr(score_gold, "ask", fake_ask)
+    out = tmp_path / "scored"
+    rc = score_gold.main(["--answers", str(answers), "--gold", str(gold), "--out", str(out),
+                          "--base-url", "u", "--model", "m", "--workers", "2"])
+    report = json.loads((out / "scores.json").read_text(encoding="utf-8"))
+    assert rc == 1 and report["missing_answers"] == ["ep8-t0-current"]   # an unanswered question fails the run
+    assert report["overall"]["n"] == 2 and report["by_type"]["current"]["stale"] == 1
+    assert report["by_type"]["timeline"]["correct_rate"] == 1.0
+    assert report["by_domain_type"]["SOFTWARE/current"]["stale_rate"] == 1.0

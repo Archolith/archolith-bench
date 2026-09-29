@@ -342,6 +342,25 @@ def question_items(episodes: list[dict], qa_types: tuple[str, ...] = DEFAULT_QA_
     return items
 
 
+GOLD_ENV = "AMA_GOLD_PATH"
+
+
+def load_gold_items(path: str | Path, episode_ids: tuple[int, ...] | None = None) -> list[dict]:
+    """Our supersession gold set (``build_gold.py``) as harness items; the namespace comes from the
+    current prefix (AMA_NAMESPACE_PREFIX), so one gold set serves raw and crafted runs."""
+    wanted = set(episode_ids) if episode_ids else None
+    items = []
+    with open(path, encoding="utf-8") as fh:
+        for line in fh:
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            if wanted is not None and int(row["episode_id"]) not in wanted:
+                continue
+            items.append({**row, "namespace": namespace_for(int(row["episode_id"]))})
+    return items
+
+
 def _env_tuple(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
     raw = os.getenv(name)
     return default if raw is None else tuple(s.strip() for s in raw.split(",") if s.strip())
@@ -373,6 +392,10 @@ class AmaBenchStateAdapter:
     name = "AMA-Bench State Updating (menhir memory)"
 
     def load_items(self, subset=None, limit=None, fixture_path=None) -> list[dict]:  # noqa: ANN001
+        gold_path = os.getenv(GOLD_ENV)
+        if gold_path:
+            items = load_gold_items(gold_path, episode_ids=selection_from_env()["episode_ids"])
+            return items[:limit] if limit is not None else items
         path = fixture_path or os.getenv(DATASET_ENV)
         if not path:
             raise ValueError(f"set {DATASET_ENV} to AMA-Bench's open_end_qa_set.jsonl")
