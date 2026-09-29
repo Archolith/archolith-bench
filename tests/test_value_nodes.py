@@ -167,7 +167,10 @@ class _ValueBlindClient:
     def new_group(self) -> str:
         return "group"
 
-    def ingest(self, group_id: str, role: str, content: str) -> None:
+    def record_turn_evidence(self, namespace: str, text: str, **kwargs) -> dict:
+        return {"turn_id": "te-1"}
+
+    def ingest(self, group_id: str, role: str, content: str, **kwargs) -> None:
         return None
 
     def recall(self, group_id: str, query: str, limit: int = 10) -> list[str]:

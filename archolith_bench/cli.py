@@ -324,6 +324,11 @@ def main(argv: list[str] | None = None) -> None:
     harness_p.add_argument("--namespace-template", default="lme-{question_id}",
                            help="Recall-only: namespace per item, formatted with {question_id} "
                                 "(default: lme-{question_id}, matching _ingest_lme.py).")
+    harness_p.add_argument("--no-record-turn-evidence", action="store_true",
+                           help="Memory benchmarks: skip capturing user turns as :TurnEvidence "
+                                "before ingest. With this set, Menhir's scalar lane receives NO "
+                                "user input at all (its legacy typed-scalar fallback is removed); "
+                                "results are only valid for non-scalar arms.")
     harness_p.add_argument("--format", choices=["markdown", "json"], default="markdown",
                            help="Evidence output format (default: markdown)")
     harness_p.add_argument("--output-dir", type=Path, default=Path("results"),
@@ -1299,6 +1304,7 @@ def _run_harness(args: argparse.Namespace) -> None:
             namespace_template=getattr(args, "namespace_template", "lme-{question_id}"),
             checkpoint=checkpoint,
             score_fn=score_fn,
+            record_turn_evidence=not getattr(args, "no_record_turn_evidence", False),
         )
     elif is_external(adapter):
         results_fixtures = (

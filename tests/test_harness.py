@@ -578,7 +578,10 @@ def test_run_memory_ab_dry_run_skips_real_menhir_reset():
         def new_group(self):
             return "group-1"
 
-        def ingest(self, group_id, role, content):
+        def record_turn_evidence(self, namespace, text, **kwargs):
+            return {"turn_id": "te-1"}
+
+        def ingest(self, group_id, role, content, **kwargs):
             return None
 
         def recall(self, group_id, query, limit=10):

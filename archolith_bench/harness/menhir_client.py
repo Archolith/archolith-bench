@@ -240,6 +240,14 @@ class StubMenhirClient:
         """Return a fresh isolated namespace id."""
         return uuid.uuid4().hex
 
+    def record_turn_evidence(self, namespace: str, text: str, **_: Any) -> dict[str, Any]:
+        """Record a grounding turn (returns a fake turn_id the ingest can cite)."""
+        return {
+            "turn_id": uuid.uuid4().hex,
+            "created": True,
+            "recorded_at": "stub",
+        }
+
     def ingest(
         self,
         group_id: str,

@@ -379,7 +379,17 @@ class MenhirClient(Protocol):
         """Return a fresh isolated namespace id for one benchmark item."""
         ...
 
-    def ingest(self, group_id: str, role: str, content: str) -> None:
+    def record_turn_evidence(self, namespace: str, text: str, **kwargs) -> dict:  # noqa: ANN001, ANN003
+        """Capture one user turn as :TurnEvidence; returns a dict with ``turn_id``."""
+        ...
+
+    def ingest(
+        self,
+        group_id: str,
+        role: str,
+        content: str,
+        **kwargs,  # noqa: ANN003
+    ) -> None:
         """Ingest one conversation turn into the memory store under group_id."""
         ...
 
@@ -443,6 +453,7 @@ def _run_memory_arm(
     namespace_template: str = "lme-{question_id}",
     checkpoint: "MemoryCheckpoint | None" = None,
     score_fn=None,  # noqa: ANN001
+    record_turn_evidence: bool = True,
 ) -> ArmResult:
     results: list[TaskResult] = []
     turn_dicts: list[dict] = []
@@ -471,9 +482,24 @@ def _run_memory_arm(
         else:
             group_id = client.new_group()
             try:
-                for session in adapter.sessions(item):
-                    for turn in session:
-                        client.ingest(group_id, turn.get("role", "user"), turn.get("content", ""))
+                for session_idx, session in enumerate(adapter.sessions(item)):
+                    for turn_idx, turn in enumerate(session):
+                        role = turn.get("role", "user")
+                        content = turn.get("content", "")
+                        turn_evidence_uuid = None
+                        # Menhir's scalar lane reads user input ONLY from :TurnEvidence
+                        # (the legacy "user:"-prefix fallback is removed), so every user
+                        # turn is captured as evidence first and the ingest cites its UUID.
+                        if record_turn_evidence and role.strip().lower() == "user" and content:
+                            ev = client.record_turn_evidence(
+                                group_id,
+                                content,
+                                turn_key=f"{group_id}:s{session_idx}:t{turn_idx}",
+                            )
+                            turn_evidence_uuid = ev.get("turn_id")
+                        client.ingest(
+                            group_id, role, content, turn_evidence_uuid=turn_evidence_uuid
+                        )
                 if arm == AGENTIC_RECALL:
                     subqueries = _plan_recall_queries(
                         question, send_fn=send_fn, chat_client=chat_client,
@@ -558,12 +584,19 @@ def run_memory_ab(
     namespace_template: str = "lme-{question_id}",
     checkpoint: "MemoryCheckpoint | None" = None,
     score_fn=None,  # noqa: ANN001
+    record_turn_evidence: bool = True,
 ) -> ABResult:
     """Run an ingest-then-recall memory benchmark across arms.
 
     `no_memory` answers with an empty memory context (the floor); memory arms
     ingest+recall via `client`. Offline: pass `fixture_path` and a stub `client`
     + deterministic `send_fn`. Real runs require a throwaway menhir client.
+
+    `record_turn_evidence`: when True (default) every user-role turn is captured
+    as :TurnEvidence before ingest and the ingest cites its UUID. With it False,
+    user turns are ingested ungrounded -- Menhir's scalar lane then receives no
+    user input at all (the legacy typed-scalar fallback is removed), so results
+    are only valid for non-scalar arms.
 
     `checkpoint`: optional MemoryCheckpoint. When given, each item's result is
     persisted as it completes and already-recorded items are skipped, so a long run
@@ -622,6 +655,7 @@ def run_memory_ab(
                         namespace_template=namespace_template,
                         checkpoint=checkpoint,
                         score_fn=score_fn,
+                        record_turn_evidence=record_turn_evidence,
                     )
     finally:
         if score_fn is not None and hasattr(score_fn, "close"):

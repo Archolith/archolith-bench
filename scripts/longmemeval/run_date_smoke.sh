@@ -48,7 +48,7 @@ export LME_BACKFILL_DATES=0
 export LME_SCALAR_STATE_ENABLED="${LME_SCALAR_STATE_ENABLED:-1}"
 # A single item may legitimately abstain at the consistency gate; do not fail the build on it.
 export LME_REQUIRE_SCALAR_OUTPUT="${LME_REQUIRE_SCALAR_OUTPUT:-0}"
-export LME_REQUIRE_TURN_EVIDENCE="${LME_REQUIRE_TURN_EVIDENCE:-0}"
+export LME_REQUIRE_TURN_EVIDENCE="${LME_REQUIRE_TURN_EVIDENCE:-1}"
 
 # Keep the smoke's manifest and results away from the canonical ones.
 export LME_MANIFEST_PATH="${LME_MANIFEST_PATH:-${HERE}/results/manifest-datesmoke.json}"
