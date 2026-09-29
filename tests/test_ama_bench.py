@@ -131,3 +131,31 @@ def test_ingest_dry_run_plans_without_a_server(dataset: Path, capsys):
     ])
     assert rc == 0
     assert "plan: 3 episodes, 9 steps, 2,500 tokens, 4 questions" in capsys.readouterr().out
+
+
+def test_progress_counts_ready_and_failed_as_done_and_renders(tmp_path: Path):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts" / "ama"))
+    import progress_ama
+
+    from archolith_bench.dashboard import (
+        EPISODE_PROGRESS_FILE,
+        render_html,
+        scan_episode_progress,
+    )
+
+    counts = {namespace_for(0): {"READY": 2, "FAILED": 1}, namespace_for(1): {"READY": 1, "ENRICHING": 1}}
+    payload = progress_ama.build_progress([EPISODES[0], EPISODES[1]], counts, "ama-test")
+    assert [(r["steps_total"], r["ready"], r["failed"], r["in_flight"]) for r in payload["episodes"]] == [
+        (3, 2, 1, 0), (3, 1, 0, 1),
+    ]
+
+    run_dir = tmp_path / "ama-test"
+    run_dir.mkdir()
+    progress_ama.write_atomic(run_dir / EPISODE_PROGRESS_FILE, payload)
+    loaded = scan_episode_progress(tmp_path)
+    assert loaded == payload
+
+    page = render_html([], None, total_items=None, episode_progress=loaded)
+    assert "Episode ingest" in page
+    assert "4/6 steps (66.7%)" in page and "1/2 episodes finished" in page and "1 failed steps" in page
+    assert render_html([], None, total_items=None).count("Episode ingest") == 0
