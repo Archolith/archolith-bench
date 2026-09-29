@@ -2,8 +2,12 @@
 
 AMA-Bench (MIT, huggingface.co/datasets/AMA-bench/AMA-bench) pairs long agent trajectories with
 expert-written questions. Type ``C`` questions test *state updating*: whether memory returns the
-latest state after it changed. Each episode is ingested ONCE, one memory per trajectory step
-(``scripts/ama/ingest_ama.py``); questions then run recall-only against that episode's namespace.
+latest state after it changed. Each episode is ingested ONCE (``scripts/ama/ingest_ama.py``);
+questions then run recall-only against that episode's namespace. Two ingest modes:
+
+* raw: one memory per trajectory step (a log, not how Menhir is used);
+* crafted: a memory agent reads each step and writes add_memory-style memories only where
+  appropriate (``scripts/ama/craft_memories.py``), and only those reach Menhir.
 
 Trajectories are agent actions and environment observations; they contain no user turns, so they
 never reach Menhir's scalar lane (user TurnEvidence only). This is a recall/supersession check.
@@ -25,8 +29,72 @@ DEFAULT_EXCLUDE_DOMAINS = ("OPENWORLD_QA",)
 STEP_TIME_BASE = datetime(2026, 1, 1, tzinfo=timezone.utc)
 
 
-def namespace_for(episode_id: int) -> str:
-    return f"ama-ep{episode_id}"
+RAW_PREFIX = "ama-ep"
+CRAFTED_PREFIX = "ama-crafted-ep"
+
+
+def namespace_for(episode_id: int, prefix: str | None = None) -> str:
+    return f"{prefix or os.getenv('AMA_NAMESPACE_PREFIX') or RAW_PREFIX}{episode_id}"
+
+
+# ---- Memory agent: an agent reading its own trajectory and choosing what to remember ----
+
+MEMORY_AGENT_SYSTEM = (
+    "You are an AI agent working on the task below, and you have a long-term memory tool "
+    "(add_memory). After each step you decide what, if anything, is worth saving so that you or "
+    "another agent could pick this work up later without the transcript. Save what matters: "
+    "decisions, findings, errors and their causes, what you changed, test or tool results, and the "
+    "current state of things. Skip routine output with nothing new. When something you saved "
+    "earlier is no longer true, save the new state and say what it replaces. Each memory must be "
+    "self-contained and start with the step number, like 'Step 12: ...'. Reply with JSON only: "
+    '{"memories": ["...", "..."]}, or {"memories": []} when nothing is worth saving.'
+)
+MAX_TASK_CHARS = 4_000
+MAX_STEP_CHARS = 12_000
+RECENT_MEMORIES = 20
+MAX_MEMORIES_PER_STEP = 5
+
+
+def _clip(text: str, limit: int) -> str:
+    text = str(text or "").strip()
+    return text if len(text) <= limit else text[:limit] + f"\n...[{len(text) - limit} more characters]"
+
+
+def memory_agent_messages(episode: dict, step: dict, recent: list[str]) -> list[dict]:
+    idx = int(step.get("turn_idx", 0))
+    saved = "\n".join(f"- {m}" for m in recent[-RECENT_MEMORIES:]) or "(none yet)"
+    user = (
+        f"Task:\n{_clip(episode.get('task', ''), MAX_TASK_CHARS)}\n\n"
+        f"Memories you have saved so far (most recent last):\n{saved}\n\n"
+        f"Step {idx}\nAction: {_clip(step.get('action', ''), MAX_STEP_CHARS // 4)}\n"
+        f"Observation: {_clip(step.get('observation', ''), MAX_STEP_CHARS)}\n\n"
+        f"What, if anything, do you save to memory after step {idx}?"
+    )
+    return [{"role": "system", "content": MEMORY_AGENT_SYSTEM}, {"role": "user", "content": user}]
+
+
+def parse_memories(text: str) -> list[str]:
+    """The agent's memories for one step; malformed output saves nothing (never guessed)."""
+    raw = (text or "").strip()
+    if raw.startswith("```"):
+        raw = raw.strip("`").removeprefix("json").strip()
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return []
+    items = data.get("memories") if isinstance(data, dict) else None
+    if not isinstance(items, list):
+        return []
+    return [m.strip() for m in items if isinstance(m, str) and m.strip()][:MAX_MEMORIES_PER_STEP]
+
+
+def crafted_turns(crafted: list[dict]) -> list[dict]:
+    """Memories written by the agent, in step order, each at its step's source time."""
+    turns = []
+    for entry in sorted(crafted, key=lambda e: int(e["step"])):
+        for memory in entry.get("memories", []):
+            turns.append({"role": "assistant", "content": memory, "occurred_at": step_time(int(entry["step"]) + 1)})
+    return turns
 
 
 def step_time(step_idx: int) -> str:

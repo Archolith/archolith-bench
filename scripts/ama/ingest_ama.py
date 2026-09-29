@@ -22,10 +22,13 @@ from pathlib import Path
 import httpx
 
 from archolith_bench.harness.ama_bench import (
+    CRAFTED_PREFIX,
     DATASET_ENV,
     DEFAULT_EXCLUDE_DOMAINS,
     DEFAULT_MAX_TOKENS,
     DEFAULT_PER_DOMAIN,
+    RAW_PREFIX,
+    crafted_turns,
     load_episodes,
     namespace_for,
     render_steps,
@@ -74,25 +77,54 @@ def promote_namespace(bolt_uri: str, user: str, password: str, namespace: str) -
     return {"entities": entities, "edges": edges}
 
 
-def ingest_episode(base_url: str, episode: dict, *, reset: bool, tries: int = 3) -> dict:
-    namespace = namespace_for(episode["episode_id"])
+def load_crafted(crafted_dir: Path, episode: dict) -> list[dict]:
+    path = crafted_dir / f"ep{episode['episode_id']}.json"
+    if not path.exists():
+        raise FileNotFoundError(f"no crafted memories for episode {episode['episode_id']}: {path}")
+    crafted = json.loads(path.read_text(encoding="utf-8"))
+    if len(crafted) < len(episode.get("trajectory", [])):
+        raise ValueError(f"crafted memories for episode {episode['episode_id']} are incomplete")
+    return crafted
+
+
+def ingest_episode(
+    base_url: str, episode: dict, *, reset: bool, tries: int = 3, crafted_dir: Path | None = None,
+) -> dict:
+    if crafted_dir is not None:
+        namespace = namespace_for(episode["episode_id"], CRAFTED_PREFIX)
+        steps = crafted_turns(load_crafted(crafted_dir, episode))
+    else:
+        namespace = namespace_for(episode["episode_id"], RAW_PREFIX)
+        steps = render_steps(episode)
     if reset:
         _reset_namespace(base_url, namespace)
-    steps = render_steps(episode)
     failed: list[int] = []
     t0 = time.time()
-    with HttpMenhirClient(base_url, timeout=300.0) as client:
+    with HttpMenhirClient(base_url, timeout=300.0) as client, httpx.Client(timeout=300.0) as http:
         for index, turn in enumerate(steps):
             for attempt in range(tries):
                 try:
-                    client.ingest(
-                        namespace,
-                        turn["role"],
-                        turn["content"],
-                        occurred_at=turn["occurred_at"],
-                        session_id=namespace,
-                        wait=True,
-                    )
+                    if crafted_dir is not None:
+                        # add_memory text as the agent wrote it: no "role: " speaker prefix.
+                        http.post(
+                            base_url.rstrip("/") + "/api/memory",
+                            params={"wait": "true"},
+                            json={
+                                "episode": turn["content"],
+                                "namespace": namespace,
+                                "occurred_at": turn["occurred_at"],
+                                "session_id": namespace,
+                            },
+                        ).raise_for_status()
+                    else:
+                        client.ingest(
+                            namespace,
+                            turn["role"],
+                            turn["content"],
+                            occurred_at=turn["occurred_at"],
+                            session_id=namespace,
+                            wait=True,
+                        )
                     break
                 except httpx.HTTPError as exc:
                     if attempt == tries - 1:
@@ -129,7 +161,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--promote-only", action="store_true",
                     help="promote the selected namespaces; ingest nothing")
     ap.add_argument("--dry-run", action="store_true", help="print the plan; ingest nothing")
+    ap.add_argument("--crafted-dir", type=Path, default=None,
+                    help="ingest memory-agent memories from this dir (craft_memories.py) instead of raw steps")
     args = ap.parse_args(argv)
+    prefix = CRAFTED_PREFIX if args.crafted_dir is not None else RAW_PREFIX
 
     if not args.dataset:
         print(f"ERROR: pass --dataset or set {DATASET_ENV}", file=sys.stderr)
@@ -174,7 +209,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.promote_only:
         for e in episodes:
-            ns = namespace_for(e["episode_id"])
+            ns = namespace_for(e["episode_id"], prefix)
             print(f"  promoted {ns}: {promote(ns)}", flush=True)
         return 0
 
@@ -182,7 +217,7 @@ def main(argv: list[str] | None = None) -> int:
     results: list[dict] = []
 
     def run(episode: dict) -> dict:
-        result = ingest_episode(args.menhir_url, episode, reset=args.reset)
+        result = ingest_episode(args.menhir_url, episode, reset=args.reset, crafted_dir=args.crafted_dir)
         result["promoted"] = promote(result["namespace"])
         return result
 

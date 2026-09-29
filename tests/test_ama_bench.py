@@ -159,3 +159,65 @@ def test_progress_counts_ready_and_failed_as_done_and_renders(tmp_path: Path):
     assert "Episode ingest" in page
     assert "4/6 steps (66.7%)" in page and "1/2 episodes finished" in page and "1 failed steps" in page
     assert render_html([], None, total_items=None).count("Episode ingest") == 0
+
+
+def test_parse_memories_accepts_json_and_saves_nothing_on_bad_output():
+    from archolith_bench.harness.ama_bench import parse_memories
+
+    assert parse_memories('{"memories": ["Step 3: tests fail", "  "]}') == ["Step 3: tests fail"]
+    assert parse_memories('```json\n{"memories": ["Step 1: x"]}\n```') == ["Step 1: x"]
+    assert parse_memories('{"memories": []}') == []
+    assert parse_memories("not json") == []
+    assert parse_memories('{"memories": "Step 1: not a list"}') == []
+    assert len(parse_memories(json.dumps({"memories": [f"m{i}" for i in range(9)]}))) == 5
+
+
+def test_memory_agent_sees_task_saved_memories_and_the_step():
+    from archolith_bench.harness.ama_bench import memory_agent_messages
+
+    messages = memory_agent_messages(EPISODES[0], EPISODES[0]["trajectory"][1], ["Step 0: began"])
+    user = messages[1]["content"]
+    assert "Task:\ntask 0" in user and "- Step 0: began" in user
+    assert "Step 1\nAction: act1\nObservation: obs1 of ep0" in user
+    assert "(none yet)" in memory_agent_messages(EPISODES[0], EPISODES[0]["trajectory"][0], [])[1]["content"]
+
+
+def test_crafted_turns_follow_step_order_and_step_times():
+    from archolith_bench.harness.ama_bench import crafted_turns
+
+    turns = crafted_turns([
+        {"step": 2, "memories": ["Step 2: b"]},
+        {"step": 0, "memories": ["Step 0: a", "Step 0: a2"]},
+        {"step": 1, "memories": []},
+    ])
+    assert [t["content"] for t in turns] == ["Step 0: a", "Step 0: a2", "Step 2: b"]
+    assert [t["occurred_at"] for t in turns] == [step_time(1), step_time(1), step_time(3)]
+
+
+def test_craft_episode_resumes_without_re_asking_finished_steps(tmp_path: Path, monkeypatch):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts" / "ama"))
+    import craft_memories
+
+    asked: list[str] = []
+
+    def fake_ask(client, base_url, api_key, model, messages):  # noqa: ANN001
+        step_line = next(line for line in messages[1]["content"].splitlines() if line.startswith("Step "))
+        asked.append(step_line)
+        return json.dumps({"memories": [f"{step_line}: noted"]})
+
+    monkeypatch.setattr(craft_memories, "ask", fake_ask)
+    (tmp_path / "ep0.json").write_text(json.dumps([{"step": 0, "memories": ["Step 0: cached"], "raw": None}]))
+    result = craft_memories.craft_episode(EPISODES[0], tmp_path, base_url="u", api_key="k", model="m")
+    assert asked == ["Step 1"]
+    assert result == {"episode_id": 0, "domain": "WEB", "steps": 2, "steps_done": 2, "memories": 2, "complete": True}
+
+
+def test_ingest_refuses_incomplete_crafted_memories(tmp_path: Path):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts" / "ama"))
+    import ingest_ama
+
+    (tmp_path / "ep0.json").write_text(json.dumps([{"step": 0, "memories": ["Step 0: a"]}]))
+    with pytest.raises(ValueError):
+        ingest_ama.load_crafted(tmp_path, EPISODES[0])
+    with pytest.raises(FileNotFoundError):
+        ingest_ama.load_crafted(tmp_path, EPISODES[1])
