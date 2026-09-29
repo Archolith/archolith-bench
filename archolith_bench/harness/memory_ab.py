@@ -474,7 +474,11 @@ def _run_memory_arm(
             # Recall-only A/B: the graph is pre-built once in stable per-question
             # namespaces (e.g. lme-<question_id>), so skip ingest AND reset entirely and
             # recall in place. No new_group, no mutation -> needs no --confirm-menhir-reset.
-            group_id = namespace_template.format(question_id=item.get("question_id") or task_id)
+            # An item may name its own pre-built namespace (several AMA-Bench questions share
+            # one ingested episode); otherwise derive it per question as before.
+            group_id = item.get("namespace") or namespace_template.format(
+                question_id=item.get("question_id") or task_id
+            )
             recalled = client.recall(group_id, question, limit=recall_limit)
             memory_context = _value_context_for_arm(
                 arm, adapter, item, recalled, question, recall_limit, task_id

@@ -386,6 +386,58 @@ def _ingest_rows_html(ingests: list[IngestSnapshot], total_items: int | None) ->
     return "".join(rows)
 
 
+EPISODE_PROGRESS_FILE = "ama_ingest_progress.json"
+
+
+def scan_episode_progress(results_dir: Path) -> dict | None:
+    """Newest per-episode ingest progress file (written by scripts/ama/progress_ama.py)."""
+    if not results_dir.exists():
+        return None
+    paths = sorted(results_dir.rglob(EPISODE_PROGRESS_FILE), key=lambda p: p.stat().st_mtime, reverse=True)
+    for path in paths:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        if isinstance(data, dict) and isinstance(data.get("episodes"), list):
+            return data
+    return None
+
+
+def _episode_progress_html(progress: dict | None) -> str:
+    if not progress:
+        return ""
+    episodes = [e for e in progress["episodes"] if isinstance(e, dict)]
+    total = sum(int(e.get("steps_total") or 0) for e in episodes)
+    done = sum(int(e.get("ready") or 0) + int(e.get("failed") or 0) for e in episodes)
+    failed = sum(int(e.get("failed") or 0) for e in episodes)
+    finished = sum(
+        1 for e in episodes
+        if int(e.get("ready") or 0) + int(e.get("failed") or 0) >= int(e.get("steps_total") or 0) > 0
+    )
+    pct = (done / total * 100.0) if total else 0.0
+    rows = ""
+    for e in episodes:
+        steps = int(e.get("steps_total") or 0)
+        ep_done = int(e.get("ready") or 0) + int(e.get("failed") or 0)
+        ep_pct = (ep_done / steps * 100.0) if steps else 0.0
+        rows += (
+            f"<tr><td>{_esc(e.get('namespace'))}</td><td>{_esc(e.get('domain'))}</td>"
+            f"<td><div class='bar'><div class='fill' style='width:{min(100.0, ep_pct):.1f}%'></div></div></td>"
+            f"<td class='num'>{ep_done}/{steps}</td><td class='num'>{int(e.get('failed') or 0)}</td>"
+            f"<td class='num'>{int(e.get('in_flight') or 0)}</td></tr>"
+        )
+    return (
+        f"<div class='run'><h2>Episode ingest <span class='src'>[{_esc(progress.get('run'))}]</span></h2>"
+        f"<div class='prog'><div class='bar'><div class='fill' style='width:{min(100.0, pct):.1f}%'></div></div>"
+        f"<span class='muted'>{done}/{total} steps ({pct:.1f}%) &middot; {finished}/{len(episodes)} episodes "
+        f"finished &middot; {failed} failed steps</span></div>"
+        "<table><thead><tr><th>namespace</th><th>domain</th><th>progress</th><th>steps</th>"
+        f"<th>failed</th><th>in flight</th></tr></thead><tbody>{rows}</tbody></table>"
+        f"<div class='muted'>graph snapshot {_esc(progress.get('generated_at'))}</div></div>"
+    )
+
+
 def _task_directory_html(tasks: list[dict]) -> str:
     """Searchable index of every completed manifest task and its score state."""
     rows: list[str] = []
@@ -937,6 +989,7 @@ def render_html(
     scalar_default_namespace: str | None = None,
     scalar_detail_page: bool = False,
     task_directory: list[dict] | None = None,
+    episode_progress: dict | None = None,
 ) -> str:
     """Self-contained auto-refreshing HTML page for the same data as render()."""
     rows: list[str] = []
@@ -975,7 +1028,7 @@ def render_html(
             f"<tbody>{arm_rows}</tbody></table>{lift}{feed_block}</div>"
         )
     ingest_rows = _ingest_rows_html(ingests or [], total_items)
-    body = ingest_rows + "".join(rows)
+    body = _episode_progress_html(episode_progress) + ingest_rows + "".join(rows)
     if task_directory is not None:
         body = _task_directory_html(task_directory)
     if not body:
@@ -1364,6 +1417,7 @@ def serve_dashboard(
                 ingests=ingests,
                 scalar_viewer_enabled=bool(catalog),
                 scalar_default_namespace=scalar_default_namespace,
+                episode_progress=scan_episode_progress(results_dir),
             )
             data = page.encode("utf-8")
             self._send(200, data, "text/html; charset=utf-8")

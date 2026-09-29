@@ -23,6 +23,7 @@ from .base import (
     run_external_ab,
     write_harness_evidence,
 )
+from .ama_bench import AmaBenchStateAdapter
 from .bigcodebench import BigCodeBenchHardAdapter
 from .external import (
     AgentDojoAdapter,
@@ -108,6 +109,7 @@ ADAPTERS: dict[str, object] = {
         MtebAdapter(),
         MenhirPhase3Adapter(),
         MenhirScalarStateAdapter(),
+        AmaBenchStateAdapter(),
     )
 }
 
@@ -136,6 +138,7 @@ __all__ = [
     "ABResult",
     "ADAPTERS",
     "AgentDojoAdapter",
+    "AmaBenchStateAdapter",
     "ArmResult",
     "BigCodeBenchHardAdapter",
     "CyberSecEvalAdapter",

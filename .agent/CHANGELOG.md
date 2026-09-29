@@ -1,5 +1,16 @@
 # archolith-bench Changelog
 
+## 2026-09-29 - AMA-Bench State Updating runner (agentic supersession)
+
+- **`harness/ama_bench.py`:** new `ama-bench-state` memory adapter. Deterministic episode subset,
+  one memory per trajectory step, type `C` (State Updating) questions that share their episode's
+  namespace.
+- **`harness/memory_ab.py`:** recall-only mode uses an item's own `namespace` when present, so one
+  ingested episode serves all its questions. Items without one behave as before.
+- **`scripts/ama/ingest_ama.py`:** ingests each episode once, steps in order, episodes in parallel.
+- **`scripts/ama/serve_budget_proxy.py`:** runs the budget proxy with a hard USD cap for paid runs.
+- **`tests/test_ama_bench.py`:** selection, rendering, namespace sharing, recall-only and dry-run.
+
 ## 2026-09-29 - Always record TurnEvidence for user-turn ingest (Menhir legacy scalar fallback removal)
 
 Menhir is removing its legacy typed-scalar fallback that selected `:Episodic`
