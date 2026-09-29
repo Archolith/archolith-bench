@@ -50,6 +50,30 @@ def _reset_namespace(base_url: str, namespace: str) -> None:
         ).raise_for_status()
 
 
+_PROMOTE_ENTITIES = (
+    "MATCH (n:Entity) WHERE n.group_id = $ns AND coalesce(n.scope, 'SESSION') = 'SESSION' "
+    "SET n.scope = 'PERSISTENT' RETURN count(*) AS c"
+)
+_PROMOTE_EDGES = (
+    "MATCH ()-[r:RELATES_TO]->() WHERE r.group_id = $ns AND coalesce(r.scope, 'SESSION') = 'SESSION' "
+    "SET r.scope = 'PERSISTENT' RETURN count(*) AS c"
+)
+
+
+def promote_namespace(bolt_uri: str, user: str, password: str, namespace: str) -> dict:
+    """SESSION -> PERSISTENT for one episode namespace, as LME's promote_persistent.sh does.
+
+    Ingest stamps every memory with the episode's session; REST recall without that session
+    admits none of them, so unpromoted episodes recall nothing.
+    """
+    from neo4j import GraphDatabase
+
+    with GraphDatabase.driver(bolt_uri, auth=(user, password)) as driver:
+        entities = driver.execute_query(_PROMOTE_ENTITIES, ns=namespace).records[0]["c"]
+        edges = driver.execute_query(_PROMOTE_EDGES, ns=namespace).records[0]["c"]
+    return {"entities": entities, "edges": edges}
+
+
 def ingest_episode(base_url: str, episode: dict, *, reset: bool, tries: int = 3) -> dict:
     namespace = namespace_for(episode["episode_id"])
     if reset:
@@ -98,6 +122,12 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--exclude-domains", type=_csv, default=DEFAULT_EXCLUDE_DOMAINS)
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--reset", action="store_true", help="force-clear each episode namespace first")
+    ap.add_argument("--neo4j-uri", default=os.getenv("AMA_NEO4J_URI"),
+                    help="bolt URI of the throwaway graph; required to promote SESSION memories")
+    ap.add_argument("--neo4j-user", default=os.getenv("AMA_NEO4J_USER", "neo4j"))
+    ap.add_argument("--neo4j-password-env", default="AMA_NEO4J_PASSWORD")
+    ap.add_argument("--promote-only", action="store_true",
+                    help="promote the selected namespaces; ingest nothing")
     ap.add_argument("--dry-run", action="store_true", help="print the plan; ingest nothing")
     args = ap.parse_args(argv)
 
@@ -133,10 +163,31 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     assert_not_production(args.menhir_url)
+    if not args.neo4j_uri:
+        print("ERROR: pass --neo4j-uri (or AMA_NEO4J_URI) so ingested memories can be promoted", file=sys.stderr)
+        return 2
+    assert_not_production(args.neo4j_uri)
+    password = os.getenv(args.neo4j_password_env, "")
+
+    def promote(namespace: str) -> dict:
+        return promote_namespace(args.neo4j_uri, args.neo4j_user, password, namespace)
+
+    if args.promote_only:
+        for e in episodes:
+            ns = namespace_for(e["episode_id"])
+            print(f"  promoted {ns}: {promote(ns)}", flush=True)
+        return 0
+
     args.out.mkdir(parents=True, exist_ok=True)
     results: list[dict] = []
+
+    def run(episode: dict) -> dict:
+        result = ingest_episode(args.menhir_url, episode, reset=args.reset)
+        result["promoted"] = promote(result["namespace"])
+        return result
+
     with ThreadPoolExecutor(max_workers=max(1, args.workers)) as pool:
-        futures = {pool.submit(ingest_episode, args.menhir_url, e, reset=args.reset): e for e in episodes}
+        futures = {pool.submit(run, e): e for e in episodes}
         for fut in as_completed(futures):
             result = fut.result()
             results.append(result)
