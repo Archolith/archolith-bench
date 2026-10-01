@@ -76,6 +76,25 @@ negative cases, four relation groups, and at least three perturbations per group
 join and semantic quality separately and is permanently descriptive until a separately
 preregistered population gate exists.
 
+## LLM-call helpers
+
+**Flex is the default for non-live answering/judging.** Batch-style benchmark
+LLM calls use OpenAI flex processing via `archolith_bench.core.openai_flex.run_flex`
+(synchronous `service_tier: "flex"`, ~50% of standard price) instead of the
+OpenRouter Batch API, which sat queued for hours at 0 complete with no
+cancellation. Key contract points:
+
+- Pricing rates ((input, output) $/1M at flex prices) must be passed in
+  explicitly — no catalog lookup.
+- 429 policy: capacity 429 (`resource_unavailable`) retries with exponential
+  backoff up to `max_capacity_retries` (default 5) then stops the run; any
+  other 429, plus 402/401/403, stop immediately with no retry. 408/5xx and
+  httpx transport errors retry up to 5 times, then become per-request failures
+  (run continues). Other 4xx are per-request failures without retry.
+- JSONL checkpoint gives crash-safe resume; a `max_usd` cost cap stops
+  scheduling once the running total (including checkpointed rows) reaches it.
+- API keys and request bodies are never logged.
+
 ### Progress on long runs
 Long bench loops (R1/facet ladders, live recall) print a live heartbeat via
 `archolith_bench/progress.py` — `ProgressReporter` / `track` / `run_ladder`. Progress goes

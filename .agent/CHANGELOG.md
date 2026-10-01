@@ -1,5 +1,34 @@
 # archolith-bench Changelog
 
+## 2026-09-30 - OpenAI flex client for non-live LLM calls (`archolith_bench/core/openai_flex.py`)
+
+Batch-style benchmark calls (answering, judging) now use OpenAI **flex
+processing** (`service_tier: "flex"`, synchronous, ~50% of standard price)
+instead of the OpenRouter Batch API. Motivation: a 3,030-request OpenRouter
+judge batch sat queued 2+ hours at 0 complete with no cancellation; the same
+work via flex finished in ~4 minutes for $0.09. This supersedes PR #12's batch
+client, which also died on a single poll ConnectTimeout.
+
+- **`run_flex(...)`** posts `{base_url}/chat/completions` with `model` and
+  `service_tier: "flex"` always set by the client; caller body fields
+  (`reasoning_effort`, `max_completion_tokens`, `response_format`, ...) are
+  never overridden. Rates ((input, output) $/1M at flex prices) must be passed
+  in explicitly — no catalog lookup.
+- **Checkpoint/resume:** JSONL checkpoint, one line per finished request
+  appended immediately under a lock; checkpointed ids are never re-sent.
+- **429 policy:** capacity 429 (`resource_unavailable`, case-insensitive) is
+  retried with exponential backoff `min(120, 5 * 2**attempt)` up to
+  `max_capacity_retries` (default 5), then the run stops with `FlexError`.
+  Any other 429, 402, 401, 403 stops the run immediately with no retry.
+  408/500/502/503/504 and httpx timeout/transport errors are retried with
+  `min(60, 5 * 2**attempt)` up to 5 times, then recorded as a per-request
+  failure (run continues). Other 4xx are per-request failures, no retry.
+- **Cost cap:** before scheduling each request, if the running total (including
+  checkpointed rows) >= `max_usd`, scheduling stops and `FlexError` is raised
+  after in-flight requests finish (their results are still checkpointed).
+- Offline tests: `tests/test_openai_flex.py` (httpx.MockTransport, sleep
+  stubbed). API keys and request bodies are never logged.
+
 ## 2026-09-29 - Always record TurnEvidence for user-turn ingest (Menhir legacy scalar fallback removal)
 
 Menhir is removing its legacy typed-scalar fallback that selected `:Episodic`
