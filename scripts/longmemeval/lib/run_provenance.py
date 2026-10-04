@@ -44,6 +44,9 @@ IMMUTABLE_KEYS = (
     "dataset",
     "variant",
     "namespace_prefix",
+    "scalar_state_enabled",
+    "counter_state_enabled",
+    "event_history_enabled",
 )
 
 # Code-commit keys are immutable in canonical mode. A resume that changes the Menhir or bench

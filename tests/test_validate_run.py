@@ -334,3 +334,27 @@ def test_cli_fails_on_cardinality_mismatch(tmp_path: Path) -> None:
 
     rc = validator.main([str(prov), str(mfst), "--expected-items", "99"])
     assert rc == 1
+
+
+def test_event_failure_blocks_final_acceptance(tmp_path):
+    requested = {"scalar": False, "counter": False, "event": True}
+    row = {"namespace": "lme-test", "failed_remaining": 0, "consolidation_requested": requested,
+           "consolidation_result": {"namespace": "lme-test", "event_history_enabled": True,
+                                    "event_namespaces_failed": 1, "event_dirty_after": False}}
+    report = validator.validate(_provenance(tmp_path, event_history_enabled=1), _manifest(tmp_path, [row]))
+    assert report["verdict"] == "FAIL"
+    assert next(c for c in report["checks"] if c["check"] == "consolidation_lanes")["status"] == "FAIL"
+
+
+def test_requested_events_require_receipt_even_in_legacy_manifest(tmp_path):
+    report = validator.validate(_provenance(tmp_path, event_history_enabled=1), _manifest(tmp_path))
+    assert report["verdict"] == "FAIL"
+
+
+def test_completed_event_lane_may_produce_no_events(tmp_path):
+    row = {"namespace": "lme-test", "failed_remaining": 0, "consolidation_requested": {"event": True, "scalar": False, "counter": False},
+           "consolidation_result": {"namespace": "lme-test", "event_history_enabled": True,
+                                    "event_namespaces_failed": 0, "event_dirty_after": False,
+                                    "event_namespaces_processed": 0, "event_assertions_created": 0}}
+    report = validator.validate(_provenance(tmp_path, event_history_enabled=1), _manifest(tmp_path, [row]))
+    assert report["verdict"] == "PASS"

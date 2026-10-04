@@ -49,6 +49,33 @@ def _check(
     }
 
 
+def consolidation_errors(
+    result: dict[str, Any], requested: dict[str, bool], *, namespace: str, k: int,
+) -> list[str]:
+    """Check lane completion, including untouched or partly processed event work."""
+    errors = []
+    if result.get("namespace") != namespace:
+        errors.append(f"{namespace}: missing or mismatched consolidation namespace")
+    if requested.get("scalar"):
+        if result.get("scalar_enabled") is not True:
+            errors.append(f"{namespace}: scalar consolidation is disabled")
+        if result.get("scalar_namespaces_processed") != 1 or int(result.get("scalar_llm_calls", 0)) < k:
+            errors.append(f"{namespace}: scalar consolidation did not finish its perception samples")
+    if requested.get("counter"):
+        if result.get("counter_enabled") is not True:
+            errors.append(f"{namespace}: counter consolidation is disabled")
+        if result.get("namespaces_processed") != 1 or result.get("dirty_after") is not False:
+            errors.append(f"{namespace}: counter consolidation did not finish")
+    if requested.get("event"):
+        if result.get("event_history_enabled") is not True:
+            errors.append(f"{namespace}: event history is disabled")
+        if result.get("event_namespaces_failed") != 0:
+            errors.append(f"{namespace}: event namespace failed or failure count is missing")
+        if result.get("event_dirty_after") is not False:
+            errors.append(f"{namespace}: event evidence remains pending or completion is unknown")
+    return errors
+
+
 def validate(
     provenance_path: Path,
     manifest_path: Path,
@@ -140,6 +167,31 @@ def validate(
                     "manifest_cardinality", actual > 0,
                     f"{actual} items (no expected count specified)",
                 ))
+
+            # Requested consolidation lanes
+            lane_errors = []
+            declared_lanes = {
+                "scalar": bool(provenance.get("scalar_state_enabled", False)),
+                "counter": bool(provenance.get("counter_state_enabled", False)),
+                "event": bool(provenance.get("event_history_enabled", False)),
+            }
+            for row in manifest:
+                if not isinstance(row, dict):
+                    lane_errors.append("manifest contains a non-object row")
+                    continue
+                requested = row.get("consolidation_requested", declared_lanes)
+                if any(declared_lanes.values()) and requested != declared_lanes:
+                    lane_errors.append(f"{row.get('namespace')}: requested lanes differ from provenance")
+                if any(requested.values()):
+                    lane_errors.extend(consolidation_errors(
+                        row.get("consolidation_result", {}), requested,
+                        namespace=str(row.get("namespace", "")),
+                        k=int(row.get("consolidation_k", 3)),
+                    ))
+            checks.append(_check(
+                "consolidation_lanes", not lane_errors,
+                "; ".join(lane_errors[:5]) if lane_errors else "all requested lanes completed",
+            ))
 
             # Ingest writes per-namespace counts, not an episode-level status.
             # Missing or malformed counts are unknown, never evidence of success.

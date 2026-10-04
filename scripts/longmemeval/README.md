@@ -83,6 +83,26 @@ For individual types:
 LME_RECALL_LIMIT=5 ./lme.sh recall-ab main 30 --subset temporal-reasoning
 ```
 
+## Explicit consolidation lanes
+
+Benchmark mode keeps the maintenance scheduler disabled. Builds invoke `/api/phase3/run`
+after each namespace drains when any lane is requested. Select counters with
+`LME_COUNTER_STATE_ENABLED=1`, scalars with `LME_SCALAR_STATE_ENABLED=1`, and events with
+`MENHIR_PERSONAL_MEMORY_EVENT_HISTORY_ENABLED=1`; omitted lanes remain off. The KU wrapper
+requires scalars and scalar history, but counters and events still need explicit opt-in.
+
+The request and the server counter setting both reflect the counter selection. Requested
+lanes must complete before a namespace enters the manifest. Events may legitimately produce
+zero assertions; an event failure or evidence remaining beyond the watermark refuses the run,
+including shared-budget exhaustion after partial processing. The harness requires the Menhir
+Phase-3 response fields `counter_enabled`, `scalar_llm_calls`, and `event_dirty_after`.
+Older servers cannot certify these requested lanes and are rejected.
+
+Each manifest row retains `consolidation_requested`, `consolidation_result`, and the sample
+count. `consolidation_llm_calls` counts all lanes, while `scalar_llm_calls` and `event_llm_calls`
+count only their respective work. Final acceptance rechecks the receipts against the declared
+run settings. Resuming with different lanes or missing completion receipts is refused.
+
 ## Graph Lifecycle
 
 1. **Build**: `lme.sh build [N]` — ingest N items (default 30, full 500 in oracle mode takes ~1 day) into a fresh persistent Neo4j, then leave it up. Build finishes by promoting all memories to PERSISTENT scope (step 2), so builds end ready-to-recall.

@@ -64,6 +64,7 @@ DEFAULT_MANIFEST = os.getenv(
 
 
 import httpx  # noqa: E402
+from validate_run import consolidation_errors  # noqa: E402
 from archolith_bench.harness.longmemeval import LongMemEvalMemoryAdapter  # noqa: E402
 from archolith_bench.harness.menhir_client import HttpMenhirClient  # noqa: E402
 
@@ -368,13 +369,16 @@ def _scalar_counts(ns: str) -> dict[str, int]:
     }
 
 
-def _consolidate_scalar(
+def _consolidate_lanes(
     admin: httpx.Client,
     menhir_url: str,
     namespace: str,
     *,
     k: int,
     call_budget: int,
+    scalar_state: bool = True,
+    counter_state: bool = False,
+    event_history: bool = False,
 ) -> dict:
     response = admin.post(
         menhir_url.rstrip("/") + "/api/phase3/run",
@@ -383,23 +387,17 @@ def _consolidate_scalar(
             "k": k,
             "source": "longmemeval-scalar-build",
             "call_budget": call_budget,
-            "counter_state": False,
+            "counter_state": counter_state,
         },
         timeout=1800.0,
     )
     response.raise_for_status()
     result = response.json()
-    if not result.get("scalar_enabled"):
-        raise RuntimeError("Menhir did not enable scalar consolidation")
-    if int(result.get("scalar_namespaces_processed", 0)) != 1:
-        raise RuntimeError(f"scalar consolidation did not finish namespace {namespace}: {result}")
-    # A scalar namespace can legitimately abstain from materializing an assertion, but it cannot
-    # claim consolidation without exercising the k-sample perception boundary. This also catches
-    # stale servers whose scheduler used to snapshot llm_calls before the scalar pass.
-    if int(result.get("llm_calls", 0)) < k:
-        raise RuntimeError(
-            f"scalar consolidation did not exercise {k} LLM samples for {namespace}: {result}"
-        )
+    errors = consolidation_errors(result, {
+        "scalar": scalar_state, "counter": counter_state, "event": event_history,
+    }, namespace=namespace, k=k)
+    if errors:
+        raise RuntimeError("; ".join(errors))
     return result
 
 
@@ -850,7 +848,9 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     ap.add_argument("--consolidate-scalar", action="store_true",
-                    help="run scalar-only Phase 3 consolidation before manifesting each namespace")
+                    help="require scalar Phase 3 consolidation before manifesting each namespace")
+    ap.add_argument("--consolidate-counter", action="store_true")
+    ap.add_argument("--consolidate-events", action="store_true")
     ap.add_argument("--consolidation-k", type=int, default=3)
     ap.add_argument("--consolidation-call-budget", type=int, default=50)
     ap.add_argument(
@@ -1008,6 +1008,12 @@ def _require_no_failed_episodes(
 
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
+    requested_lanes = {
+        "scalar": args.consolidate_scalar,
+        "counter": args.consolidate_counter,
+        "event": args.consolidate_events,
+    }
+    consolidate_requested = any(requested_lanes.values())
 
     adapter = LongMemEvalMemoryAdapter()
     source = (
@@ -1025,6 +1031,14 @@ def main(argv: list[str] | None = None) -> int:
     done_ids: set[str] = set()
     if manifest_path.exists():
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        for row in manifest:
+            if consolidate_requested:
+                if row.get("consolidation_requested") != requested_lanes:
+                    raise RuntimeError("resume refused: manifest processing lanes differ or are missing")
+                errors = consolidation_errors(row.get("consolidation_result", {}), requested_lanes,
+                                              namespace=row["namespace"], k=args.consolidation_k)
+                if errors:
+                    raise RuntimeError("resume refused: " + "; ".join(errors))
         done_ids = {m["question_id"] for m in manifest}
         print(f"RESUME: {len(done_ids)} items already ingested (skipping them)", flush=True)
 
@@ -1126,7 +1140,7 @@ def main(argv: list[str] | None = None) -> int:
             requeued_by_namespace,
             timeout_s=args.drain_timeout,
         )
-        if args.consolidate_scalar:
+        if consolidate_requested:
             _require_no_failed_episodes(drained_by_namespace)
 
         # Scalar consolidation remains sequential: it is a small fraction of build time and
@@ -1136,14 +1150,18 @@ def main(argv: list[str] | None = None) -> int:
             requeued = requeued_by_namespace[state.namespace]
             scalar_result: dict = {}
             scalar_counts: dict[str, int] = {}
-            if args.consolidate_scalar:
-                scalar_result = _consolidate_scalar(
+            if consolidate_requested:
+                scalar_result = _consolidate_lanes(
                     admin,
                     args.menhir_url,
                     state.namespace,
                     k=args.consolidation_k,
                     call_budget=args.consolidation_call_budget,
+                    scalar_state=args.consolidate_scalar,
+                    counter_state=args.consolidate_counter,
+                    event_history=args.consolidate_events,
                 )
+            if args.consolidate_scalar:
                 scalar_counts = _scalar_counts(state.namespace)
                 if scalar_counts["turn_evidence"] <= 0:
                     raise RuntimeError(
@@ -1169,9 +1187,14 @@ def main(argv: list[str] | None = None) -> int:
                 "scalar_consolidated": bool(
                     args.consolidate_scalar
                     and int(scalar_result.get("scalar_namespaces_processed", 0)) == 1
-                    and int(scalar_result.get("llm_calls", 0)) >= args.consolidation_k
+                    and int(scalar_result.get("scalar_llm_calls", 0)) >= args.consolidation_k
                 ),
-                "scalar_llm_calls": int(scalar_result.get("llm_calls", 0)),
+                "consolidation_requested": requested_lanes,
+                "consolidation_k": args.consolidation_k,
+                "consolidation_result": scalar_result,
+                "consolidation_llm_calls": int(scalar_result.get("llm_calls", 0)),
+                "event_llm_calls": int(scalar_result.get("event_llm_calls", 0)),
+                "scalar_llm_calls": int(scalar_result.get("scalar_llm_calls", 0)),
                 "scalar_states_written": int(scalar_result.get("scalar_states_written", 0)),
                 **scalar_counts,
             })

@@ -1164,3 +1164,91 @@ def test_graph_verification_checks_current_and_stale_edges(
     joined = "\n".join(observed_queries)
     assert "edge.invalid_at IS NULL" in joined
     assert "edge.invalid_at IS NOT NULL OR edge.expired_at IS NOT NULL" in joined
+
+
+@pytest.mark.parametrize("scalar,counter,event", [
+    (bool(i & 1), bool(i & 2), bool(i & 4)) for i in range(8)
+])
+def test_requested_consolidation_lanes(scalar, counter, event):
+    import httpx
+    import json
+
+    sent = []
+    result = {
+        "namespace": "lme-test", "scalar_enabled": scalar,
+        "scalar_namespaces_processed": int(scalar), "scalar_llm_calls": 3 if scalar else 0,
+        "counter_enabled": counter, "namespaces_processed": int(counter), "dirty_after": False,
+        "event_history_enabled": event, "event_namespaces_failed": 0,
+        "event_namespaces_processed": 0, "event_dirty_after": False if event else None,
+        "llm_calls": 3 if scalar else 0, "event_llm_calls": 0,
+    }
+
+    def respond(request):
+        sent.append(json.loads(request.content))
+        return httpx.Response(200, json=result)
+
+    with httpx.Client(transport=httpx.MockTransport(respond)) as client:
+        assert ingest._consolidate_lanes(
+            client, "http://localhost:8124", "lme-test", k=3, call_budget=50,
+            scalar_state=scalar, counter_state=counter, event_history=event,
+        ) == result
+    assert sent[0]["counter_state"] is counter
+
+
+@pytest.mark.parametrize("change", [
+    {"event_history_enabled": False},
+    {"event_namespaces_failed": 1},
+    {"event_dirty_after": True, "event_namespaces_processed": 1},
+    {"event_dirty_after": None},
+    {"counter_enabled": False},
+    {"dirty_after": True},
+    {"scalar_llm_calls": 0, "llm_calls": 3, "event_llm_calls": 3},
+])
+def test_consolidation_rejects_disabled_failed_partial_or_unmeasured_lanes(change):
+    import httpx
+
+    result = {
+        "namespace": "lme-test", "scalar_enabled": True,
+        "scalar_namespaces_processed": 1, "scalar_llm_calls": 3,
+        "counter_enabled": True, "namespaces_processed": 1, "dirty_after": False,
+        "event_history_enabled": True, "event_namespaces_failed": 0,
+        "event_namespaces_processed": 1, "event_dirty_after": False,
+    }
+    result.update(change)
+    transport = httpx.MockTransport(lambda request: httpx.Response(200, json=result))
+    with httpx.Client(transport=transport) as client, pytest.raises(RuntimeError):
+        ingest._consolidate_lanes(
+            client, "http://localhost:8124", "lme-test", k=3, call_budget=50,
+            counter_state=True, event_history=True,
+        )
+
+
+@pytest.mark.parametrize("scalar,counter,event", [
+    (str(i & 1), str((i >> 1) & 1), str((i >> 2) & 1)) for i in range(8)
+])
+def test_build_script_passes_selected_lanes_to_server_and_ingest(scalar, counter, event):
+    import os
+    import shutil
+    import subprocess
+
+    git_bash = Path(os.environ.get("ProgramFiles", "C:/Program Files")) / "Git/bin/bash.exe"
+    bash = str(git_bash) if git_bash.exists() else shutil.which("bash")
+    if not bash:
+        pytest.skip("bash unavailable")
+    script = (ROOT / "scripts/longmemeval/build_graph.sh").read_text()
+    start = script.index("INGEST_ARGS=(")
+    end = script.index('"${BENCH_PY}" "$(dirname "${BASH_SOURCE[0]}")/lib/ingest.py"', start)
+    exports = '\n'.join(line for line in script.splitlines() if line.startswith(
+        ("export MENHIR_PERSONAL_MEMORY_CONSOLIDATION_ENABLED=", "export MENHIR_PERSONAL_MEMORY_EVENT_HISTORY_ENABLED")
+    ))
+    env = dict(os.environ, LME_SCALAR_STATE_ENABLED=scalar, LME_COUNTER_STATE_ENABLED=counter,
+               MENHIR_PERSONAL_MEMORY_EVENT_HISTORY_ENABLED=event)
+    setup = 'set -eu; LIMIT=1; MENHIR_URL=http://unused; LME_MANIFEST_PATH=unused; LME_SEGMENTATION=adaptive; '
+    setup += 'LME_INGEST_CONCURRENCY=1; LME_INGEST_STOP_AFTER_ITEMS=0; LME_SCALAR_CONSOLIDATION_K=3; LME_SCALAR_CALL_BUDGET=50; '
+    command = setup + exports + '\n' + script[start:end]
+    command += '\nprintf "%s\n" "$MENHIR_PERSONAL_MEMORY_CONSOLIDATION_ENABLED" "${INGEST_ARGS[@]}"'
+    result = subprocess.run([bash, '-c', command], env=env, capture_output=True, text=True, check=True)
+    lines = result.stdout.splitlines()
+    assert lines[0] == counter
+    for option, value in [("--consolidate-scalar", scalar), ("--consolidate-counter", counter), ("--consolidate-events", event)]:
+        assert (option in lines) is (value == "1")

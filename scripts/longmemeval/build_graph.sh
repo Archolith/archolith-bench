@@ -13,6 +13,9 @@ MENHIR_URL="http://localhost:${MENHIR_PORT}"
 
 log(){ printf '[lme-build] %s\n' "$*" >&2; }
 die(){ printf '[lme-build] ERROR: %s\n' "$*" >&2; exit 1; }
+for lane in "${LME_COUNTER_STATE_ENABLED}" "${LME_SCALAR_STATE_ENABLED}" "${MENHIR_PERSONAL_MEMORY_EVENT_HISTORY_ENABLED}"; do
+  case "${lane}" in 0|1) ;; *) die "processing lane settings must be 0 or 1" ;; esac
+done
 case "${LME_INGEST_CONCURRENCY}" in
   ''|*[!0-9]*|0) die "LME_INGEST_CONCURRENCY must be a positive integer" ;;
 esac
@@ -132,6 +135,8 @@ cat > "${GRAPH_ATTEMPT_RECORD}" <<EOF
   "namespace_prefix": "${LME_NS_PREFIX}",
   "segmentation": "${LME_SEGMENTATION}",
   "ingest_concurrency": ${LME_INGEST_CONCURRENCY},
+  "counter_state_enabled": ${LME_COUNTER_STATE_ENABLED},
+  "event_history_enabled": ${MENHIR_PERSONAL_MEMORY_EVENT_HISTORY_ENABLED},
   "scalar_state_enabled": ${LME_SCALAR_STATE_ENABLED},
   "scalar_history_enabled": ${LME_SCALAR_HISTORY_ENABLED},
   "scalar_consolidation_k": ${LME_SCALAR_CONSOLIDATION_K},
@@ -209,6 +214,8 @@ fi
   --setting "strict_failure_policy=zero-failed-episodes-per-namespace" \
   --setting "ingest_target_items=${INGEST_TARGET}" \
   --setting "ingest_concurrency=${LME_INGEST_CONCURRENCY}" \
+  --setting "counter_state_enabled=${LME_COUNTER_STATE_ENABLED}" \
+  --setting "event_history_enabled=${MENHIR_PERSONAL_MEMORY_EVENT_HISTORY_ENABLED}" \
   --setting "scalar_state_enabled=${LME_SCALAR_STATE_ENABLED}" \
   --setting "scalar_history_enabled=${LME_SCALAR_HISTORY_ENABLED}" \
   --setting "scalar_consolidation_k=${LME_SCALAR_CONSOLIDATION_K}" \
@@ -260,7 +267,8 @@ export LME_NEO4J_CONTAINER="${LME_NEO4J_NAME}" LME_NEO4J_PW="${LME_NEO4J_PW}"
 # another menhir process (the cross-process WinError 32 on rollover is the log-noise source).
 export MENHIR_LOG_DIR="${LME_RESULTS_DIR}/menhir-logs"; mkdir -p "${MENHIR_LOG_DIR}"
 export MENHIR_BENCHMARK_MODE=1 MENHIR_API_HOST=127.0.0.1 MENHIR_API_PORT="${MENHIR_PORT}"
-export MENHIR_PERSONAL_MEMORY_CONSOLIDATION_ENABLED=0
+export MENHIR_PERSONAL_MEMORY_CONSOLIDATION_ENABLED="${LME_COUNTER_STATE_ENABLED}"
+export MENHIR_PERSONAL_MEMORY_EVENT_HISTORY_ENABLED
 export MENHIR_PERSONAL_MEMORY_SCALAR_STATE_ENABLED="${LME_SCALAR_STATE_ENABLED}"
 export MENHIR_PERSONAL_MEMORY_SCALAR_HISTORY_ENABLED="${LME_SCALAR_HISTORY_ENABLED}"
 export MENHIR_PERSONAL_MEMORY_SCALAR_VIEW_AUTHORITY_ENABLED=0
@@ -345,12 +353,11 @@ fi
 if [ "${LME_INGEST_STOP_AFTER_ITEMS}" -gt 0 ]; then
   INGEST_ARGS+=(--manifest-item-limit "${LME_INGEST_STOP_AFTER_ITEMS}")
 fi
+if [ "${LME_COUNTER_STATE_ENABLED}" = "1" ]; then INGEST_ARGS+=(--consolidate-counter); fi
+if [ "${MENHIR_PERSONAL_MEMORY_EVENT_HISTORY_ENABLED}" = "1" ]; then INGEST_ARGS+=(--consolidate-events); fi
+INGEST_ARGS+=(--consolidation-k "${LME_SCALAR_CONSOLIDATION_K}" --consolidation-call-budget "${LME_SCALAR_CALL_BUDGET}")
 if [ "${LME_SCALAR_STATE_ENABLED}" = "1" ]; then
-  INGEST_ARGS+=(
-    --consolidate-scalar
-    --consolidation-k "${LME_SCALAR_CONSOLIDATION_K}"
-    --consolidation-call-budget "${LME_SCALAR_CALL_BUDGET}"
-  )
+  INGEST_ARGS+=(--consolidate-scalar)
 fi
 "${BENCH_PY}" "$(dirname "${BASH_SOURCE[0]}")/lib/ingest.py" "${INGEST_ARGS[@]}"
 

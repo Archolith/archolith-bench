@@ -51,6 +51,7 @@ case "${ARM}" in
 esac
 
 # This dedicated wrapper must never silently fall back to the ordinary non-scalar LME defaults.
+export LME_COUNTER_STATE_ENABLED="${LME_COUNTER_STATE_ENABLED:-${MENHIR_PERSONAL_MEMORY_CONSOLIDATION_ENABLED:-0}}"
 export LME_SCALAR_STATE_ENABLED="1"
 export LME_SCALAR_HISTORY_ENABLED="1"
 export LME_REQUIRE_TURN_EVIDENCE="1"
@@ -63,6 +64,9 @@ export MENHIR_PERSONAL_MEMORY_CONSOLIDATION_AUDIT_ENABLED="${LME_CONSOLIDATION_A
 # values to Menhir's production defaults when callers omit them, then record them below so a
 # buildout cannot accidentally claim Event History or deterministic routing after the fact.
 export MENHIR_PERSONAL_MEMORY_EVENT_HISTORY_ENABLED="${MENHIR_PERSONAL_MEMORY_EVENT_HISTORY_ENABLED:-0}"
+for lane in "${LME_COUNTER_STATE_ENABLED}" "${MENHIR_PERSONAL_MEMORY_EVENT_HISTORY_ENABLED}"; do
+  case "${lane}" in 0|1) ;; *) die "processing lane settings must be 0 or 1" ;; esac
+done
 export MENHIR_PERSONAL_MEMORY_EVENT_HISTORY_AUTHORITY_ENABLED="${MENHIR_PERSONAL_MEMORY_EVENT_HISTORY_AUTHORITY_ENABLED:-0}"
 export MENHIR_PERSONAL_MEMORY_SCALAR_DETERMINISTIC_ROUTER="${MENHIR_PERSONAL_MEMORY_SCALAR_DETERMINISTIC_ROUTER:-0}"
 export MENHIR_PERSONAL_MEMORY_SCALAR_DETERMINISTIC_SHADOW="${MENHIR_PERSONAL_MEMORY_SCALAR_DETERMINISTIC_SHADOW:-0}"
@@ -204,7 +208,7 @@ PY
 )"
 [ -n "${OPENAI_KEY}" ] || die "no OPENAI_API_KEY in ${BENCH_DIR}/.env"
 
-log "preflight PASS: arm=${ARM} run=${RUN_ID} fresh=${LME_REQUIRE_FRESH} scalar=1 scalar_history=${LME_SCALAR_HISTORY_ENABLED} threshold=${LME_SCALAR_THRESHOLD} reconcile=${LME_SCALAR_RECONCILE_ATTRIBUTE}/${LME_SCALAR_RECONCILE_SCOPE}/${LME_SCALAR_RECONCILE_SUBJECT} authority=${LME_SCALAR_VIEW_AUTHORITY_ENABLED} event_history=${MENHIR_PERSONAL_MEMORY_EVENT_HISTORY_ENABLED}/${MENHIR_PERSONAL_MEMORY_EVENT_HISTORY_AUTHORITY_ENABLED} deterministic_router_shadow=${MENHIR_PERSONAL_MEMORY_SCALAR_DETERMINISTIC_ROUTER}/${MENHIR_PERSONAL_MEMORY_SCALAR_DETERMINISTIC_SHADOW} turn_evidence=${LME_REQUIRE_TURN_EVIDENCE} audits=${LME_CONSOLIDATION_AUDIT_ENABLED}/${LME_RECALL_AUDIT_ENABLED} ingest_concurrency=${LME_INGEST_CONCURRENCY} checkpoint_items=${LME_KU_CHECKPOINT_ITEMS}"
+log "preflight PASS: arm=${ARM} run=${RUN_ID} fresh=${LME_REQUIRE_FRESH} counter=${LME_COUNTER_STATE_ENABLED} scalar=1 scalar_history=${LME_SCALAR_HISTORY_ENABLED} threshold=${LME_SCALAR_THRESHOLD} reconcile=${LME_SCALAR_RECONCILE_ATTRIBUTE}/${LME_SCALAR_RECONCILE_SCOPE}/${LME_SCALAR_RECONCILE_SUBJECT} authority=${LME_SCALAR_VIEW_AUTHORITY_ENABLED} event_history=${MENHIR_PERSONAL_MEMORY_EVENT_HISTORY_ENABLED}/${MENHIR_PERSONAL_MEMORY_EVENT_HISTORY_AUTHORITY_ENABLED} deterministic_router_shadow=${MENHIR_PERSONAL_MEMORY_SCALAR_DETERMINISTIC_ROUTER}/${MENHIR_PERSONAL_MEMORY_SCALAR_DETERMINISTIC_SHADOW} turn_evidence=${LME_REQUIRE_TURN_EVIDENCE} audits=${LME_CONSOLIDATION_AUDIT_ENABLED}/${LME_RECALL_AUDIT_ENABLED} ingest_concurrency=${LME_INGEST_CONCURRENCY} checkpoint_items=${LME_KU_CHECKPOINT_ITEMS}"
 
 if [ "${MODE}" = "--preflight-only" ]; then
   exit 0
@@ -238,6 +242,7 @@ phase_settings(){
     "${LME_INGEST_CONCURRENCY}" "${LME_SEGMENTATION}"
   printf -- '--setting\nstrict_failure_policy=%s\n--setting\nallow_resume=%s\n' \
     "zero-failed-episodes-per-namespace" "${LME_KU_ALLOW_RESUME}"
+  printf -- '--setting\ncounter_state_enabled=%s\n' "${LME_COUNTER_STATE_ENABLED}"
   printf -- '--setting\nscalar_threshold=%s\n--setting\nscalar_consolidation_k=%s\n' \
     "${LME_SCALAR_THRESHOLD}" "${LME_SCALAR_CONSOLIDATION_K}"
   printf -- '--setting\nscalar_consolidation_call_budget=%s\n--setting\nextract_model=%s\n' \
@@ -317,6 +322,7 @@ cat > "${ATTEMPT_RECORD}" <<EOF
   "ingest_concurrency": ${LME_INGEST_CONCURRENCY},
   "checkpoint_items": ${LME_KU_CHECKPOINT_ITEMS},
   "require_fresh": ${LME_REQUIRE_FRESH},
+  "counter_state_enabled": ${LME_COUNTER_STATE_ENABLED},
   "scalar_state_enabled": ${LME_SCALAR_STATE_ENABLED},
   "scalar_history_enabled": ${LME_SCALAR_HISTORY_ENABLED},
   "scalar_threshold": "${LME_SCALAR_THRESHOLD}",
