@@ -13,6 +13,10 @@ MENHIR_URL="http://localhost:${MENHIR_PORT}"
 
 log(){ printf '[lme-build] %s\n' "$*" >&2; }
 die(){ printf '[lme-build] ERROR: %s\n' "$*" >&2; exit 1; }
+case "${LME_CANONICAL_SELF_BINDING_MODE}" in
+  off|observe|enforce) ;;
+  *) die "LME_CANONICAL_SELF_BINDING_MODE must be off, observe, or enforce" ;;
+esac
 for lane in "${LME_COUNTER_STATE_ENABLED}" "${LME_SCALAR_STATE_ENABLED}" "${MENHIR_PERSONAL_MEMORY_EVENT_HISTORY_ENABLED}"; do
   case "${lane}" in 0|1) ;; *) die "processing lane settings must be 0 or 1" ;; esac
 done
@@ -145,6 +149,7 @@ cat > "${GRAPH_ATTEMPT_RECORD}" <<EOF
   "scalar_reconcile_scope": ${LME_SCALAR_RECONCILE_SCOPE},
   "scalar_reconcile_subject": ${LME_SCALAR_RECONCILE_SUBJECT},
   "scalar_canonical_self": ${LME_SCALAR_CANONICAL_SELF},
+  "canonical_self_binding_mode": "${LME_CANONICAL_SELF_BINDING_MODE}",
   "scalar_output_required": ${LME_REQUIRE_SCALAR_OUTPUT},
   "turn_evidence_required": ${LME_REQUIRE_TURN_EVIDENCE},
   "consolidation_audit_enabled": ${LME_CONSOLIDATION_AUDIT_ENABLED},
@@ -280,6 +285,7 @@ export MENHIR_PERSONAL_MEMORY_SCALAR_RECONCILE_ATTRIBUTE="${LME_SCALAR_RECONCILE
 export MENHIR_PERSONAL_MEMORY_SCALAR_RECONCILE_SCOPE="${LME_SCALAR_RECONCILE_SCOPE}"
 export MENHIR_PERSONAL_MEMORY_SCALAR_RECONCILE_SUBJECT="${LME_SCALAR_RECONCILE_SUBJECT}"
 export MENHIR_PERSONAL_MEMORY_SCALAR_CANONICAL_SELF="${LME_SCALAR_CANONICAL_SELF}"
+export MENHIR_CANONICAL_SELF_BINDING_MODE="${LME_CANONICAL_SELF_BINDING_MODE}"
 export MENHIR_PERSONAL_MEMORY_CHAT_MODEL="${LME_EXTRACT_MODEL}"
 export MENHIR_PERSONAL_MEMORY_SUM_GROUNDING=1
 export LME_REQUIRE_TURN_EVIDENCE="${LME_REQUIRE_TURN_EVIDENCE}"

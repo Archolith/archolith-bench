@@ -1252,3 +1252,41 @@ def test_build_script_passes_selected_lanes_to_server_and_ingest(scalar, counter
     assert lines[0] == counter
     for option, value in [("--consolidate-scalar", scalar), ("--consolidate-counter", counter), ("--consolidate-events", event)]:
         assert (option in lines) is (value == "1")
+
+
+@pytest.mark.parametrize("selection,inherited,expected", [
+    (None, None, "off"), (None, "observe", "observe"), (None, "enforce", "enforce"),
+    ("off", "enforce", "off"), ("enforce", "off", "enforce"),
+    ("observe", "enforce", "observe"), ("typo", None, None),
+])
+def test_build_binding_mode_selection_and_early_validation(selection, inherited, expected):
+    import os
+    import shutil
+    import subprocess
+
+    git_bash = Path(os.environ.get("ProgramFiles", "C:/Program Files")) / "Git/bin/bash.exe"
+    bash = str(git_bash) if git_bash.exists() else shutil.which("bash")
+    if not bash:
+        pytest.skip("bash unavailable")
+    config = (ROOT / "scripts/longmemeval/config.sh").read_text()
+    script = (ROOT / "scripts/longmemeval/build_graph.sh").read_text()
+    assignment = next(line for line in config.splitlines() if line.startswith("LME_CANONICAL_SELF_BINDING_MODE="))
+    start = script.index("log(){")
+    end = script.index("for lane in", start)
+    export = next(line for line in script.splitlines() if line.startswith("export MENHIR_CANONICAL_SELF_BINDING_MODE="))
+    env = dict(os.environ)
+    for key, value in [("LME_CANONICAL_SELF_BINDING_MODE", selection), ("MENHIR_CANONICAL_SELF_BINDING_MODE", inherited)]:
+        env.pop(key, None)
+        if value is not None:
+            env[key] = value
+    command = "set -eu\n" + assignment + "\n" + script[start:end] + export
+    command += '\nprintf "%s\\n" "$MENHIR_CANONICAL_SELF_BINDING_MODE"'
+    result = subprocess.run([bash, "-c", command], env=env, capture_output=True, text=True)
+    if expected is None:
+        assert result.returncode != 0
+        assert "must be off, observe, or enforce" in result.stderr
+    else:
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.strip() == expected
+    # The exact forwarded value is also retained in the attempt record.
+    assert '"canonical_self_binding_mode": "${LME_CANONICAL_SELF_BINDING_MODE}"' in script

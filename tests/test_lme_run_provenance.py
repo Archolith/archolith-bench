@@ -47,6 +47,7 @@ def _attempt(**overrides) -> dict:
         "dataset": "longmemeval_s",
         "variant": "oracle",
         "namespace_prefix": "lme-",
+        "canonical_self_binding_mode": "off",
     }
     record.update(overrides)
     return record
@@ -163,6 +164,7 @@ def test_every_attempt_is_kept_in_full(tmp_path: Path) -> None:
         ("dataset", "other-dataset"),
         ("variant", "other-variant"),
         ("namespace_prefix", "other-prefix-"),
+        ("canonical_self_binding_mode", "enforce"),
     ],
 )
 def test_resume_refuses_a_different_run_identity(tmp_path: Path, field: str, value) -> None:
@@ -190,6 +192,24 @@ def test_matching_resume_is_allowed(tmp_path: Path) -> None:
     _begin(path, started_at="2026-07-30T09:00:00Z", resumed=True)
 
     assert provenance._read(path)["identity"]["run_id"] == "ku-baseline-20260729"
+
+
+@pytest.mark.parametrize("noncanonical", [False, True])
+def test_resume_refuses_unrecorded_binding_mode(tmp_path: Path, noncanonical: bool) -> None:
+    path = tmp_path / "run_provenance.json"
+    original = _attempt()
+    del original["canonical_self_binding_mode"]
+    provenance._write_atomic(path, provenance.begin(path, original))
+    with pytest.raises(provenance.ProvenanceMismatch, match="was not recorded"):
+        provenance.begin(path, _attempt(), noncanonical=noncanonical)
+
+
+@pytest.mark.parametrize("noncanonical", [False, True])
+def test_binding_mode_cannot_change_even_in_development(tmp_path: Path, noncanonical: bool) -> None:
+    path = tmp_path / "run_provenance.json"
+    _begin(path, canonical_self_binding_mode="enforce")
+    with pytest.raises(provenance.ProvenanceMismatch, match="canonical_self_binding_mode"):
+        provenance.begin(path, _attempt(canonical_self_binding_mode="observe"), noncanonical=noncanonical)
 
 
 # ---------------------------------------------------------------------------

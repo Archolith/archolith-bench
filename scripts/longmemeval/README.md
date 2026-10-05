@@ -105,6 +105,14 @@ run settings. Resuming with different lanes or missing completion receipts is re
 
 ## Graph Lifecycle
 
+Graphiti author-node binding is selected with `LME_CANONICAL_SELF_BINDING_MODE=off|observe|enforce`
+(default `off`, falling back to an explicitly supplied `MENHIR_CANONICAL_SELF_BINDING_MODE`).
+It is separate from `LME_SCALAR_CANONICAL_SELF`, which normalizes scalar subjects. The build
+validates and forwards the mode, records it in graph provenance, and refuses a resume with a
+changed or previously unrecorded mode. `observe` records decisions without applying binding;
+`enforce` applies the automatic-memory identity contract, not a guarantee of fact attribution.
+Choose and freeze the mode before the final ingest; no mode or feature default is promoted here.
+
 1. **Build**: `lme.sh build [N]` — ingest N items (default 30, full 500 in oracle mode takes ~1 day) into a fresh persistent Neo4j, then leave it up. Build finishes by promoting all memories to PERSISTENT scope (step 2), so builds end ready-to-recall.
 2. **Promote**: `lme.sh promote` — flip every LME memory from `SESSION` to `PERSISTENT` scope (run automatically at the end of `build`; also runnable standalone, e.g. after a partial/legacy build). Idempotent and non-destructive. See [Memory scope](#memory-scope-regular-vs-session) below.
 3. **Backup/Restore**: `lme.sh backup` / `lme.sh restore` — dump and restore for safe archival.
