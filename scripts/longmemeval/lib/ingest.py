@@ -369,6 +369,114 @@ def _scalar_counts(ns: str) -> dict[str, int]:
     }
 
 
+def _cypher_counts(query: str, width: int) -> list[int]:
+    """Read one aggregate row of ``width`` integers; every value is -1 when it cannot be read."""
+    rows = _cypher(query)
+    if not rows or len(rows[0]) < width:
+        return [-1] * width
+    try:
+        return [int(value or 0) for value in rows[0][:width]]
+    except ValueError:
+        return [-1] * width
+
+
+def _submitted_epoch_millis(item: dict) -> list[int]:
+    """The session dates this item submits as ``occurred_at`` (and so as reference_time)."""
+    submitted = set()
+    for raw in item.get("haystack_dates") or []:
+        iso = _parse_lme_date(raw)
+        if iso:
+            submitted.add(int(datetime.fromisoformat(iso).timestamp() * 1000))
+    return sorted(submitted)
+
+
+def _user_turns_submitted(turns: Iterator[IngestTurn]) -> int:
+    """Distinct user source turns sent to extraction, keyed as ``_ingest_turn`` keys evidence.
+
+    Counted per source turn, not per segment: Menhir's admission gate may legitimately downgrade
+    a heuristic claim segment that is not verbatim in the turn, but the whole turn must be admitted.
+    """
+    return len({
+        turn.turn_key
+        for turn in turns
+        if turn.extract and (turn.role.strip().lower() or "user") == "user"
+    })
+
+
+def _integrity_counts(ns: str, submitted_epoch_millis: list[int]) -> dict[str, int]:
+    """Read-only per-namespace graph checks for final acceptance (validate_run).
+
+    ``user_turns_admitted`` is compared there with ``user_turns_submitted``; every other value is
+    a violation count that must be zero. -1 means the count could not be read.
+    """
+    nl = ns.lower()
+    admitted, unprojected = _cypher_counts(
+        # Provenance: a user turn's evidence is admitted by a user-tier memory and projected.
+        f"MATCH (t:TurnEvidence {{namespace:'{ns}'}}) "
+        "WITH t, EXISTS { MATCH (q:Episodic)-[:ADMITTED_ON]->(t) WHERE q.valid_at IS NULL "
+        "AND q.source = 'user' AND NOT coalesce(q.is_evidence_projection, false) } AS admitted, "
+        "EXISTS { MATCH (p:Episodic)-[:ADMITTED_ON]->(t) "
+        "WHERE coalesce(p.is_evidence_projection, false) } AS projected "
+        "RETURN sum(CASE WHEN admitted THEN 1 ELSE 0 END), "
+        "sum(CASE WHEN admitted AND NOT projected THEN 1 ELSE 0 END);",
+        2,
+    )
+    (unfounded,) = _cypher_counts(
+        # Every assertion traces to this namespace's evidence: FOUNDS directly, or GROUNDS from an
+        # episode admitted on it (view_write_repository resolves Episodic anchors the same way).
+        "MATCH (a) WHERE (a:TypedAssertion OR a:TypedEventAssertion) "
+        f"AND a.namespace = '{ns}' "
+        f"AND NOT EXISTS {{ MATCH (:TurnEvidence {{namespace:'{ns}'}})-[:FOUNDS]->(a) }} "
+        f"AND NOT EXISTS {{ MATCH (:TurnEvidence {{namespace:'{ns}'}})<-[:ADMITTED_ON]-"
+        "(:Episodic)-[:GROUNDS]->(a) } "
+        "RETURN count(a);",
+        1,
+    )
+    (valid_at_unsubmitted,) = _cypher_counts(
+        # Graphiti episodes (group_id; Menhir's queue node carries namespace instead).
+        f"MATCH (g:Episodic {{group_id:'{ns}'}}) "
+        "RETURN sum(CASE WHEN g.valid_at IS NULL THEN 1 "
+        f"WHEN datetime(toString(g.valid_at)).epochMillis IN {submitted_epoch_millis} THEN 0 "
+        "ELSE 1 END);",
+        1,
+    )
+    (time_unpaired,) = _cypher_counts(
+        # Each READY queue node resolves to exactly one Graphiti episode dated at its reference_time.
+        f"MATCH (q:Episodic {{namespace:'{ns}'}}) "
+        "WHERE q.valid_at IS NULL AND q.processing_state = 'READY' "
+        f"OPTIONAL MATCH (g:Episodic {{group_id:'{ns}'}}) "
+        "WHERE g.uuid = q.resolved_episode_uuid AND g.valid_at IS NOT NULL "
+        "WITH q, collect(g) AS gs "
+        "RETURN sum(CASE WHEN size(gs) <> 1 OR q.reference_time IS NULL THEN 1 "
+        "WHEN datetime(toString(gs[0].valid_at)).epochMillis "
+        "<> datetime(toString(q.reference_time)).epochMillis THEN 1 ELSE 0 END);",
+        1,
+    )
+    (cross_namespace,) = _cypher_counts(
+        # Nodes stamped with two silos, plus any edge from this namespace to another silo's node,
+        # or carrying another silo's namespace/group_id itself.
+        f"MATCH (a) WHERE toLower(a.namespace) = '{nl}' OR toLower(a.group_id) = '{nl}' "
+        "WITH a, CASE WHEN a.namespace IS NOT NULL AND a.group_id IS NOT NULL "
+        "AND toLower(a.namespace) <> toLower(a.group_id) THEN 1 ELSE 0 END AS split "
+        "OPTIONAL MATCH (a)-[r]-(b) "
+        f"WHERE toLower(coalesce(b.namespace, '{nl}')) <> '{nl}' "
+        f"OR toLower(coalesce(b.group_id, '{nl}')) <> '{nl}' "
+        f"OR toLower(coalesce(r.namespace, '{nl}')) <> '{nl}' "
+        f"OR toLower(coalesce(r.group_id, '{nl}')) <> '{nl}' "
+        "WITH a, split, count(r) AS crossing "
+        "RETURN sum(split) + sum(crossing);",
+        1,
+    )
+    return {
+        "user_turns_admitted": admitted,
+        "admitted_turns_unprojected": unprojected,
+        "assertions_unfounded": unfounded,
+        "episodes_valid_at_unsubmitted": valid_at_unsubmitted,
+        "ready_episodes_time_unpaired": time_unpaired,
+        "cross_namespace_links": cross_namespace,
+    }
+
+
 def _consolidate_lanes(
     admin: httpx.Client,
     menhir_url: str,
@@ -1167,6 +1275,13 @@ def main(argv: list[str] | None = None) -> int:
                     raise RuntimeError(
                         f"no TurnEvidence captured for scalar namespace {state.namespace}"
                     )
+            # Recorded for final acceptance, which refuses any violation or unreadable count.
+            integrity = _integrity_counts(
+                state.namespace, _submitted_epoch_millis(state.item)
+            )
+            user_turns_submitted = _user_turns_submitted(
+                _iter_item_turns(adapter, state.item, state.namespace, args.segmentation)
+            )
 
             manifest.append({
                 "question_id": state.question_id,
@@ -1197,6 +1312,8 @@ def main(argv: list[str] | None = None) -> int:
                 "scalar_llm_calls": int(scalar_result.get("scalar_llm_calls", 0)),
                 "scalar_states_written": int(scalar_result.get("scalar_states_written", 0)),
                 **scalar_counts,
+                "user_turns_submitted": user_turns_submitted,
+                **integrity,
             })
             _write_manifest(manifest_path, manifest)
             completed_this_run += 1

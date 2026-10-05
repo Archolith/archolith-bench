@@ -6,9 +6,15 @@ machine-readable JSON report covering the contract from the scalar-history plan:
 - manifest cardinality (expected vs actual items)
 - failed episodes (zero-tolerance policy)
 - projection counts (scalar_state, scalar_history Views)
-- source-time integrity (valid_at present and plausible)
-- provenance-chain completeness (TurnEvidence, assertions, FOUNDS, ADMITTED_ON)
-- namespace isolation (no cross-namespace leakage)
+- source-time integrity (every Graphiti episode's valid_at is a session date the bench
+  submitted, and each READY queue node's resolved episode is dated at its reference_time)
+- provenance-chain completeness (every extracted user turn's TurnEvidence is ADMITTED_ON by a
+  user-tier memory and has its evidence projection; every assertion is FOUNDS/GROUNDS-anchored
+  to this namespace's evidence)
+- namespace isolation (prefix, and no node or edge linking to another silo)
+
+The graph checks read per-namespace counts that ingest.py records in each manifest row
+(``_integrity_counts``); a missing or -1 count fails as unknown.
 - commit immutability (all attempts ran the same code)
 - telemetry presence (vote receipt DB exists and has rows)
 
@@ -49,6 +55,21 @@ def _check(
         "status": "PASS" if passed else severity,
         "detail": detail,
     }
+
+
+def _known_count(row: dict[str, Any], key: str) -> int | None:
+    value = row.get(key)
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
+
+
+def _require_zero(row: dict[str, Any], label: str, key: str, errors: list[str]) -> None:
+    count = _known_count(row, key)
+    if count is None:
+        errors.append(f"{label}: {key} unknown")
+    elif count:
+        errors.append(f"{label}: {key}={count}")
 
 
 def consolidation_errors(
@@ -226,18 +247,58 @@ def validate(
                 else f"all {actual} manifest items have zero failed episodes",
             ))
 
-            # Namespace isolation: every namespace starts with the configured prefix
+            # Graph integrity counts exported by ingest (_integrity_counts). An absent or
+            # unreadable (-1) count is unknown, never evidence of success.
+            provenance_errors: list[str] = []
+            time_errors: list[str] = []
+            leak_errors: list[str] = []
+            for index, row in enumerate(manifest):
+                if not isinstance(row, dict):
+                    for errors in (provenance_errors, time_errors, leak_errors):
+                        errors.append(f"row {index}: not an object")
+                    continue
+                label = str(row.get("namespace") or f"row {index}")
+                submitted = _known_count(row, "user_turns_submitted")
+                admitted = _known_count(row, "user_turns_admitted")
+                if submitted is None or admitted is None:
+                    provenance_errors.append(f"{label}: user turn admission count unknown")
+                elif admitted != submitted:
+                    provenance_errors.append(
+                        f"{label}: {admitted} of {submitted} extracted user turns admitted "
+                        "on their evidence"
+                    )
+                _require_zero(row, label, "admitted_turns_unprojected", provenance_errors)
+                _require_zero(row, label, "assertions_unfounded", provenance_errors)
+                _require_zero(row, label, "episodes_valid_at_unsubmitted", time_errors)
+                _require_zero(row, label, "ready_episodes_time_unpaired", time_errors)
+                _require_zero(row, label, "cross_namespace_links", leak_errors)
+            checks.append(_check(
+                "provenance_chain", not provenance_errors,
+                "; ".join(provenance_errors[:5]) if provenance_errors else
+                "every extracted user turn is admitted and projected; every assertion is founded",
+            ))
+            checks.append(_check(
+                "source_time_integrity", not time_errors,
+                "; ".join(time_errors[:5]) if time_errors else
+                "every episode's valid_at is its submitted session date",
+            ))
+
+            # Namespace isolation: configured prefix, and no graph link to another silo
             ns_prefix = provenance.get("namespace_prefix", "lme-")
             bad_ns = [
                 str(row.get("namespace", ""))
                 for row in manifest if isinstance(row, dict)
                 and not str(row.get("namespace", "")).startswith(ns_prefix)
             ]
+            if bad_ns:
+                leak_errors.insert(
+                    0, f"{len(bad_ns)} namespace(s) outside prefix '{ns_prefix}': {bad_ns[:5]}",
+                )
             checks.append(_check(
                 "namespace_isolation",
-                len(bad_ns) == 0,
-                f"{len(bad_ns)} namespace(s) outside prefix '{ns_prefix}': {bad_ns[:5]}"
-                if bad_ns else f"all namespaces start with '{ns_prefix}'",
+                not leak_errors,
+                "; ".join(leak_errors[:5]) if leak_errors else
+                f"all namespaces start with '{ns_prefix}' and none links to another silo",
             ))
 
             # Projection counts
