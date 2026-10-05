@@ -61,13 +61,21 @@ def _provenance(tmp_path: Path, **overrides) -> Path:
     return path
 
 
+# Graph integrity counts ingest records for a clean namespace.
+_INTEGRITY = {
+    "user_turns_submitted": 1, "user_turns_admitted": 1, "admitted_turns_unprojected": 0,
+    "assertions_unfounded": 0, "episodes_valid_at_unsubmitted": 0,
+    "ready_episodes_time_unpaired": 0, "cross_namespace_links": 0,
+}
+
+
 def _manifest(tmp_path: Path, items: list[dict] | None = None) -> Path:
     if items is None:
         items = [
             {"namespace": "lme-postcards", "question_id": "postcards",
              "typed_assertions": 2, "scalar_views": 1,
              "episodes": 2, "ready": 2, "failed_remaining": 0,
-             "drain_timed_out": False},
+             "drain_timed_out": False, **_INTEGRITY},
         ]
     path = tmp_path / "manifest.json"
     path.write_text(json.dumps(items), encoding="utf-8")
@@ -190,6 +198,27 @@ def test_manifest_cardinality_mismatch(tmp_path: Path) -> None:
     card = next(c for c in report["checks"] if c["check"] == "manifest_cardinality")
     assert card["status"] == "FAIL"
     assert "78" in card["detail"]
+
+
+def test_canonical_validation_requires_an_expected_count(tmp_path: Path) -> None:
+    # B2: a short manifest must not pass canonical acceptance just because it is non-empty.
+    for expected_items, status in ((None, "FAIL"), (1, "PASS"), (500, "FAIL")):
+        report = validator.validate(_provenance(tmp_path), _manifest(tmp_path),
+                                    expected_items=expected_items, require_fresh_clean=True)
+        card = next(c for c in report["checks"] if c["check"] == "manifest_cardinality")
+        assert card["status"] == status, (expected_items, card)
+        assert report["verdict"] == "FAIL" or status == "PASS"
+
+
+def test_cli_refuses_canonical_validation_without_expected_count(tmp_path: Path, capsys) -> None:
+    prov, mfst = _provenance(tmp_path), _manifest(tmp_path)
+    try:
+        validator.main([str(prov), str(mfst), "--require-fresh-clean"])
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("--require-fresh-clean without --expected-items must refuse")
+    assert "--expected-items" in capsys.readouterr().err
 
 
 def test_failed_episodes_detected(tmp_path: Path) -> None:
@@ -355,6 +384,60 @@ def test_completed_event_lane_may_produce_no_events(tmp_path):
     row = {"namespace": "lme-test", "failed_remaining": 0, "consolidation_requested": {"event": True, "scalar": False, "counter": False},
            "consolidation_result": {"namespace": "lme-test", "event_history_enabled": True,
                                     "event_namespaces_failed": 0, "event_dirty_after": False,
-                                    "event_namespaces_processed": 0, "event_assertions_created": 0}}
+                                    "event_namespaces_processed": 0, "event_assertions_created": 0},
+           **_INTEGRITY}
     report = validator.validate(_provenance(tmp_path, event_history_enabled=1), _manifest(tmp_path, [row]))
     assert report["verdict"] == "PASS"
+
+
+def _row(**overrides) -> dict:
+    return {"namespace": "lme-a", "failed_remaining": 0, **_INTEGRITY, **overrides}
+
+
+def _status(report: dict, name: str) -> dict:
+    return next(c for c in report["checks"] if c["check"] == name)
+
+
+def test_graph_integrity_violations_fail_their_checks(tmp_path: Path) -> None:
+    # B1: each exported violation count fails the check that owns it.
+    for key, check in (
+        ("admitted_turns_unprojected", "provenance_chain"),
+        ("assertions_unfounded", "provenance_chain"),
+        ("episodes_valid_at_unsubmitted", "source_time_integrity"),
+        ("ready_episodes_time_unpaired", "source_time_integrity"),
+        ("cross_namespace_links", "namespace_isolation"),
+    ):
+        report = validator.validate(_provenance(tmp_path), _manifest(tmp_path, [_row(**{key: 3})]))
+        result = _status(report, check)
+        assert result["status"] == "FAIL", key
+        assert f"{key}=3" in result["detail"]
+        assert report["verdict"] == "FAIL"
+
+
+def test_unadmitted_user_turn_breaks_the_provenance_chain(tmp_path: Path) -> None:
+    report = validator.validate(
+        _provenance(tmp_path),
+        _manifest(tmp_path, [_row(user_turns_submitted=4, user_turns_admitted=3)]),
+    )
+    result = _status(report, "provenance_chain")
+    assert result["status"] == "FAIL"
+    assert "3 of 4" in result["detail"]
+
+
+def test_missing_or_unreadable_integrity_counts_are_not_success(tmp_path: Path) -> None:
+    # A legacy manifest without the counts, or a count ingest could not read (-1), is unknown.
+    for row in ({"namespace": "lme-a", "failed_remaining": 0},
+                _row(cross_namespace_links=-1),
+                _row(episodes_valid_at_unsubmitted=None),
+                _row(user_turns_admitted="1"),
+                _row(assertions_unfounded=True)):
+        report = validator.validate(_provenance(tmp_path), _manifest(tmp_path, [row]))
+        assert report["verdict"] == "FAIL", row
+        assert any(c["status"] == "FAIL" and "unknown" in c["detail"]
+                   for c in report["checks"]), row
+
+
+def test_clean_integrity_counts_pass(tmp_path: Path) -> None:
+    report = validator.validate(_provenance(tmp_path), _manifest(tmp_path, [_row()]))
+    for name in ("provenance_chain", "source_time_integrity", "namespace_isolation"):
+        assert _status(report, name)["status"] == "PASS", name

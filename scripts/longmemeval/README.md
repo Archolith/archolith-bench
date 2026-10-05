@@ -206,15 +206,23 @@ later from these immutable token counts and the price schedule being evaluated.
 
 ## Acceptance Validation
 
-`lme.sh validate [--expected N]` runs `lib/validate_run.py` against the current provenance file,
+`lme.sh validate --expected N` runs `lib/validate_run.py` against the current provenance file,
 manifest, and telemetry DB. This acceptance command requires fresh-graph, clean-commit,
-fingerprinted provenance. It emits a machine-readable JSON report covering:
+fingerprinted provenance and refuses to run without `--expected N`, so a short manifest cannot
+pass. It emits a machine-readable JSON report covering:
 
 - **manifest cardinality** (expected vs actual items)
 - **zero failed episodes** (`failed_remaining` is known and zero for every manifest item;
   timed-out drains fail)
 - **projection counts** (assertions, scalar_state Views)
-- **namespace isolation** (all namespaces start with the configured prefix)
+- **provenance chain** (every extracted user source turn has a user-tier memory admitted on its
+  TurnEvidence, every admitted turn has an evidence projection, and every typed assertion is
+  founded on, or grounded through, TurnEvidence in its own namespace)
+- **source-time integrity** (every Graphiti episode's `valid_at` is one of the haystack session
+  dates the bench submitted, and every READY queue episode resolves to exactly one Graphiti
+  episode whose `valid_at` equals its `reference_time`)
+- **namespace isolation** (all namespaces start with the configured prefix, and no node or edge in
+  a namespace links to another namespace)
 - **commit immutability** (all attempts ran the same Menhir and bench code)
 - **fresh, clean provenance** (new volume, required freshness, clean tracked/untracked source,
   and a recorded surface fingerprint)

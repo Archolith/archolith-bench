@@ -381,6 +381,49 @@ def test_scalar_counts_include_state_history_and_turn_evidence(
     assert "view_kind:'scalar_history'" in queries[3]
 
 
+def test_integrity_counts_check_submitted_dates_and_fail_unknown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    queries: list[str] = []
+    replies = iter([[["7", "1"]], [["2"]], [["3"]], [["4"]], []])
+
+    def fake_cypher(query: str):
+        queries.append(query)
+        return next(replies)
+
+    monkeypatch.setattr(ingest, "_cypher", fake_cypher)
+
+    submitted = ingest._submitted_epoch_millis(
+        {"haystack_dates": ["2023/07/14 (Fri) 08:30", "not a date", "2023/07/14 (Fri) 08:30"]}
+    )
+    counts = ingest._integrity_counts("lme-a", submitted)
+
+    assert submitted == [1689323400000]
+    assert counts == {
+        "user_turns_admitted": 7,
+        "admitted_turns_unprojected": 1,
+        "assertions_unfounded": 2,
+        "episodes_valid_at_unsubmitted": 3,
+        "ready_episodes_time_unpaired": 4,
+        # An unreadable count is recorded as unknown, which final acceptance refuses.
+        "cross_namespace_links": -1,
+    }
+    assert "IN [1689323400000]" in queries[2]
+    assert all("'lme-a'" in query for query in queries)
+
+
+def test_user_turns_submitted_counts_extracted_user_source_turns() -> None:
+    turns = [
+        ingest.IngestTurn("user", "s1", None, "s", turn_key="k1"),
+        ingest.IngestTurn("user", "s2", None, "s", turn_key="k1"),  # second segment, same turn
+        ingest.IngestTurn("", "s3", None, "s", turn_key="k2"),  # blank role is ingested as user
+        ingest.IngestTurn("assistant", "a", None, "s", turn_key="k3"),
+        ingest.IngestTurn("user", "q?", None, "s", extract=False, turn_key="k4"),
+    ]
+
+    assert ingest._user_turns_submitted(iter(turns)) == 2
+
+
 def test_reset_namespace_force_deletes_graph_and_purges_turn_evidence(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1091,6 +1134,10 @@ def test_main_submits_a_namespace_window_round_robin_and_manifests_after_drain(
 
     monkeypatch.setattr(ingest, "_reset_namespace", fake_reset)
     monkeypatch.setattr(ingest, "_await_stale_episode_settlement", fake_settle)
+    monkeypatch.setattr(
+        ingest, "_integrity_counts",
+        lambda namespace, submitted: {"cross_namespace_links": 0, "user_turns_admitted": 9},
+    )
 
     manifest_path = tmp_path / "manifest.json"
     result = ingest.main(
@@ -1126,6 +1173,9 @@ def test_main_submits_a_namespace_window_round_robin_and_manifests_after_drain(
     assert [row["question_id"] for row in manifest] == ["a", "b"]
     assert all(row["namespace_window"] == 2 for row in manifest)
     assert all(row["enrichment_llm_tasks"] == 10 for row in manifest)
+    # Graph integrity counts ride along for final acceptance, next to the bench's own expectation.
+    assert [row["user_turns_submitted"] for row in manifest] == [2, 1]
+    assert all(row["cross_namespace_links"] == 0 for row in manifest)
 
 
 def test_suburbs_fixture_contract_preserves_failure_shape() -> None:
