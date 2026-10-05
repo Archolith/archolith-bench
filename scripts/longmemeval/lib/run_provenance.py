@@ -44,6 +44,10 @@ IMMUTABLE_KEYS = (
     "dataset",
     "variant",
     "namespace_prefix",
+    "scalar_state_enabled",
+    "counter_state_enabled",
+    "event_history_enabled",
+    "canonical_self_binding_mode",
 )
 
 # Code-commit keys are immutable in canonical mode. A resume that changes the Menhir or bench
@@ -152,6 +156,11 @@ def assert_same_run(
     """
     established = identity_of(previous)
     incoming = identity_of(attempt)
+    if "canonical_self_binding_mode" in incoming and "canonical_self_binding_mode" not in established:
+        raise ProvenanceMismatch(
+            "refusing to resume: original canonical_self_binding_mode was not recorded; "
+            "start a fresh run rather than inferring the existing graph's binding mode"
+        )
     mismatched = {
         key: (value, incoming.get(key))
         for key, value in established.items()

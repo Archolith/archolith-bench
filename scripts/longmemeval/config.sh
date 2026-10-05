@@ -120,6 +120,8 @@ LME_RECALL_AUDIT_ENABLED="${LME_RECALL_AUDIT_ENABLED:-1}"
 # enormous and a disclosure risk on any corpus that is not a public fixture. Set DEBUG deliberately
 # while troubleshooting a specific run, not as a standing default.
 LME_MENHIR_LOG_LEVEL="${LME_MENHIR_LOG_LEVEL:-INFO}"
+LME_COUNTER_STATE_ENABLED="${LME_COUNTER_STATE_ENABLED:-${MENHIR_PERSONAL_MEMORY_CONSOLIDATION_ENABLED:-0}}"
+MENHIR_PERSONAL_MEMORY_EVENT_HISTORY_ENABLED="${MENHIR_PERSONAL_MEMORY_EVENT_HISTORY_ENABLED:-0}"
 LME_SCALAR_STATE_ENABLED="${LME_SCALAR_STATE_ENABLED:-0}"
 LME_SCALAR_HISTORY_ENABLED="${LME_SCALAR_HISTORY_ENABLED:-0}"
 LME_SCALAR_CONSOLIDATION_K="${LME_SCALAR_CONSOLIDATION_K:-3}"
@@ -152,6 +154,8 @@ LME_SCALAR_RECONCILE_SUBJECT="${LME_SCALAR_RECONCILE_SUBJECT:-1}"
 # Measured effect: ZERO cells in every configuration (the prompt already emits 'user' almost
 # always). Off by default here; flip on only to re-measure.
 LME_SCALAR_CANONICAL_SELF="${LME_SCALAR_CANONICAL_SELF:-0}"
+# Graphiti author-node binding is separate from scalar subject normalization.
+LME_CANONICAL_SELF_BINDING_MODE="${LME_CANONICAL_SELF_BINDING_MODE:-${MENHIR_CANONICAL_SELF_BINDING_MODE:-off}}"
 # A one-item plumbing smoke may validly abstain at the consistency gate. Canonical/full builds keep
 # this on so promotion refuses a corpus that produced no durable scalar assertion/View at all.
 LME_REQUIRE_SCALAR_OUTPUT="${LME_REQUIRE_SCALAR_OUTPUT:-1}"
