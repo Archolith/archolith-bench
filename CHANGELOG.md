@@ -1,3 +1,8 @@
+## 2026-10-05 - Require an expected item count for canonical acceptance
+
+- `lme.sh validate` refuses to run without `--expected N` (positive integer), and `validate_run.py --require-fresh-clean` refuses without `--expected-items`. Before this, `manifest_cardinality` passed any non-empty manifest, so a short canonical run could be accepted.
+- `validate(require_fresh_clean=True)` without an expected count reports `manifest_cardinality` as FAIL for library callers.
+
 ## 2026-10-04 - Validate requested LongMemEval processing lanes
 
 - Explicitly configure, validate, forward, and freeze Graphiti canonical-self binding mode across build resumes.

@@ -192,6 +192,27 @@ def test_manifest_cardinality_mismatch(tmp_path: Path) -> None:
     assert "78" in card["detail"]
 
 
+def test_canonical_validation_requires_an_expected_count(tmp_path: Path) -> None:
+    # B2: a short manifest must not pass canonical acceptance just because it is non-empty.
+    for expected_items, status in ((None, "FAIL"), (1, "PASS"), (500, "FAIL")):
+        report = validator.validate(_provenance(tmp_path), _manifest(tmp_path),
+                                    expected_items=expected_items, require_fresh_clean=True)
+        card = next(c for c in report["checks"] if c["check"] == "manifest_cardinality")
+        assert card["status"] == status, (expected_items, card)
+        assert report["verdict"] == "FAIL" or status == "PASS"
+
+
+def test_cli_refuses_canonical_validation_without_expected_count(tmp_path: Path, capsys) -> None:
+    prov, mfst = _provenance(tmp_path), _manifest(tmp_path)
+    try:
+        validator.main([str(prov), str(mfst), "--require-fresh-clean"])
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("--require-fresh-clean without --expected-items must refuse")
+    assert "--expected-items" in capsys.readouterr().err
+
+
 def test_failed_episodes_detected(tmp_path: Path) -> None:
     report = validator.validate(
         _provenance(tmp_path),

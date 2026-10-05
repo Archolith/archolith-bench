@@ -206,9 +206,10 @@ later from these immutable token counts and the price schedule being evaluated.
 
 ## Acceptance Validation
 
-`lme.sh validate [--expected N]` runs `lib/validate_run.py` against the current provenance file,
+`lme.sh validate --expected N` runs `lib/validate_run.py` against the current provenance file,
 manifest, and telemetry DB. This acceptance command requires fresh-graph, clean-commit,
-fingerprinted provenance. It emits a machine-readable JSON report covering:
+fingerprinted provenance and refuses to run without `--expected N`, so a short manifest cannot
+pass. It emits a machine-readable JSON report covering:
 
 - **manifest cardinality** (expected vs actual items)
 - **zero failed episodes** (`failed_remaining` is known and zero for every manifest item;

@@ -15,7 +15,9 @@ machine-readable JSON report covering the contract from the scalar-history plan:
 Usage::
 
     validate_run.py <provenance.json> <manifest.json> [--telemetry-db <path>]
-                    [--expected-items N] [--output <report.json>]
+                    [--expected-items N] [--require-fresh-clean] [--output <report.json>]
+
+``--require-fresh-clean`` (canonical acceptance) requires ``--expected-items``.
 
 Exit 0 when all checks pass; exit 1 with the report on any failure.
 """
@@ -161,6 +163,13 @@ def validate(
                     "manifest_cardinality",
                     actual == expected_items,
                     f"expected {expected_items}, got {actual}",
+                ))
+            elif require_fresh_clean:
+                # Any count > 0 would pass otherwise, so a short canonical run could be accepted.
+                checks.append(_check(
+                    "manifest_cardinality", False,
+                    f"{actual} items, but canonical (fresh-clean) validation requires an "
+                    "expected item count",
                 ))
             else:
                 checks.append(_check(
@@ -320,6 +329,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output", type=Path, default=None,
                         help="write report JSON here (also printed to stdout)")
     args = parser.parse_args(argv)
+    if args.require_fresh_clean and args.expected_items is None:
+        parser.error("--require-fresh-clean requires --expected-items N")
 
     report = validate(
         args.provenance,

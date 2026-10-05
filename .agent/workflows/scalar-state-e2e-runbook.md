@@ -53,7 +53,7 @@ The dashboard's `ScalarTaskReader` reads this path for audit provenance display.
 
 ## Acceptance Report
 
-`lme.sh validate [--expected N]` checks:
+`lme.sh validate --expected N` (required) checks:
 
 - Manifest cardinality matches expected item count
 - Zero failed episodes

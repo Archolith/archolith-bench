@@ -19,7 +19,7 @@
 #   lme.sh entropy [floor|both]        # D0 retrieval-entropy instrument (GPT-free fitness function)
 #   lme.sh probe <question_id>         # single-question recall ranking trace
 #   lme.sh ir-gate                     # M1 gate verdict + artifacts (Phase 4, JSON + Markdown)
-#   lme.sh validate [--expected N]     # final acceptance report (provenance + manifest + telemetry)
+#   lme.sh validate --expected N       # final acceptance report (provenance + manifest + telemetry)
 #   lme.sh -h|--help                   # show this help
 
 set -euo pipefail
@@ -114,13 +114,18 @@ case "$COMMAND" in
       "${MENHIR_FRONTIER_PY}" "${_LONGMEMEVAL_DIR}/analysis/lib/retrieval_quality.py"
     ;;
   validate)
+    # Canonical acceptance: without an expected count any non-empty manifest would pass.
+    if [ "${2:-}" != "--expected" ] || ! [[ "${3:-}" =~ ^[1-9][0-9]*$ ]]; then
+      echo "lme.sh validate requires --expected N (a positive item count, e.g. --expected 500)" >&2
+      exit 2
+    fi
     VALIDATE_ARGS=(
       "${LME_RESULTS_DIR}/graph-provenance-${LME_NEO4J_NAME}.json"
       "${LME_MANIFEST_PATH}"
       --telemetry-db "${LME_RESULTS_DIR}/mcp_telemetry.db"
       --require-fresh-clean
     )
-    [ -n "${2:-}" ] && [ "${2}" = "--expected" ] && VALIDATE_ARGS+=(--expected-items "${3}")
+    VALIDATE_ARGS+=(--expected-items "${3}")
     VALIDATE_OUTPUT="${LME_RESULTS_DIR}/acceptance-report.json"
     VALIDATE_ARGS+=(--output "${VALIDATE_OUTPUT}")
     "${BENCH_PY}" "${_LONGMEMEVAL_DIR}/lib/validate_run.py" "${VALIDATE_ARGS[@]}"
