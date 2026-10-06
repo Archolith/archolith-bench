@@ -35,11 +35,15 @@ Enrichment completeness (why a namespace-window DRAIN exists):
 from __future__ import annotations
 
 import argparse
+import collections
+import concurrent.futures
+import contextlib
 import json
 import os
 import re
 import subprocess
 import sys
+import threading
 import time
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -615,12 +619,18 @@ def _drain_many(
     idle_polls: int = 2,
     poll_s: float = 2.0,
     timeout_s: float = 1800.0,
+    global_queue_gate: bool = True,
 ) -> dict[str, dict[str, int | bool]]:
     """Block until the global queue and every supplied namespace are fully settled.
 
     PENDING is gated on, not just ENRICHING: an episode a worker has not yet claimed sits in
     PENDING with enriching==0. Unknown queue/state counts are treated as in-flight, and the
     settled condition must remain true for ``idle_polls`` consecutive checks.
+
+    ``global_queue_gate=False`` settles on the namespaces' own rows only (rolling window: other
+    items are always enriching, so the global queue never reaches 0). Sound because Menhir
+    persists every queued episode for a namespace -- submitted turns and their evidence
+    projections -- as a PENDING row before the ingest request returns.
     """
     ordered_namespaces = list(dict.fromkeys(namespaces))
     if not ordered_namespaces:
@@ -640,7 +650,7 @@ def _drain_many(
         for namespace in ordered_namespaces
     }
     while time.time() - t0 < timeout_s:
-        qd = _queue_depth(admin, menhir_url)
+        qd = _queue_depth(admin, menhir_url) if global_queue_gate else 0
         last = {namespace: _ns_state_counts(namespace) for namespace in ordered_namespaces}
         # pending/enriching==-1 means cypher timed out / Neo4j temporarily unreachable. Treat
         # unknown as in-flight so we keep polling rather than settling early; only settle when
@@ -739,6 +749,7 @@ def _retry_failed_evidence_projections_after_drain(
     requeued_by_namespace: dict[str, int],
     *,
     timeout_s: float,
+    global_queue_gate: bool = True,
 ) -> dict[str, dict[str, int | bool]]:
     """Retry generated projection failures once and return the resulting settled snapshot."""
     if not any(
@@ -762,6 +773,7 @@ def _retry_failed_evidence_projections_after_drain(
         admin,
         menhir_url,
         timeout_s=timeout_s,
+        global_queue_gate=global_queue_gate,
     )
     timed_out = [
         namespace
@@ -824,35 +836,13 @@ def _ingest_window(
     evidence_by_turn: dict[str, str] = {}
 
     def submit_next(index: int) -> bool:
-        """Advance one namespace to its next *extractable* turn.
-
-        Evidence-only turns create no episode, so there is no lifecycle row to
-        wait on. They are recorded in order and skipped over here rather than
-        occupying the namespace's single active slot -- which would deadlock the
-        drain, since a missing episode never reaches READY.
-        """
-        state = window[index]
-        while True:
-            try:
-                turn = next(turn_iterators[index])
-            except StopIteration:
-                return False
-            episode_uuid = _ingest_turn(
-                client,
-                state.namespace,
-                turn.role,
-                turn.content,
-                occurred_at=turn.occurred_at,
-                session_id=turn.session_id,
-                extract=turn.extract,
-                evidence_text=turn.evidence_text or turn.content,
-                turn_key=turn.turn_key or None,
-                evidence_cache=evidence_by_turn,
-            )
-            state.turns += 1
-            if episode_uuid:
-                active[index] = (episode_uuid, False)
-                return True
+        episode_uuid = _submit_next_turn(
+            client, window[index], turn_iterators[index], evidence_by_turn
+        )
+        if episode_uuid:
+            active[index] = (episode_uuid, False)
+            return True
+        return False
 
     for index in range(len(window)):
         submit_next(index)
@@ -870,51 +860,371 @@ def _ingest_window(
 
         progressed = False
         for index, (episode_uuid, already_retried) in list(active.items()):
-            row = _episode_processing(admin, menhir_url, episode_uuid)
-            if row is None:
+            outcome = _advance_active_episode(admin, menhir_url, episode_uuid, already_retried)
+            if outcome == "wait":
                 continue
-            processing_state = str(row.get("processing_state") or "").upper().rsplit(".", 1)[-1]
-            if processing_state == "READY":
-                active.pop(index, None)
-                submit_next(index)
-                progressed = True
-            elif processing_state == "FAILED":
-                if not already_retried:
-                    try:
-                        reset = _backend(
-                            admin,
-                            menhir_url,
-                            "force_reset_failed_episode",
-                            {"episode_uuid": episode_uuid},
-                        )
-                    except Exception:
-                        reset = False
-                    if reset:
-                        try:
-                            _backend(
-                                admin,
-                                menhir_url,
-                                "enqueue_pending_episode",
-                                {"episode_uuid": episode_uuid},
-                            )
-                        except Exception:
-                            # An idle worker's lease-recovery poll will still discover the PENDING
-                            # row. Keep monitoring the same episode instead of advancing out of order.
-                            pass
-                        active[index] = (episode_uuid, True)
-                        requeued[window[index].namespace] += 1
-                        progressed = True
-                        continue
-                # A terminal failure has no later retry that could reorder this namespace. Record
-                # it in the final state counts and continue with the next chronological episode.
-                active.pop(index, None)
-                submit_next(index)
-                progressed = True
+            progressed = True
+            if outcome == "retried":
+                active[index] = (episode_uuid, True)
+                requeued[window[index].namespace] += 1
+                continue
+            active.pop(index, None)
+            submit_next(index)
 
         if active and not progressed:
             time.sleep(poll_s)
 
     return requeued
+
+
+def _submit_next_turn(
+    client: HttpMenhirClient,
+    state: WindowItem,
+    turns: Iterator[IngestTurn],
+    evidence_by_turn: dict[str, str],
+) -> str | None:
+    """Submit one namespace's next *extractable* turn; return its episode uuid, or None at end.
+
+    Evidence-only turns create no episode, so there is no lifecycle row to wait on. They are
+    recorded in order and skipped over here rather than occupying the namespace's single active
+    slot -- which would deadlock the drain, since a missing episode never reaches READY.
+    """
+    while True:
+        try:
+            turn = next(turns)
+        except StopIteration:
+            return None
+        episode_uuid = _ingest_turn(
+            client,
+            state.namespace,
+            turn.role,
+            turn.content,
+            occurred_at=turn.occurred_at,
+            session_id=turn.session_id,
+            extract=turn.extract,
+            evidence_text=turn.evidence_text or turn.content,
+            turn_key=turn.turn_key or None,
+            evidence_cache=evidence_by_turn,
+        )
+        state.turns += 1
+        if episode_uuid:
+            return episode_uuid
+
+
+def _complete_item(
+    state: WindowItem,
+    drained: dict[str, int | bool],
+    requeued: int,
+    *,
+    args: argparse.Namespace,
+    adapter: LongMemEvalMemoryAdapter,
+    admin: httpx.Client,
+    requested_lanes: dict[str, bool],
+    consolidation_lock=None,
+) -> dict:
+    """Consolidate one drained namespace and build its manifest row (not yet persisted)."""
+    scalar_result: dict = {}
+    scalar_counts: dict[str, int] = {}
+    if any(requested_lanes.values()):
+        # Consolidation stays one-at-a-time across the whole build: parallel calls would add
+        # provider-rate and graph-write risk without material speedup.
+        with consolidation_lock if consolidation_lock is not None else contextlib.nullcontext():
+            scalar_result = _consolidate_lanes(
+                admin,
+                args.menhir_url,
+                state.namespace,
+                k=args.consolidation_k,
+                call_budget=args.consolidation_call_budget,
+                scalar_state=args.consolidate_scalar,
+                counter_state=args.consolidate_counter,
+                event_history=args.consolidate_events,
+            )
+    if args.consolidate_scalar:
+        scalar_counts = _scalar_counts(state.namespace)
+        if scalar_counts["turn_evidence"] <= 0:
+            raise RuntimeError(
+                f"no TurnEvidence captured for scalar namespace {state.namespace}"
+            )
+    # Recorded for final acceptance, which refuses any violation or unreadable count.
+    integrity = _integrity_counts(state.namespace, _submitted_epoch_millis(state.item))
+    user_turns_submitted = _user_turns_submitted(
+        _iter_item_turns(adapter, state.item, state.namespace, args.segmentation)
+    )
+    return {
+        "question_id": state.question_id,
+        "namespace": state.namespace,
+        "fixture": str(Path(args.fixture).resolve()) if args.fixture else None,
+        "question": adapter.question(state.item),
+        "answer": str(state.item.get("answer", "")),
+        "question_type": state.item.get("question_type"),
+        "turns": state.turns,
+        "episodes": drained.get("total"),
+        "ready": drained.get("ready"),
+        "failed_remaining": drained.get("failed"),
+        "failed_requeued": requeued,
+        "enrichment_llm_tasks": drained.get("llm_tasks"),
+        "processing_attempts": drained.get("processing_attempts"),
+        "drain_timed_out": drained.get("timed_out", False),
+        "namespace_window": args.namespace_window,
+        "rolling_window": bool(args.rolling_window),
+        "scalar_consolidated": bool(
+            args.consolidate_scalar
+            and int(scalar_result.get("scalar_namespaces_processed", 0)) == 1
+            and int(scalar_result.get("scalar_llm_calls", 0)) >= args.consolidation_k
+        ),
+        "consolidation_requested": requested_lanes,
+        "consolidation_k": args.consolidation_k,
+        "consolidation_result": scalar_result,
+        "consolidation_llm_calls": int(scalar_result.get("llm_calls", 0)),
+        "event_llm_calls": int(scalar_result.get("event_llm_calls", 0)),
+        "scalar_llm_calls": int(scalar_result.get("scalar_llm_calls", 0)),
+        "scalar_states_written": int(scalar_result.get("scalar_states_written", 0)),
+        **scalar_counts,
+        "user_turns_submitted": user_turns_submitted,
+        **integrity,
+    }
+
+
+@dataclass
+class _RollingSlot:
+    state: WindowItem
+    turns: Iterator[IngestTurn]
+    started_at: float
+    episode_uuid: str | None = None
+    retried: bool = False
+    requeued: int = 0
+    finisher: concurrent.futures.Future | None = None
+
+
+def _finish_rolling_item(
+    slot: _RollingSlot,
+    *,
+    args: argparse.Namespace,
+    adapter: LongMemEvalMemoryAdapter,
+    admin: httpx.Client,
+    requested_lanes: dict[str, bool],
+    consolidation_lock,
+) -> tuple[dict, dict[str, int | bool]]:
+    """Drain one fully-submitted namespace on its own rows, then consolidate and build its row.
+
+    Runs on a worker thread. Every gate of the fixed-window path applies, per namespace:
+    drain timeout, one projection retry, residual-FAILED refusal before paid consolidation.
+    """
+    namespace = slot.state.namespace
+    drained_by_namespace = _drain_many(
+        [namespace],
+        admin,
+        args.menhir_url,
+        timeout_s=args.drain_timeout,
+        global_queue_gate=False,
+    )
+    if drained_by_namespace[namespace].get("timed_out"):
+        raise RuntimeError(
+            "rolling-window drain timed out; refusing to manifest incomplete namespace: "
+            + namespace
+        )
+    requeued_by_namespace = {namespace: slot.requeued}
+    drained_by_namespace = _retry_failed_evidence_projections_after_drain(
+        [namespace],
+        admin,
+        args.menhir_url,
+        drained_by_namespace,
+        requeued_by_namespace,
+        timeout_s=args.drain_timeout,
+        global_queue_gate=False,
+    )
+    if any(requested_lanes.values()):
+        _require_no_failed_episodes(drained_by_namespace)
+    drained = drained_by_namespace[namespace]
+    row = _complete_item(
+        slot.state,
+        drained,
+        requeued_by_namespace[namespace],
+        args=args,
+        adapter=adapter,
+        admin=admin,
+        requested_lanes=requested_lanes,
+        consolidation_lock=consolidation_lock,
+    )
+    return row, drained
+
+
+def _ingest_rolling(
+    remaining: list[dict],
+    *,
+    args: argparse.Namespace,
+    adapter: LongMemEvalMemoryAdapter,
+    client: HttpMenhirClient,
+    admin: httpx.Client,
+    requested_lanes: dict[str, bool],
+    on_complete,
+    poll_s: float = 1.0,
+) -> None:
+    """Keep ``args.namespace_window`` items in flight; start the next as soon as one is manifested.
+
+    Per item, in order: stale-settlement wait, reset, sequential episode scheduling (one active
+    episode per namespace, one FAILED retry), then -- on a worker thread -- per-namespace drain,
+    projection retry, consolidation and integrity counts. ``on_complete(row, drained, state)``
+    runs on this thread, so manifest writes are never concurrent. An item holds its slot until
+    its row is built, so at most ``namespace_window`` namespaces have work in Menhir at once.
+    Any error stops new submissions and propagates; unmanifested namespaces are reset on resume.
+    """
+    queue: collections.deque[tuple[int, dict]] = collections.deque(enumerate(remaining))
+    slots: list[_RollingSlot] = []
+    evidence_by_turn: dict[str, str] = {}
+    consolidation_lock = threading.Lock()
+
+    def start(index: int, item: dict) -> _RollingSlot:
+        question_id = str(item.get("question_id") or f"lme-{index}")
+        state = WindowItem(
+            item=item,
+            question_id=question_id,
+            namespace=_namespace(question_id, args.namespace_prefix),
+        )
+        # Same order as the fixed window: settle on the rows that prove a stale worker is alive,
+        # then reset once.
+        _await_stale_episode_settlement([state.namespace])
+        _reset_namespace(admin, args.menhir_url, state.namespace)
+        slot = _RollingSlot(
+            state=state,
+            turns=_iter_item_turns(adapter, item, state.namespace, args.segmentation),
+            started_at=time.time(),
+        )
+        slot.episode_uuid = _submit_next_turn(client, state, slot.turns, evidence_by_turn)
+        return slot
+
+    with concurrent.futures.ThreadPoolExecutor(
+        max_workers=args.namespace_window, thread_name_prefix="lme-finish"
+    ) as pool:
+        try:
+            _rolling_loop(queue, slots, start, pool, args=args, adapter=adapter, client=client,
+                          admin=admin, requested_lanes=requested_lanes, on_complete=on_complete,
+                          evidence_by_turn=evidence_by_turn,
+                          consolidation_lock=consolidation_lock, poll_s=poll_s)
+        except BaseException:
+            # Stop submitting, but keep the paid work already finishing: manifest every finisher
+            # that succeeds so a resume does not reset and re-buy it.
+            for slot in slots:
+                if slot.finisher is None:
+                    continue
+                try:
+                    row, drained = slot.finisher.result()
+                except Exception:
+                    continue
+                on_complete(row, drained, slot)
+            raise
+
+
+def _rolling_loop(
+    queue,
+    slots: list[_RollingSlot],
+    start,
+    pool: concurrent.futures.Executor,
+    *,
+    args: argparse.Namespace,
+    adapter: LongMemEvalMemoryAdapter,
+    client: HttpMenhirClient,
+    admin: httpx.Client,
+    requested_lanes: dict[str, bool],
+    on_complete,
+    evidence_by_turn: dict[str, str],
+    consolidation_lock,
+    poll_s: float,
+) -> None:
+    while queue or slots:
+        while queue and len(slots) < args.namespace_window:
+            slots.append(start(*queue.popleft()))
+
+        progressed = False
+        for slot in list(slots):
+            if slot.finisher is not None:
+                if slot.finisher.done():
+                    row, drained = slot.finisher.result()  # re-raises a finisher failure
+                    slots.remove(slot)
+                    on_complete(row, drained, slot)
+                    progressed = True
+                continue
+            if slot.episode_uuid is None:
+                slot.finisher = pool.submit(
+                    _finish_rolling_item,
+                    slot,
+                    args=args,
+                    adapter=adapter,
+                    admin=admin,
+                    requested_lanes=requested_lanes,
+                    consolidation_lock=consolidation_lock,
+                )
+                progressed = True
+                continue
+            if time.time() - slot.started_at >= args.drain_timeout:
+                raise RuntimeError(
+                    "rolling-window episode scheduler timed out; refusing to submit later "
+                    f"turns: {slot.state.namespace}:{slot.episode_uuid}"
+                )
+            outcome = _advance_active_episode(
+                admin, args.menhir_url, slot.episode_uuid, slot.retried
+            )
+            if outcome == "wait":
+                continue
+            progressed = True
+            if outcome == "retried":
+                slot.retried = True
+                slot.requeued += 1
+                continue
+            slot.retried = False
+            slot.episode_uuid = _submit_next_turn(
+                client, slot.state, slot.turns, evidence_by_turn
+            )
+
+        if not progressed:
+            time.sleep(poll_s)
+
+
+def _advance_active_episode(
+    admin: httpx.Client,
+    menhir_url: str,
+    episode_uuid: str,
+    already_retried: bool,
+) -> str:
+    """Poll one namespace's active episode: 'wait', 'retried' (FAILED, requeued once), or 'next'.
+
+    'next' means READY or a terminal failure: no later retry of this episode can reorder the
+    namespace, so its next chronological turn may be submitted. A terminal failure is left in
+    the namespace's state counts for the post-drain gates.
+    """
+    row = _episode_processing(admin, menhir_url, episode_uuid)
+    if row is None:
+        return "wait"
+    processing_state = str(row.get("processing_state") or "").upper().rsplit(".", 1)[-1]
+    if processing_state == "READY":
+        return "next"
+    if processing_state != "FAILED":
+        return "wait"
+    if already_retried:
+        return "next"
+    try:
+        reset = _backend(
+            admin,
+            menhir_url,
+            "force_reset_failed_episode",
+            {"episode_uuid": episode_uuid},
+        )
+    except Exception:
+        reset = False
+    if not reset:
+        return "next"
+    try:
+        _backend(
+            admin,
+            menhir_url,
+            "enqueue_pending_episode",
+            {"episode_uuid": episode_uuid},
+        )
+    except Exception:
+        # An idle worker's lease-recovery poll will still discover the PENDING row. Keep
+        # monitoring the same episode instead of advancing out of order.
+        pass
+    return "retried"
 
 
 def _positive_int(raw: str) -> int:
@@ -946,6 +1256,15 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=_positive_int,
         default=os.getenv("LME_INGEST_CONCURRENCY", "1"),
         help="number of item namespaces to enrich concurrently before draining (default: 1)",
+    )
+    ap.add_argument(
+        "--rolling-window",
+        action="store_true",
+        default=os.getenv("LME_ROLLING_WINDOW", "0") == "1",
+        help=(
+            "keep --namespace-window items in flight and start the next as each one is "
+            "manifested, instead of draining the whole window (default: LME_ROLLING_WINDOW=1)"
+        ),
     )
     ap.add_argument(
         "--manifest-item-limit",
@@ -1176,8 +1495,39 @@ def main(argv: list[str] | None = None) -> int:
     print(f"to ingest this run: {len(remaining)} items", flush=True)
 
     completed_this_run = 0
-    for window_start in range(0, len(remaining), args.namespace_window):
-        raw_window = remaining[window_start:window_start + args.namespace_window]
+
+    def record(row: dict, drained: dict[str, int | bool], started_at: float) -> None:
+        nonlocal completed_this_run
+        manifest.append(row)
+        _write_manifest(manifest_path, manifest)
+        completed_this_run += 1
+        elapsed = time.time() - t_all
+        rate = completed_this_run / elapsed if elapsed else 0
+        eta = (len(remaining) - completed_this_run) / rate if rate else 0
+        print(
+            f"[{len(done_ids)+completed_this_run}/{len(items)}] {row['question_id']} "
+            f"ns={row['namespace']} turns={row['turns']} episodes={drained.get('total')} "
+            f"ready={drained.get('ready')} failed={drained.get('failed')} "
+            f"requeued={row['failed_requeued']} llm_tasks={drained.get('llm_tasks')} "
+            f"window={time.time()-started_at:.0f}s "
+            f"total={elapsed:.0f}s eta={eta/3600:.1f}h",
+            flush=True,
+        )
+
+    if args.rolling_window:
+        _ingest_rolling(
+            remaining,
+            args=args,
+            adapter=adapter,
+            client=client,
+            admin=admin,
+            requested_lanes=requested_lanes,
+            on_complete=lambda row, drained, slot: record(row, drained, slot.started_at),
+        )
+    fixed_window_items = [] if args.rolling_window else remaining
+
+    for window_start in range(0, len(fixed_window_items), args.namespace_window):
+        raw_window = fixed_window_items[window_start:window_start + args.namespace_window]
         window = [
             WindowItem(
                 item=item,
@@ -1255,80 +1605,16 @@ def main(argv: list[str] | None = None) -> int:
         # parallel calls would add provider-rate and graph-write risk without material speedup.
         for state in window:
             drained = drained_by_namespace[state.namespace]
-            requeued = requeued_by_namespace[state.namespace]
-            scalar_result: dict = {}
-            scalar_counts: dict[str, int] = {}
-            if consolidate_requested:
-                scalar_result = _consolidate_lanes(
-                    admin,
-                    args.menhir_url,
-                    state.namespace,
-                    k=args.consolidation_k,
-                    call_budget=args.consolidation_call_budget,
-                    scalar_state=args.consolidate_scalar,
-                    counter_state=args.consolidate_counter,
-                    event_history=args.consolidate_events,
-                )
-            if args.consolidate_scalar:
-                scalar_counts = _scalar_counts(state.namespace)
-                if scalar_counts["turn_evidence"] <= 0:
-                    raise RuntimeError(
-                        f"no TurnEvidence captured for scalar namespace {state.namespace}"
-                    )
-            # Recorded for final acceptance, which refuses any violation or unreadable count.
-            integrity = _integrity_counts(
-                state.namespace, _submitted_epoch_millis(state.item)
+            row = _complete_item(
+                state,
+                drained,
+                requeued_by_namespace[state.namespace],
+                args=args,
+                adapter=adapter,
+                admin=admin,
+                requested_lanes=requested_lanes,
             )
-            user_turns_submitted = _user_turns_submitted(
-                _iter_item_turns(adapter, state.item, state.namespace, args.segmentation)
-            )
-
-            manifest.append({
-                "question_id": state.question_id,
-                "namespace": state.namespace,
-                "fixture": str(Path(args.fixture).resolve()) if args.fixture else None,
-                "question": adapter.question(state.item),
-                "answer": str(state.item.get("answer", "")),
-                "question_type": state.item.get("question_type"),
-                "turns": state.turns,
-                "episodes": drained.get("total"),
-                "ready": drained.get("ready"),
-                "failed_remaining": drained.get("failed"),
-                "failed_requeued": requeued,
-                "enrichment_llm_tasks": drained.get("llm_tasks"),
-                "processing_attempts": drained.get("processing_attempts"),
-                "drain_timed_out": drained.get("timed_out", False),
-                "namespace_window": args.namespace_window,
-                "scalar_consolidated": bool(
-                    args.consolidate_scalar
-                    and int(scalar_result.get("scalar_namespaces_processed", 0)) == 1
-                    and int(scalar_result.get("scalar_llm_calls", 0)) >= args.consolidation_k
-                ),
-                "consolidation_requested": requested_lanes,
-                "consolidation_k": args.consolidation_k,
-                "consolidation_result": scalar_result,
-                "consolidation_llm_calls": int(scalar_result.get("llm_calls", 0)),
-                "event_llm_calls": int(scalar_result.get("event_llm_calls", 0)),
-                "scalar_llm_calls": int(scalar_result.get("scalar_llm_calls", 0)),
-                "scalar_states_written": int(scalar_result.get("scalar_states_written", 0)),
-                **scalar_counts,
-                "user_turns_submitted": user_turns_submitted,
-                **integrity,
-            })
-            _write_manifest(manifest_path, manifest)
-            completed_this_run += 1
-            elapsed = time.time() - t_all
-            rate = completed_this_run / elapsed if elapsed else 0
-            eta = (len(remaining) - completed_this_run) / rate if rate else 0
-            print(
-                f"[{len(done_ids)+completed_this_run}/{len(items)}] {state.question_id} "
-                f"ns={state.namespace} turns={state.turns} episodes={drained.get('total')} "
-                f"ready={drained.get('ready')} failed={drained.get('failed')} "
-                f"requeued={requeued} llm_tasks={drained.get('llm_tasks')} "
-                f"window={time.time()-window_started:.0f}s "
-                f"total={elapsed:.0f}s eta={eta/3600:.1f}h",
-                flush=True,
-            )
+            record(row, drained, window_started)
 
     outcome = "CHECKPOINT" if len(target_items) < len(items) else "DONE"
     print(
