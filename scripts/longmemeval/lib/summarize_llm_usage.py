@@ -139,6 +139,10 @@ INGEST_RATES_USD_PER_1M: dict[str, tuple[float, float, float]] = {
     "gpt-4o-mini": (0.15, 0.60, 0.075),
     "gpt-4.1-mini": (0.40, 1.60, 0.10),
     "gpt-4.1-nano": (0.10, 0.40, 0.025),
+    # Standard tier (developers.openai.com/api/docs/models/gpt-6-luna, 2026-10-05). Usage rows
+    # do not record the service tier, so Flex runs (50% of Standard) are priced here at the
+    # Standard rate -- an overstatement, never an understatement. Reasoning tokens bill as output.
+    "gpt-6-luna": (0.10, 0.50, 0.01),
     # chat -- OpenRouter slugs. Fetched from openrouter.ai/api/v1/models on 2026-09-08:
     # prompt 2e-7/token = $0.20/M, completion 1.2e-6 = $1.20/M, cache read 2e-8 = $0.02/M.
     # luna and luna-pro are priced identically, so Pro is capability upside at no extra cost.
