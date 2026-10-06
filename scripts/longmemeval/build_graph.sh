@@ -356,6 +356,9 @@ INGEST_ARGS=(
 if [ -n "${LME_FIXTURE_PATH:-}" ]; then
   INGEST_ARGS+=(--fixture "${LME_FIXTURE_PATH}")
 fi
+if [ -n "${LME_DRAIN_TIMEOUT:-}" ]; then
+  INGEST_ARGS+=(--drain-timeout "${LME_DRAIN_TIMEOUT}")
+fi
 if [ "${LME_INGEST_STOP_AFTER_ITEMS}" -gt 0 ]; then
   INGEST_ARGS+=(--manifest-item-limit "${LME_INGEST_STOP_AFTER_ITEMS}")
 fi
