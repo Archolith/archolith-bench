@@ -491,26 +491,102 @@ def _consolidate_lanes(
     scalar_state: bool = True,
     counter_state: bool = False,
     event_history: bool = False,
+    attempts: int = 1,
+    retry_wait_s: tuple[float, ...] = (60.0, 180.0),
 ) -> dict:
-    response = admin.post(
-        menhir_url.rstrip("/") + "/api/phase3/run",
-        json={
-            "namespace": namespace,
-            "k": k,
-            "source": "longmemeval-scalar-build",
-            "call_budget": call_budget,
-            "counter_state": counter_state,
-        },
-        timeout=1800.0,
+    """Run Phase 3 for one namespace; retry transient provider/lane failures up to ``attempts``.
+
+    Each lane keeps its own server-side cursor, so a re-run does no new work for a lane that
+    already finished; a lane counts as done once any attempt passes its check. A disabled lane
+    or a mismatched namespace is configuration, not a transient failure, and is never retried.
+    """
+    requested = {"scalar": scalar_state, "counter": counter_state, "event": event_history}
+    pending = [lane for lane, on in requested.items() if on]
+    results: list[dict] = []
+    failure = ""
+    attempts = max(1, attempts)
+    for attempt in range(1, attempts + 1):
+        if attempt > 1:
+            wait = retry_wait_s[min(attempt - 2, len(retry_wait_s) - 1)] if retry_wait_s else 0.0
+            print(
+                f"[lme-ingest] consolidation retry {attempt}/{attempts} for {namespace} "
+                f"in {wait:.0f}s: {failure}",
+                flush=True,
+            )
+            time.sleep(wait)
+        try:
+            response = admin.post(
+                menhir_url.rstrip("/") + "/api/phase3/run",
+                json={
+                    "namespace": namespace,
+                    "k": k,
+                    "source": "longmemeval-scalar-build",
+                    "call_budget": call_budget,
+                    "counter_state": counter_state,
+                },
+                timeout=1800.0,
+            )
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code not in _RETRYABLE_STATUS or attempt >= attempts:
+                raise
+            failure = f"{namespace}: phase3 HTTP {exc.response.status_code}"
+            continue
+        except httpx.TransportError as exc:
+            if attempt >= attempts:
+                raise
+            failure = f"{namespace}: phase3 {type(exc).__name__}"
+            continue
+        result = response.json()
+        results.append(result)
+        config_errors = _consolidation_config_errors(result, requested, namespace)
+        if config_errors:
+            raise RuntimeError("; ".join(config_errors))
+        errors: list[str] = []
+        for lane in list(pending):
+            lane_errors = consolidation_errors(result, {lane: True}, namespace=namespace, k=k)
+            if lane_errors:
+                errors.extend(lane_errors)
+            else:
+                pending.remove(lane)
+        if not pending:
+            return _merge_consolidation_results(results, attempt)
+        failure = "; ".join(errors)
+    raise RuntimeError(failure)
+
+
+_RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})
+_SUMMED_CONSOLIDATION_KEYS = (
+    "llm_calls", "scalar_llm_calls", "event_llm_calls", "scalar_states_written",
+    "views_written", "abstained", "corrections_applied", "event_assertions_recorded",
+    "event_assertions_created", "event_views_rebuilt",
+)
+
+
+def _consolidation_config_errors(result: dict, requested: dict[str, bool], namespace: str) -> list[str]:
+    errors = []
+    if result.get("namespace") != namespace:
+        errors.append(f"{namespace}: missing or mismatched consolidation namespace")
+    for lane, flag in (("scalar", "scalar_enabled"), ("counter", "counter_enabled"),
+                       ("event", "event_history_enabled")):
+        if requested.get(lane) and result.get(flag) is not True:
+            errors.append(f"{namespace}: {lane} consolidation is disabled")
+    return errors
+
+
+def _merge_consolidation_results(results: list[dict], attempts: int) -> dict:
+    """One attempt: its result unchanged. Several: latest status, summed work counters."""
+    if attempts == 1:
+        return results[-1]
+    merged = dict(results[-1])
+    for key in _SUMMED_CONSOLIDATION_KEYS:
+        if any(key in r for r in results):
+            merged[key] = sum(int(r.get(key, 0) or 0) for r in results)
+    merged["scalar_namespaces_processed"] = max(
+        int(r.get("scalar_namespaces_processed", 0) or 0) for r in results
     )
-    response.raise_for_status()
-    result = response.json()
-    errors = consolidation_errors(result, {
-        "scalar": scalar_state, "counter": counter_state, "event": event_history,
-    }, namespace=namespace, k=k)
-    if errors:
-        raise RuntimeError("; ".join(errors))
-    return result
+    merged["consolidation_attempts"] = attempts
+    return merged
 
 
 def _queue_depth(admin: httpx.Client, menhir_url: str) -> int:
@@ -938,6 +1014,7 @@ def _complete_item(
                 scalar_state=args.consolidate_scalar,
                 counter_state=args.consolidate_counter,
                 event_history=args.consolidate_events,
+                attempts=args.consolidation_attempts,
             )
     if args.consolidate_scalar:
         scalar_counts = _scalar_counts(state.namespace)
@@ -1073,6 +1150,7 @@ def _ingest_rolling(
     slots: list[_RollingSlot] = []
     evidence_by_turn: dict[str, str] = {}
     consolidation_lock = threading.Lock()
+    failures: list[str] = []
 
     def start(index: int, item: dict) -> _RollingSlot:
         question_id = str(item.get("question_id") or f"lme-{index}")
@@ -1100,7 +1178,8 @@ def _ingest_rolling(
             _rolling_loop(queue, slots, start, pool, args=args, adapter=adapter, client=client,
                           admin=admin, requested_lanes=requested_lanes, on_complete=on_complete,
                           evidence_by_turn=evidence_by_turn,
-                          consolidation_lock=consolidation_lock, poll_s=poll_s)
+                          consolidation_lock=consolidation_lock, poll_s=poll_s,
+                          failures=failures)
         except BaseException:
             # Stop submitting, but keep the paid work already finishing: manifest every finisher
             # that succeeds so a resume does not reset and re-buy it.
@@ -1113,6 +1192,11 @@ def _ingest_rolling(
                     continue
                 on_complete(row, drained, slot)
             raise
+    if failures:
+        raise RuntimeError(
+            f"{len(failures)} item(s) left unmanifested; a resume retries them: "
+            + " | ".join(failures)
+        )
 
 
 def _rolling_loop(
@@ -1130,6 +1214,7 @@ def _rolling_loop(
     evidence_by_turn: dict[str, str],
     consolidation_lock,
     poll_s: float,
+    failures: list[str],
 ) -> None:
     while queue or slots:
         while queue and len(slots) < args.namespace_window:
@@ -1139,7 +1224,22 @@ def _rolling_loop(
         for slot in list(slots):
             if slot.finisher is not None:
                 if slot.finisher.done():
-                    row, drained = slot.finisher.result()  # re-raises a finisher failure
+                    try:
+                        row, drained = slot.finisher.result()
+                    except Exception as exc:
+                        # The namespace stays unmanifested, so a resume resets and retries it.
+                        slots.remove(slot)
+                        failures.append(f"{slot.state.namespace}: {exc}")
+                        print(
+                            f"[lme-ingest] item failed, left unmanifested "
+                            f"({len(failures)}/{args.max_item_failures} tolerated): "
+                            f"{slot.state.namespace}: {exc}",
+                            flush=True,
+                        )
+                        if len(failures) > args.max_item_failures:
+                            raise
+                        progressed = True
+                        continue
                     slots.remove(slot)
                     on_complete(row, drained, slot)
                     progressed = True
@@ -1280,6 +1380,21 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ap.add_argument("--consolidate-events", action="store_true")
     ap.add_argument("--consolidation-k", type=int, default=3)
     ap.add_argument("--consolidation-call-budget", type=int, default=50)
+    ap.add_argument(
+        "--consolidation-attempts",
+        type=_positive_int,
+        default=os.getenv("LME_CONSOLIDATION_ATTEMPTS", "3"),
+        help="Phase 3 calls per namespace before a transient lane/provider failure is final",
+    )
+    ap.add_argument(
+        "--max-item-failures",
+        type=int,
+        default=int(os.getenv("LME_MAX_ITEM_FAILURES", "0")),
+        help=(
+            "rolling window: items that may fail (left unmanifested for resume) while the rest "
+            "continue; one more stops the build (default 0: first failure stops)"
+        ),
+    )
     ap.add_argument(
         "--segmentation",
         choices=["none", "sentence", "user-sentence", "adaptive"],
