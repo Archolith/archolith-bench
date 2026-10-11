@@ -20,6 +20,10 @@ esac
 for lane in "${LME_COUNTER_STATE_ENABLED}" "${LME_SCALAR_STATE_ENABLED}" "${MENHIR_PERSONAL_MEMORY_EVENT_HISTORY_ENABLED}"; do
   case "${lane}" in 0|1) ;; *) die "processing lane settings must be 0 or 1" ;; esac
 done
+case "${LME_LABEL_GROUNDED_USER_TURNS}" in
+  0|1) ;;
+  *) die "LME_LABEL_GROUNDED_USER_TURNS must be 0 or 1" ;;
+esac
 case "${LME_INGEST_CONCURRENCY}" in
   ''|*[!0-9]*|0) die "LME_INGEST_CONCURRENCY must be a positive integer" ;;
 esac
@@ -152,6 +156,7 @@ cat > "${GRAPH_ATTEMPT_RECORD}" <<EOF
   "canonical_self_binding_mode": "${LME_CANONICAL_SELF_BINDING_MODE}",
   "scalar_output_required": ${LME_REQUIRE_SCALAR_OUTPUT},
   "turn_evidence_required": ${LME_REQUIRE_TURN_EVIDENCE},
+  "label_grounded_user_turns": ${LME_LABEL_GROUNDED_USER_TURNS},
   "consolidation_audit_enabled": ${LME_CONSOLIDATION_AUDIT_ENABLED},
   "recall_audit_enabled": ${LME_RECALL_AUDIT_ENABLED},
   "menhir_log_level": "${MENHIR_LOG_LEVEL:-${LME_MENHIR_LOG_LEVEL}}",
@@ -232,7 +237,8 @@ fi
   --setting "consolidation_audit_enabled=${LME_CONSOLIDATION_AUDIT_ENABLED}" \
   --setting "recall_audit_enabled=${LME_RECALL_AUDIT_ENABLED}" \
   --setting "menhir_log_level=${MENHIR_LOG_LEVEL:-${LME_MENHIR_LOG_LEVEL}}" \
-  --setting "turn_evidence_required=${LME_REQUIRE_TURN_EVIDENCE}"
+  --setting "turn_evidence_required=${LME_REQUIRE_TURN_EVIDENCE}" \
+  --setting "label_grounded_user_turns=${LME_LABEL_GROUNDED_USER_TURNS}"
 log "graph provenance recorded: ${GRAPH_PROVENANCE_PATH} (graph_fresh=${GRAPH_FRESH})"
 
 # ---- untracked-file preflight ----
@@ -289,6 +295,7 @@ export MENHIR_CANONICAL_SELF_BINDING_MODE="${LME_CANONICAL_SELF_BINDING_MODE}"
 export MENHIR_PERSONAL_MEMORY_CHAT_MODEL="${LME_EXTRACT_MODEL}"
 export MENHIR_PERSONAL_MEMORY_SUM_GROUNDING=1
 export LME_REQUIRE_TURN_EVIDENCE="${LME_REQUIRE_TURN_EVIDENCE}"
+export LME_LABEL_GROUNDED_USER_TURNS="${LME_LABEL_GROUNDED_USER_TURNS}"
 # Raise the per-episode LLM extraction budget (default 10) so long turns finish enrichment
 # instead of hitting FAILED; the ingest script does a best-effort FAILED-retry for the rest.
 export MENHIR_MAX_LLM_CALLS_PER_JOB="${LME_MAX_LLM_CALLS_PER_JOB:-20}"

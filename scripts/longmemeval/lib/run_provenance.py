@@ -48,6 +48,7 @@ IMMUTABLE_KEYS = (
     "counter_state_enabled",
     "event_history_enabled",
     "canonical_self_binding_mode",
+    "label_grounded_user_turns",
 )
 
 # Code-commit keys are immutable in canonical mode. A resume that changes the Menhir or bench
@@ -160,6 +161,14 @@ def assert_same_run(
         raise ProvenanceMismatch(
             "refusing to resume: original canonical_self_binding_mode was not recorded; "
             "start a fresh run rather than inferring the existing graph's binding mode"
+        )
+    # A run recorded before this key existed stored raw (unlabelled) evidence, so 0 matches it
+    # and 1 does not: turn evidence MERGEs on turn_key, so a labelled resume would get back the
+    # old raw evidence and every grounded episode would silently fail exact-equality grounding.
+    if incoming.get("label_grounded_user_turns") and "label_grounded_user_turns" not in established:
+        raise ProvenanceMismatch(
+            "refusing to resume: the recorded run did not label grounded user turns; "
+            "start a fresh run to use LME_LABEL_GROUNDED_USER_TURNS=1"
         )
     mismatched = {
         key: (value, incoming.get(key))

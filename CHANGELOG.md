@@ -1,3 +1,8 @@
+## 2026-10-11 - Opt-in speaker label on grounded user turns
+
+- `LME_LABEL_GROUNDED_USER_TURNS=1` writes `user: ` into each user turn's evidence and into its grounded episode, so the two stay byte-identical and Menhir's text-prefix speaker check (anchored-time resolver) sees the turn as the user's. Workaround until Menhir reads speaker role from structured data (Archolith/menhir#271). Default off; off sends exactly what it did before.
+- The setting is part of the run identity: a resume that changes it, or turns it on for a run recorded without it, is refused before ingest. With it on, every user `:TurnEvidence` text carries the label, which Menhir lanes that read evidence text will also see.
+
 ## 2026-10-11 - Opt-in partial resume of unmanifested LongMemEval items
 
 - `LME_RESUME_PARTIAL=1` (`--resume-partial`) keeps an unmanifested item's stored episodes when they are byte-for-byte the first k episodes the item submits, in order, and submits only the rest. The comparison runs inside Neo4j. A mismatch resets the namespace as before, and an unreadable state fails closed. Default off; the reset path is unchanged.

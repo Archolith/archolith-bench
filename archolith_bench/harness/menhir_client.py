@@ -301,9 +301,27 @@ class StubMenhirClient:
         self._groups.pop(group_id, None)
 
 
-def episode_body(role: str, content: str, *, grounded: bool) -> str:
-    """The exact episode text ingest() sends: raw when grounded, "{role}: {content}" otherwise."""
-    return content if grounded else f"{role}: {content}"
+def _is_user_role(role: str) -> bool:
+    return (role.strip().lower() or "user") == "user"
+
+
+def turn_evidence_text(role: str, text: str, *, label_grounded_user: bool = False) -> str:
+    """The exact :TurnEvidence text record_turn_evidence() sends."""
+    return f"user: {text}" if label_grounded_user and _is_user_role(role) else text
+
+
+def episode_body(
+    role: str, content: str, *, grounded: bool, label_grounded_user: bool = False
+) -> str:
+    """The exact episode text ingest() sends: raw when grounded, "{role}: {content}" otherwise.
+
+    ``label_grounded_user`` writes "user: " into a grounded user turn AND its evidence
+    (turn_evidence_text), so exact-equality grounding still holds. Workaround until Menhir
+    reads speaker role from structured data instead of this prefix (Archolith/menhir#271).
+    """
+    if not grounded:
+        return f"{role}: {content}"
+    return turn_evidence_text(role, content, label_grounded_user=label_grounded_user)
 
 
 class HttpMenhirClient:
@@ -317,6 +335,7 @@ class HttpMenhirClient:
         ingest_path: str = "/api/memory",
         recall_path: str = "/api/recall",
         timeout: float = 180.0,
+        label_grounded_user_turns: bool = False,
     ) -> None:
         """
         Initialize HTTP client against a real menhir instance.
@@ -331,7 +350,10 @@ class HttpMenhirClient:
             ingest_path: Episode ingest endpoint (default "/api/memory").
             recall_path: Recall endpoint (default "/api/recall").
             timeout: Request timeout in seconds.
+            label_grounded_user_turns: Write "user: " into user-role evidence and grounded
+                user episodes alike (see episode_body). Default off.
         """
+        self.label_grounded_user_turns = bool(label_grounded_user_turns)
         self._base_url = base_url
         self._ingest_path = ingest_path
         self._recall_path = recall_path
@@ -375,7 +397,9 @@ class HttpMenhirClient:
         """
         url = self._base_url.rstrip("/") + "/api/turn-evidence"
         payload: dict[str, Any] = {
-            "text": text,
+            "text": turn_evidence_text(
+                role, text, label_grounded_user=self.label_grounded_user_turns
+            ),
             "role": role,
             "declarant": declarant,
             "namespace": namespace,
@@ -448,7 +472,12 @@ class HttpMenhirClient:
         # Scoped to the grounded path on purpose. The prefix still labels the speaker for turns that
         # are NOT cited as evidence, so ungrounded episode text -- and therefore extraction input on
         # every existing benchmark arm -- is unchanged and stays comparable.
-        episode_text = episode_body(role, content, grounded=turn_evidence_uuid is not None)
+        episode_text = episode_body(
+            role,
+            content,
+            grounded=turn_evidence_uuid is not None,
+            label_grounded_user=self.label_grounded_user_turns,
+        )
         payload: dict = {"episode": episode_text, "namespace": group_id}
         if source is not None:
             payload["source"] = source
