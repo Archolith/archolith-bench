@@ -340,6 +340,12 @@ esac
 export GRAPHITI_EMBED_PROVIDER="openai" MEMORY_GRAPHITI_EMBED_PROVIDER="openai"
 export OPENAI_API_KEY="${OPENAI_KEY}" OPENAI_CHAT_MODEL="${LME_EXTRACT_MODEL}" OPENAI_EMBED_MODEL="${LME_EMBED_MODEL}"
 
+if [ "${LME_RESUME_PARTIAL:-0}" = "1" ]; then
+  log "partial resume: checking no previous writer is attached to bolt :${LME_BOLT}..."
+  "${BENCH_PY}" "$(dirname "${BASH_SOURCE[0]}")/lib/liveness_gate.py" --bolt-port "${LME_BOLT}" --serve-port "${MENHIR_PORT}" \
+    || die "partial resume refused: a previous Menhir may still be writing to this Neo4j"
+fi
+
 log "starting ingest menhir on ${MENHIR_URL}..."
 ( cd "${MENHIR_FRONTIER}" && "${MENHIR_FRONTIER_BIN}" serve --port "${MENHIR_PORT}" ) & MENHIR_PID=$!
 for _ in $(seq 1 90); do curl -sf "${MENHIR_URL}/api/health" >/dev/null 2>&1 && break; sleep 2; done
