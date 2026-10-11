@@ -9,6 +9,9 @@ Resumability:
 - An item NOT in the manifest may have partial data from a prior crash, so its namespace is
   force-reset before re-ingesting. The reset removes the graph partition, scalar state, and
   namespace-keyed TurnEvidence -- guaranteeing no duplicate evidence or episodes.
+- --resume-partial (opt-in): instead of resetting, keep a namespace's stored episodes when they
+  provably are the first k episodes the item submits (byte-equal, in order, all READY/FAILED),
+  and submit only the rest. Any mismatch or unreadable state resets (or fails closed) as before.
 - Per-turn ingest has bounded retry/backoff; if it still fails the script exits non-zero and a
   re-run resumes from the manifest.
 
@@ -70,7 +73,7 @@ DEFAULT_MANIFEST = os.getenv(
 import httpx  # noqa: E402
 from validate_run import consolidation_errors  # noqa: E402
 from archolith_bench.harness.longmemeval import LongMemEvalMemoryAdapter  # noqa: E402
-from archolith_bench.harness.menhir_client import HttpMenhirClient  # noqa: E402
+from archolith_bench.harness.menhir_client import HttpMenhirClient, episode_body  # noqa: E402
 
 from claim_segmenter import (  # noqa: E402
     ClaimSegment,
@@ -124,6 +127,7 @@ class WindowItem:
     question_id: str
     namespace: str
     turns: int = 0
+    resumed: dict | None = None
 
 
 def _split_sentences(text: str, min_length: int = _SPLIT_MIN_LENGTH) -> list[str]:
@@ -151,6 +155,71 @@ def _parse_lme_date(date_str: str | None) -> str | None:
         return dt.replace(tzinfo=timezone.utc).isoformat()
     except (ValueError, TypeError):
         return None
+
+
+def _ensure_turn_evidence(
+    client: HttpMenhirClient,
+    ns: str,
+    role: str,
+    *,
+    evidence_body: str,
+    session_id: str | None,
+    occurred_at: str | None,
+    turn_key: str | None,
+    evidence_cache: dict[str, str] | None,
+    extract: bool,
+    tries: int = 4,
+) -> str | None:
+    """Record (or reuse) the :TurnEvidence for one turn; return its uuid, or None if none needed.
+
+    Idempotent: menhir MERGEs evidence on ``turn_key`` and returns the existing turn_id.
+    """
+    normalized_role = role.strip().lower() or "user"
+    is_user = normalized_role == "user"
+    turn_evidence_uuid: str | None = None
+
+    # A sibling segment of the same source turn already recorded the evidence.
+    if evidence_cache is not None and turn_key:
+        turn_evidence_uuid = evidence_cache.get(turn_key)
+
+    # Ground the user-tier claim by recording turn evidence first. Evidence-only
+    # turns are captured for every role, since they have no episode to ground and
+    # the record is the only trace the source turn leaves.
+    if turn_evidence_uuid is None and (is_user or not extract):
+        for attempt in range(tries):
+            try:
+                ev = client.record_turn_evidence(
+                    ns,
+                    evidence_body,
+                    role=normalized_role,
+                    declarant=normalized_role,
+                    session_id=session_id,
+                    occurred_at=occurred_at,
+                    turn_key=turn_key,
+                )
+                turn_evidence_uuid = ev.get("turn_id")
+                if turn_evidence_uuid and evidence_cache is not None and turn_key:
+                    evidence_cache[turn_key] = turn_evidence_uuid
+                break
+            except (httpx.HTTPError,) as exc:
+                if attempt == tries - 1:
+                    if REQUIRE_TURN_EVIDENCE:
+                        raise RuntimeError(
+                            f"turn-evidence capture failed after {tries} attempts"
+                        ) from exc
+                    # Legacy compatibility for non-scalar diagnostic builds.
+                    print(f"    turn-evidence failed after {tries} attempts: {exc.__class__.__name__}; "
+                          "ingesting without grounding", flush=True)
+                wait = 2 ** (attempt + 1)
+                print(f"    turn-evidence retry {attempt+1}/{tries} after {exc.__class__.__name__} -> sleep {wait}s", flush=True)
+                time.sleep(wait)
+
+    if REQUIRE_TURN_EVIDENCE and (is_user or not extract) and not turn_evidence_uuid:
+        raise RuntimeError(
+            "turn-evidence capture returned no turn_id; refusing to continue without "
+            f"grounding for namespace {ns}"
+        )
+    return turn_evidence_uuid
 
 
 def _ingest_turn(
@@ -205,51 +274,20 @@ def _ingest_turn(
     """
     normalized_role = role.strip().lower() or "user"
     is_user = normalized_role == "user"
-    turn_evidence_uuid: str | None = None
     # The evidence body is the ORIGINAL turn, never the segment being ingested.
     evidence_body = content if evidence_text is None else evidence_text
-
-    # A sibling segment of the same source turn already recorded the evidence.
-    if evidence_cache is not None and turn_key:
-        turn_evidence_uuid = evidence_cache.get(turn_key)
-
-    # Ground the user-tier claim by recording turn evidence first. Evidence-only
-    # turns are captured for every role, since they have no episode to ground and
-    # the record is the only trace the source turn leaves.
-    if turn_evidence_uuid is None and (is_user or not extract):
-        for attempt in range(tries):
-            try:
-                ev = client.record_turn_evidence(
-                    ns,
-                    evidence_body,
-                    role=normalized_role,
-                    declarant=normalized_role,
-                    session_id=session_id,
-                    occurred_at=occurred_at,
-                    turn_key=turn_key,
-                )
-                turn_evidence_uuid = ev.get("turn_id")
-                if turn_evidence_uuid and evidence_cache is not None and turn_key:
-                    evidence_cache[turn_key] = turn_evidence_uuid
-                break
-            except (httpx.HTTPError,) as exc:
-                if attempt == tries - 1:
-                    if REQUIRE_TURN_EVIDENCE:
-                        raise RuntimeError(
-                            f"turn-evidence capture failed after {tries} attempts"
-                        ) from exc
-                    # Legacy compatibility for non-scalar diagnostic builds.
-                    print(f"    turn-evidence failed after {tries} attempts: {exc.__class__.__name__}; "
-                          "ingesting without grounding", flush=True)
-                wait = 2 ** (attempt + 1)
-                print(f"    turn-evidence retry {attempt+1}/{tries} after {exc.__class__.__name__} -> sleep {wait}s", flush=True)
-                time.sleep(wait)
-
-    if REQUIRE_TURN_EVIDENCE and (is_user or not extract) and not turn_evidence_uuid:
-        raise RuntimeError(
-            "turn-evidence capture returned no turn_id; refusing to continue without "
-            f"grounding for namespace {ns}"
-        )
+    turn_evidence_uuid = _ensure_turn_evidence(
+        client,
+        ns,
+        role,
+        evidence_body=evidence_body,
+        session_id=session_id,
+        occurred_at=occurred_at,
+        turn_key=turn_key,
+        evidence_cache=evidence_cache,
+        extract=extract,
+        tries=tries,
+    )
 
     # Evidence-only: the turn is recorded, but there is no episode to enrich.
     if not extract:
@@ -282,15 +320,24 @@ def _ingest_turn(
             time.sleep(wait)
 
 
-def _cypher(query: str) -> list[list[str]]:
+def _cypher(query: str, *, stdin: bool = False) -> list[list[str]]:
     """Run a read-only cypher query against the lme Neo4j via docker exec; return data rows
-    (header dropped). Returns [] on any failure (docker missing / neo4j unreachable)."""
+    (header dropped). Returns [] on any failure (docker missing / neo4j unreachable).
+
+    ``stdin=True`` passes the query on stdin, for queries too long for the command line."""
     try:
-        proc = subprocess.run(
-            ["docker", "exec", NEO4J_CONTAINER, "cypher-shell", "-u", "neo4j", "-p", NEO4J_PW,
-             "--format", "plain", query],
-            capture_output=True, text=True, timeout=300,
-        )
+        if stdin:
+            proc = subprocess.run(
+                ["docker", "exec", "-i", NEO4J_CONTAINER, "cypher-shell", "-u", "neo4j",
+                 "-p", NEO4J_PW, "--format", "plain"],
+                input=query, capture_output=True, text=True, timeout=300,
+            )
+        else:
+            proc = subprocess.run(
+                ["docker", "exec", NEO4J_CONTAINER, "cypher-shell", "-u", "neo4j", "-p", NEO4J_PW,
+                 "--format", "plain", query],
+                capture_output=True, text=True, timeout=300,
+            )
     except Exception:
         return []
     if proc.returncode != 0:
@@ -677,6 +724,202 @@ def _await_stale_episode_settlement(
         time.sleep(poll_s)
 
 
+def _cypher_string_literal(text: str) -> str:
+    """Single-quoted Cypher literal safe for any text.
+
+    Neo4j expands \\uXXXX before tokenizing, so a quote or backslash must never be written as
+    \\uXXXX (\\u0027 would close the literal). Those two get backslash escapes, printable ASCII
+    is literal, and everything else is \\uXXXX of its UTF-16 code units.
+    """
+    simple = {"'": "\\'", "\\": "\\\\", "\n": "\\n", "\r": "\\r", "\t": "\\t"}
+    out: list[str] = []
+    for ch in text:
+        if ch in simple:
+            out.append(simple[ch])
+            continue
+        if " " <= ch <= "~":
+            out.append(ch)
+            continue
+        data = ch.encode("utf-16-le")
+        for i in range(0, len(data), 2):
+            out.append("\\u%04X" % int.from_bytes(data[i:i + 2], "little"))
+    return "'" + "".join(out) + "'"
+
+
+def _lease_seconds_remaining(ns: str) -> int:
+    """Neo4j-clock seconds until the latest ENRICHING lease in *ns* expires; 0 if none/expired,
+    -1 when unreadable."""
+    return _cypher_counts(
+        f"MATCH (e:Episodic {{namespace:'{ns}'}}) WHERE e.processing_state='ENRICHING' "
+        "WITH max(e.processing_lease_expires_at) AS m "
+        "RETURN CASE WHEN m IS NULL THEN 0 "
+        "WHEN m.epochSeconds - datetime().epochSeconds < 0 THEN 0 "
+        "ELSE m.epochSeconds - datetime().epochSeconds END;",
+        1,
+    )[0]
+
+
+def _settle_timeout_s(namespaces: list[str], args) -> float:
+    """Stale-settlement wait: 60s today; with --resume-partial, outlast the episode leases."""
+    if not getattr(args, "resume_partial", False):
+        return 60.0
+    remaining = [_lease_seconds_remaining(namespace) for namespace in namespaces]
+    if any(value < 0 for value in remaining):
+        raise RuntimeError(
+            "could not read episode lease expiry; refusing to resume (unreadable is never "
+            "settlement): " + ", ".join(namespaces)
+        )
+    # The episode lease is fixed at claim (900s, not renewed by the heartbeat) and a newly
+    # started Menhir re-enriches expired ENRICHING rows itself, so wait out lease + one drain.
+    return float(max(remaining, default=0)) + args.drain_timeout
+
+
+@dataclass(frozen=True)
+class _StoredEpisode:
+    uuid: str
+    processing_state: str
+    processing_attempts: int
+    matches: bool
+
+
+def _stored_submitted_episodes(
+    ns: str, expected_bodies: list[str]
+) -> list[_StoredEpisode] | None:
+    """Submitted episodes of *ns* in submit order, each flagged for byte-equality with the
+    expected body at the same index (compared inside Neo4j). None when unreadable."""
+    where = (
+        "e.processing_state IS NOT NULL AND NOT coalesce(e.is_evidence_projection, false)"
+    )
+    count = _cypher_count(
+        f"MATCH (e:Episodic {{namespace:'{ns}'}}) WHERE {where} RETURN count(e);"
+    )
+    if count < 0:
+        return None
+    if count == 0:
+        return []
+    literals = ", ".join(_cypher_string_literal(body) for body in expected_bodies)
+    rows = _cypher(
+        f"MATCH (e:Episodic {{namespace:'{ns}'}}) WHERE {where} "
+        "WITH e ORDER BY e.queued_at, e.uuid "
+        f"WITH collect(e) AS eps, [{literals}] AS exp "
+        "UNWIND range(0, size(eps) - 1) AS i "
+        "RETURN i, eps[i].uuid, eps[i].processing_state, "
+        "coalesce(toInteger(eps[i].processing_attempts), 0), "
+        "(i < size(exp) AND eps[i].content = exp[i]);",
+        stdin=True,
+    )
+    if len(rows) != count:
+        return None
+    stored: list[_StoredEpisode] = []
+    try:
+        for row in rows:
+            if len(row) < 5:
+                return None
+            flag = row[4].strip().upper()
+            if flag not in {"TRUE", "FALSE"}:
+                return None
+            stored.append(
+                _StoredEpisode(
+                    uuid=row[1],
+                    processing_state=row[2].upper().rsplit(".", 1)[-1],
+                    processing_attempts=int(row[3] or 0),
+                    matches=flag == "TRUE",
+                )
+            )
+    except ValueError:
+        return None
+    return stored
+
+
+@dataclass
+class _ResumePoint:
+    turns: Iterator[IngestTurn]  # positioned just after the last stored episode's turn
+    active: tuple[str, bool] | None  # adopted episode to keep monitoring: (uuid, already_retried)
+    resumed: dict | None  # manifest annotation; None when the namespace was reset
+
+
+def _resume_or_reset(
+    client: HttpMenhirClient,
+    admin: httpx.Client,
+    menhir_url: str,
+    state: WindowItem,
+    *,
+    adapter: LongMemEvalMemoryAdapter,
+    segmentation: str,
+    evidence_by_turn: dict[str, str],
+) -> _ResumePoint:
+    """Keep the stored episodes only when provably the first k this item submits; else reset."""
+    ns = state.namespace
+
+    def fresh() -> Iterator[IngestTurn]:
+        return _iter_item_turns(adapter, state.item, ns, segmentation)
+
+    expected = [
+        episode_body(
+            turn.role, turn.content,
+            grounded=(turn.role.strip().lower() or "user") == "user",
+        )
+        for turn in fresh()
+        if turn.extract
+    ]
+    stored = _stored_submitted_episodes(ns, expected)
+    if stored is None:
+        raise RuntimeError(
+            f"stored episodes unreadable for {ns}; refusing to reset or resume on unknown state"
+        )
+
+    reason = ""
+    if len(stored) > len(expected):
+        reason = f"{len(stored)} stored episodes exceed the {len(expected)} expected"
+    elif any(not ep.matches for ep in stored):
+        bad = next(i for i, ep in enumerate(stored) if not ep.matches)
+        reason = f"stored episode {bad} differs from the expected body"
+    elif any(ep.processing_state not in {"READY", "FAILED"} for ep in stored):
+        reason = "a stored episode is not READY or FAILED"
+    if stored and reason:
+        print(
+            f"[lme-ingest] partial resume refused for {ns}: {reason}; resetting",
+            flush=True,
+        )
+    if not stored or reason:
+        _reset_namespace(admin, menhir_url, ns)
+        return _ResumePoint(turns=fresh(), active=None, resumed=None)
+
+    k = len(stored)
+    turns = fresh()
+    consumed_extract = 0
+    while consumed_extract < k:
+        turn = next(turns)  # cannot run dry: k <= len(expected) extract turns
+        is_user = (turn.role.strip().lower() or "user") == "user"
+        if is_user or not turn.extract:
+            _ensure_turn_evidence(
+                client,
+                ns,
+                turn.role,
+                evidence_body=turn.evidence_text or turn.content,
+                session_id=turn.session_id,
+                occurred_at=turn.occurred_at,
+                turn_key=turn.turn_key or None,
+                evidence_cache=evidence_by_turn,
+                extract=turn.extract,
+            )
+        state.turns += 1
+        if turn.extract:
+            consumed_extract += 1
+
+    # Whether the stopped run already retried a FAILED last episode is not recorded durably;
+    # adopting it as not-yet-retried costs at most one extra attempt.
+    active = (stored[-1].uuid, False) if stored[-1].processing_state == "FAILED" else None
+    resumed = {
+        "skipped_episodes": k,
+        "failed_in_prefix": sum(1 for ep in stored if ep.processing_state == "FAILED"),
+        "adopted_failed": active is not None,
+    }
+    state.resumed = resumed
+    print(f"[lme-ingest] partial resume {ns}: keeping {k} stored episodes", flush=True)
+    return _ResumePoint(turns=turns, active=active, resumed=resumed)
+
+
 def _reset_window_namespaces(
     admin: httpx.Client,
     menhir_url: str,
@@ -892,6 +1135,8 @@ def _ingest_window(
     *,
     timeout_s: float,
     poll_s: float = 1.0,
+    initial_active: dict[int, tuple[str, bool]] | None = None,
+    evidence_by_turn: dict[str, str] | None = None,
 ) -> dict[str, int]:
     """Keep one episode active per namespace while distinct namespaces run concurrently.
 
@@ -909,7 +1154,8 @@ def _ingest_window(
     # turn_key -> :TurnEvidence uuid. Every segment cut from one source turn reuses the first
     # segment's record, so one source turn is one evidence node no matter how it was split.
     # Keys are namespace-qualified, so sharing one map across the window is safe.
-    evidence_by_turn: dict[str, str] = {}
+    if evidence_by_turn is None:
+        evidence_by_turn = {}
 
     def submit_next(index: int) -> bool:
         episode_uuid = _submit_next_turn(
@@ -921,6 +1167,9 @@ def _ingest_window(
         return False
 
     for index in range(len(window)):
+        if initial_active and index in initial_active:
+            active[index] = initial_active[index]
+            continue
         submit_next(index)
 
     while active:
@@ -1027,6 +1276,7 @@ def _complete_item(
     user_turns_submitted = _user_turns_submitted(
         _iter_item_turns(adapter, state.item, state.namespace, args.segmentation)
     )
+    resumed_row = {"resumed": state.resumed} if state.resumed is not None else {}
     return {
         "question_id": state.question_id,
         "namespace": state.namespace,
@@ -1059,6 +1309,7 @@ def _complete_item(
         **scalar_counts,
         "user_turns_submitted": user_turns_submitted,
         **integrity,
+        **resumed_row,
     }
 
 
@@ -1161,7 +1412,27 @@ def _ingest_rolling(
         )
         # Same order as the fixed window: settle on the rows that prove a stale worker is alive,
         # then reset once.
-        _await_stale_episode_settlement([state.namespace])
+        _await_stale_episode_settlement(
+            [state.namespace], timeout_s=_settle_timeout_s([state.namespace], args)
+        )
+        if getattr(args, "resume_partial", False):
+            point = _resume_or_reset(
+                client,
+                admin,
+                args.menhir_url,
+                state,
+                adapter=adapter,
+                segmentation=args.segmentation,
+                evidence_by_turn=evidence_by_turn,
+            )
+            slot = _RollingSlot(state=state, turns=point.turns, started_at=time.time())
+            if point.active is not None:
+                slot.episode_uuid, slot.retried = point.active
+            else:
+                slot.episode_uuid = _submit_next_turn(
+                    client, state, slot.turns, evidence_by_turn
+                )
+            return slot
         _reset_namespace(admin, args.menhir_url, state.namespace)
         slot = _RollingSlot(
             state=state,
@@ -1364,6 +1635,16 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help=(
             "keep --namespace-window items in flight and start the next as each one is "
             "manifested, instead of draining the whole window (default: LME_ROLLING_WINDOW=1)"
+        ),
+    )
+    ap.add_argument(
+        "--resume-partial",
+        action="store_true",
+        default=os.getenv("LME_RESUME_PARTIAL", "0") == "1",
+        help=(
+            "keep a namespace's stored episodes when they provably are the first k episodes "
+            "this item submits, and submit only the rest; otherwise reset (default: "
+            "LME_RESUME_PARTIAL=1)"
         ),
     )
     ap.add_argument(
@@ -1663,18 +1944,43 @@ def main(argv: list[str] | None = None) -> int:
         # that prove a worker is alive still exist. Resetting first would delete those rows and
         # make settlement read zero against a worker that is still running, which is the race
         # itself. This raises rather than proceeding if settlement cannot be confirmed.
-        _await_stale_episode_settlement(window_namespaces)
+        _await_stale_episode_settlement(
+            window_namespaces, timeout_s=_settle_timeout_s(window_namespaces, args)
+        )
 
-        # Only now, with no writer left, reset. An interrupted window has no manifest rows, so
-        # every namespace is fully cleared before resubmitting -- including TurnEvidence, which
-        # is not group_id-keyed. One reset after confirmed settlement is enough; a second pass
-        # would only re-open the gap it is meant to close.
-        _reset_window_namespaces(admin, args.menhir_url, window_namespaces)
+        initial_active: dict[int, tuple[str, bool]] | None = None
+        if getattr(args, "resume_partial", False):
+            # Keeps a provable stored prefix per namespace; anything else is reset inside.
+            evidence_by_turn: dict[str, str] = {}
+            points = [
+                _resume_or_reset(
+                    client,
+                    admin,
+                    args.menhir_url,
+                    state,
+                    adapter=adapter,
+                    segmentation=args.segmentation,
+                    evidence_by_turn=evidence_by_turn,
+                )
+                for state in window
+            ]
+            turn_iterators = [point.turns for point in points]
+            initial_active = {
+                index: point.active
+                for index, point in enumerate(points)
+                if point.active is not None
+            }
+        else:
+            # Only now, with no writer left, reset. An interrupted window has no manifest rows, so
+            # every namespace is fully cleared before resubmitting -- including TurnEvidence, which
+            # is not group_id-keyed. One reset after confirmed settlement is enough; a second pass
+            # would only re-open the gap it is meant to close.
+            _reset_window_namespaces(admin, args.menhir_url, window_namespaces)
 
-        turn_iterators = [
-            _iter_item_turns(adapter, state.item, state.namespace, args.segmentation)
-            for state in window
-        ]
+            turn_iterators = [
+                _iter_item_turns(adapter, state.item, state.namespace, args.segmentation)
+                for state in window
+            ]
         requeued_by_namespace = _ingest_window(
             window,
             turn_iterators,
@@ -1682,6 +1988,8 @@ def main(argv: list[str] | None = None) -> int:
             admin,
             args.menhir_url,
             timeout_s=args.drain_timeout,
+            initial_active=initial_active,
+            evidence_by_turn=evidence_by_turn if getattr(args, "resume_partial", False) else None,
         )
 
         drained_by_namespace = _drain_many(

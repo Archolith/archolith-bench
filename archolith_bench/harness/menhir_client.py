@@ -301,6 +301,11 @@ class StubMenhirClient:
         self._groups.pop(group_id, None)
 
 
+def episode_body(role: str, content: str, *, grounded: bool) -> str:
+    """The exact episode text ingest() sends: raw when grounded, "{role}: {content}" otherwise."""
+    return content if grounded else f"{role}: {content}"
+
+
 class HttpMenhirClient:
     """HTTP client for a real menhir instance (OpenAI-compatible style)."""
 
@@ -443,7 +448,7 @@ class HttpMenhirClient:
         # Scoped to the grounded path on purpose. The prefix still labels the speaker for turns that
         # are NOT cited as evidence, so ungrounded episode text -- and therefore extraction input on
         # every existing benchmark arm -- is unchanged and stays comparable.
-        episode_text = content if turn_evidence_uuid is not None else f"{role}: {content}"
+        episode_text = episode_body(role, content, grounded=turn_evidence_uuid is not None)
         payload: dict = {"episode": episode_text, "namespace": group_id}
         if source is not None:
             payload["source"] = source
