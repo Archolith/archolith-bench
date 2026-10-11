@@ -1,3 +1,9 @@
+## 2026-10-11 - Opt-in partial resume of unmanifested LongMemEval items
+
+- `LME_RESUME_PARTIAL=1` (`--resume-partial`) keeps an unmanifested item's stored episodes when they are byte-for-byte the first k episodes the item submits, in order, and submits only the rest. The comparison runs inside Neo4j. A mismatch resets the namespace as before, and an unreadable state fails closed. Default off; the reset path is unchanged.
+- With the flag on, the stale-settlement wait outlasts the stored episode leases plus one drain, instead of a flat 60s. A FAILED last episode is adopted with one retry. Resumed manifest rows carry `resumed`.
+- Before `menhir serve` starts on a partial resume, `lib/liveness_gate.py` refuses if any non-ssh process holds a bolt connection to this Neo4j, or a `serve --port` or `ingest.py` for this port is alive. Unknown state refuses.
+
 ## 2026-10-05 - Check provenance, source time and cross-namespace links at acceptance
 
 - After each item, ingest records read-only graph integrity counts in the manifest: submitted vs admitted user turns, admitted turns that were never projected, unfounded assertions, Graphiti episodes whose `valid_at` is not a submitted session date, READY queue episodes not paired to their Graphiti time, and cross-namespace links.
