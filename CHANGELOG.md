@@ -1,3 +1,10 @@
+## 2026-10-12 - Send Menhir the structured speaker role
+
+- `HttpMenhirClient.ingest` sends `role` (`user`, `assistant`, `tool`, `agent`, `system`; an empty role is `user`; anything else is omitted) on every episode. Menhir takes the speaker from it, or from the linked turn evidence for a grounded turn, and no longer reads a `user:` text prefix (Archolith/menhir#271, #272, #273). Older Menhir builds ignore the field.
+- Episode text is unchanged: grounded user turns stay raw and equal to their evidence, and ungrounded turns keep `{role}: ` because Menhir does not show the role to the extraction model, so extraction input on existing arms stays comparable.
+- `LME_LABEL_GROUNDED_USER_TURNS` is removed (reverts 6103f3d); the structured role replaces it.
+- Run identity records `sends_turn_role`. A resume of a run ingested without it, including one built with the label workaround, is refused before ingest in canonical and noncanonical mode; start a fresh run.
+
 ## 2026-10-11 - Opt-in speaker label on grounded user turns
 
 - `LME_LABEL_GROUNDED_USER_TURNS=1` writes `user: ` into each user turn's evidence and into its grounded episode, so the two stay byte-identical and Menhir's text-prefix speaker check (anchored-time resolver) sees the turn as the user's. Workaround until Menhir reads speaker role from structured data (Archolith/menhir#271). Default off; off sends exactly what it did before.

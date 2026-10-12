@@ -97,10 +97,6 @@ LME_REQUIRE_FRESH="${LME_REQUIRE_FRESH:-0}"
 # labelled noncanonical.
 LME_NONCANONICAL="${LME_NONCANONICAL:-0}"
 LME_REQUIRE_TURN_EVIDENCE="${LME_REQUIRE_TURN_EVIDENCE:-1}"
-# 1 = write "user: " into grounded user turns AND their turn evidence, so Menhir's text-prefix
-# speaker check (anchored-time resolver) sees them. Workaround for Archolith/menhir#271; part of
-# the run identity, so a resume cannot switch it.
-LME_LABEL_GROUNDED_USER_TURNS="${LME_LABEL_GROUNDED_USER_TURNS:-0}"
 
 # ---- Evidence capture: ON for every run, not just the KU buildout ----
 # WHY THESE DEFAULT ON. The decision points that explain a scalar result are recorded through the

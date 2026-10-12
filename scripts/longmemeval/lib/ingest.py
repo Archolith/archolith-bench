@@ -93,10 +93,6 @@ NEO4J_PW = os.getenv("LME_NEO4J_PW", "lmedata123")
 REQUIRE_TURN_EVIDENCE = os.getenv("LME_REQUIRE_TURN_EVIDENCE", "1").strip().lower() in {
     "1", "true", "yes", "on",
 }
-# Write "user: " into grounded user turns and their evidence, so Menhir's text-prefix role
-# check sees them. Workaround until Archolith/menhir#271; build_graph.sh records it in the
-# run identity so a resume cannot mix labelled and raw evidence.
-LABEL_GROUNDED_USER_TURNS = os.getenv("LME_LABEL_GROUNDED_USER_TURNS", "0").strip() == "1"
 
 # Sentence splitting — long multi-topic messages bury factual claims in geographic
 # noise, causing Graphiti's node resolution to collapse distinct entities (e.g.
@@ -858,12 +854,10 @@ def _resume_or_reset(
     def fresh() -> Iterator[IngestTurn]:
         return _iter_item_turns(adapter, state.item, ns, segmentation)
 
-    label = bool(getattr(client, "label_grounded_user_turns", False))
     expected = [
         episode_body(
             turn.role, turn.content,
             grounded=(turn.role.strip().lower() or "user") == "user",
-            label_grounded_user=label,
         )
         for turn in fresh()
         if turn.extract
@@ -1876,11 +1870,7 @@ def main(argv: list[str] | None = None) -> int:
     from archolith_bench.harness.memory_ab import assert_not_production
 
     assert_not_production(args.menhir_url)
-    client = (
-        HttpMenhirClient(args.menhir_url, label_grounded_user_turns=True)
-        if LABEL_GROUNDED_USER_TURNS
-        else HttpMenhirClient(args.menhir_url)
-    )
+    client = HttpMenhirClient(args.menhir_url)
     admin = httpx.Client(timeout=120.0)
     t_all = time.time()
     target_items = (
