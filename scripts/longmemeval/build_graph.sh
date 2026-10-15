@@ -289,9 +289,9 @@ export MENHIR_CANONICAL_SELF_BINDING_MODE="${LME_CANONICAL_SELF_BINDING_MODE}"
 export MENHIR_PERSONAL_MEMORY_CHAT_MODEL="${LME_EXTRACT_MODEL}"
 export MENHIR_PERSONAL_MEMORY_SUM_GROUNDING=1
 export LME_REQUIRE_TURN_EVIDENCE="${LME_REQUIRE_TURN_EVIDENCE}"
-# Raise the per-episode LLM extraction budget (default 10) so long turns finish enrichment
-# instead of hitting FAILED; the ingest script does a best-effort FAILED-retry for the rest.
-export MENHIR_MAX_LLM_CALLS_PER_JOB="${LME_MAX_LLM_CALLS_PER_JOB:-20}"
+# Per-episode LLM call budget. 100 is Menhir's default (above its measured p99 of 84). A refusal
+# marks the episode FAILED, and the optional flags add calls per episode, so 20 was too tight.
+export MENHIR_MAX_LLM_CALLS_PER_JOB="${LME_MAX_LLM_CALLS_PER_JOB:-100}"
 # Menhir allows this many distinct namespaces to enrich concurrently. ingest.py uses the same
 # value for its namespace window and keeps only one active episode in each namespace.
 export MENHIR_INGEST_CONCURRENCY="${LME_INGEST_CONCURRENCY}"
