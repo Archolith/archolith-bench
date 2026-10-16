@@ -15,7 +15,43 @@ _proxy_port = os.getenv("PROXY_PORT", "9800")
 PROXY_URL = os.getenv("PROXY_URL", f"http://localhost:{_proxy_port}/v1")
 DIRECT_URL = os.getenv("UPSTREAM_BASE_URL", "https://api.openai.com/v1")
 API_KEY = os.getenv("UPSTREAM_API_KEY", "")
-MODEL = os.getenv("BENCHMARK_MODEL", "gpt-4o-mini")
+MODEL = os.getenv("BENCHMARK_MODEL", "gpt-6-luna")
+
+# OpenAI reasoning models reject max_tokens and any non-default temperature, and count their
+# reasoning tokens inside max_completion_tokens -- so they get a far larger ceiling (billing is
+# on actual tokens). Menhir measured a Luna sample truncating at 2048 with 1969 reasoning tokens.
+_REASONING_PREFIXES = ("gpt-5", "gpt-6", "o1", "o3", "o4")
+REASONING_MAX_COMPLETION_TOKENS = 16384
+# Opt-in service tier (e.g. "flex"), sent only to reasoning models on the OpenAI endpoint.
+SERVICE_TIER_ENV = "BENCHMARK_SERVICE_TIER"
+FLEX_TIMEOUT_S = 900
+_CAPACITY_MARKERS = ("resource_unavailable", "resource unavailable")
+FLEX_CAPACITY_RETRIES = 8
+
+
+class ChatCallFailed(RuntimeError):
+    """A chat call produced no usable completion (raised only when ``strict``)."""
+
+
+def is_reasoning_model(model: str | None) -> bool:
+    return (model or "").strip().lower().startswith(_REASONING_PREFIXES)
+
+
+def build_chat_body(model: str, messages: list[dict], base_url: str) -> tuple[dict, float]:
+    """Request body and per-request timeout for ``model`` at ``base_url``."""
+    body: dict = {"model": model, "messages": messages}
+    timeout = 300.0
+    if is_reasoning_model(model):
+        body["max_completion_tokens"] = REASONING_MAX_COMPLETION_TOKENS
+        tier = os.getenv(SERVICE_TIER_ENV, "").strip().lower()
+        if tier and "api.openai.com" in (base_url or "").lower():
+            body["service_tier"] = tier
+            if tier == "flex":
+                timeout = float(FLEX_TIMEOUT_S)
+    else:
+        body["max_tokens"] = 2048
+        body["temperature"] = 0.3
+    return body, timeout
 
 
 def send_chat(
@@ -27,10 +63,17 @@ def send_chat(
     max_retries: int = 5,
     session_id: str | None = None,
     session_config: dict | None = None,
+    strict: bool = False,
 ) -> tuple[str, float, dict]:
     """Send a chat completion request. Returns (response_text, latency_ms, usage_dict).
 
-    Retries on 429 (rate limit) with exponential backoff.
+    Retries on 429 (rate limit) with exponential backoff. A Flex capacity 429
+    (``resource_unavailable``) gets its own longer budget; ``insufficient_quota`` is never
+    retried.
+
+    By default a failure comes back as a bracketed error string in place of the text. With
+    ``strict=True`` it raises ``ChatCallFailed`` instead, so a caller that scores the text
+    cannot grade an error message (or an empty, length-truncated reasoning reply) as an answer.
 
     When session_id is provided it is sent as the X-Session-ID header so the proxy
     pins this conversation to a known session id (which the trace query then reads
@@ -50,12 +93,7 @@ def send_chat(
         headers["X-Session-ID"] = session_id
     if session_config:
         headers["X-Session-Config"] = json.dumps(session_config)
-    body = {
-        "model": model,
-        "messages": messages,
-        "max_tokens": 2048,
-        "temperature": 0.3,
-    }
+    body, timeout = build_chat_body(model, messages, base_url)
     # deepseek-v4-flash "thinks" by default (~2.3x latency, ~3x output tokens). The
     # benchmark answers do not need chain-of-thought, so disable it for deepseek
     # targets. This is the ONLY accepted disable form for the DeepSeek API
@@ -63,41 +101,66 @@ def send_chat(
     if "deepseek" in (base_url or "").lower() or "deepseek" in (model or "").lower():
         body["thinking"] = {"type": "disabled"}
 
-    total_start = time.monotonic()
-    for attempt in range(max_retries + 1):
-        try:
-            resp = client.post(url, json=body, headers=headers, timeout=300)
-        except httpx.TimeoutException:
-            latency_ms = (time.monotonic() - total_start) * 1000
-            return f"[TIMEOUT after {latency_ms/1000:.0f}s]", latency_ms, {}
-        except httpx.HTTPError as e:
-            latency_ms = (time.monotonic() - total_start) * 1000
-            return f"[HTTP ERROR]: {e}", latency_ms, {}
+    def _fail(message: str) -> tuple[str, float, dict]:
+        latency_ms = (time.monotonic() - total_start) * 1000
+        if strict:
+            raise ChatCallFailed(f"{model}: {message}")
+        return message, latency_ms, {}
 
-        if resp.status_code == 429 and attempt < max_retries:
-            retry_after = resp.headers.get("Retry-After") or resp.headers.get("retry-after")
-            if retry_after:
-                try:
-                    wait = int(retry_after)
-                except ValueError:
+    total_start = time.monotonic()
+    attempt = 0
+    capacity_attempt = 0
+    while True:
+        try:
+            resp = client.post(url, json=body, headers=headers, timeout=timeout)
+        except httpx.TimeoutException:
+            return _fail(f"[TIMEOUT after {(time.monotonic() - total_start):.0f}s]")
+        except httpx.HTTPError as e:
+            return _fail(f"[HTTP ERROR]: {e}")
+
+        if resp.status_code == 429:
+            body_text = (resp.text or "").lower()
+            if "insufficient_quota" in body_text:
+                break
+            if any(marker in body_text for marker in _CAPACITY_MARKERS):
+                if capacity_attempt >= FLEX_CAPACITY_RETRIES:
+                    break
+                wait = min(300, 15 * 2 ** capacity_attempt)
+                capacity_attempt += 1
+                print(f"  [429] Flex capacity unavailable, waiting {wait}s "
+                      f"({capacity_attempt}/{FLEX_CAPACITY_RETRIES})...")
+                time.sleep(wait)
+                continue
+            if attempt < max_retries:
+                retry_after = resp.headers.get("Retry-After") or resp.headers.get("retry-after")
+                if retry_after:
+                    try:
+                        wait = int(retry_after)
+                    except ValueError:
+                        wait = 2 ** attempt * 10
+                else:
                     wait = 2 ** attempt * 10
-            else:
-                wait = 2 ** attempt * 10
-            wait = min(wait, 300)
-            print(f"  [429] Rate limited, waiting {wait}s before retry {attempt + 1}/{max_retries}...")
-            time.sleep(wait)
-            continue
+                wait = min(wait, 300)
+                print(f"  [429] Rate limited, waiting {wait}s before retry {attempt + 1}/{max_retries}...")
+                time.sleep(wait)
+                attempt += 1
+                continue
 
         break
 
     latency_ms = (time.monotonic() - total_start) * 1000
 
     if resp.status_code != 200:
-        return f"[ERROR {resp.status_code}]: {resp.text[:300]}", latency_ms, {}
+        return _fail(f"[ERROR {resp.status_code}]: {resp.text[:300]}")
 
     data = resp.json()
-    text = data.get("choices", [{}])[0].get("message", {}).get("content", "") or ""
+    choice = (data.get("choices") or [{}])[0]
+    text = (choice.get("message") or {}).get("content", "") or ""
     usage = data.get("usage", {})
+    if strict and not text.strip():
+        # A reasoning model that spends its whole budget thinking returns empty content with
+        # finish_reason "length"; scoring that as an answer is a silent wrong grade.
+        raise ChatCallFailed(f"{model}: empty completion (finish_reason={choice.get('finish_reason')!r})")
     return text, latency_ms, usage
 
 

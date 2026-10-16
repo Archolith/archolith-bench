@@ -24,9 +24,9 @@ LIMIT="${2:-30}"
 # Pre-built LME graph (from build_graph.sh) — REUSE only, NEVER create or reset here.
 MENHIR_PORT="${LME_PORT_RECALL}"
 MENHIR_URL="http://localhost:${MENHIR_PORT}"
-ANSWER_MODEL="${LME_ANSWER_MODEL:-gpt-4o}"
+ANSWER_MODEL="${LME_ANSWER_MODEL}"
 SCORER="${SCORER:-${LME_SCORER}}"   # framework default is llm-judge (config.sh); containment undercounts (paraphrase)
-JUDGE_MODEL="${LME_JUDGE_MODEL:-gpt-4o-mini}"   # llm-judge grader model (recorded in the manifest)
+JUDGE_MODEL="${LME_JUDGE_MODEL}"   # llm-judge grader model (recorded in the manifest)
 RECALL_TOP_K="${LME_RECALL_LIMIT}"              # per-question recall depth
 # MUST match the variant the graph was ingested under, or question_ids (namespaces) won't line up.
 export LONGMEMEVAL_VARIANT="${LONGMEMEVAL_VARIANT:-oracle}"

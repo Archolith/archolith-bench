@@ -175,7 +175,7 @@ def main() -> None:
     score_fn = LLMJudgeScorer(
         base_url=os.environ.get("UPSTREAM_BASE_URL") or "https://api.openai.com/v1",
         api_key=judge_key,
-        model=os.environ.get("LME_JUDGE_MODEL", "gpt-4o-mini"),
+        model=os.environ.get("LME_JUDGE_MODEL", "gpt-6-luna"),
     )
     checkpoint = MemoryCheckpoint(
         checkpoint_path_for(results_dir, adapter.benchmark_id, os.environ.get("LME_ANSWER_MODEL", "gpt-4o"))

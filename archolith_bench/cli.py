@@ -306,8 +306,8 @@ def main(argv: list[str] | None = None) -> None:
     harness_p.add_argument("--scorer", choices=["containment", "llm-judge"], default="containment",
                            help="Memory benchmarks: 'containment' (fast, offline) or 'llm-judge' "
                                 "(LongMemEval protocol; comparable to published Mem0/Zep numbers).")
-    harness_p.add_argument("--judge-model", default="gpt-4o-mini",
-                           help="llm-judge: grader model (default gpt-4o-mini; use gpt-4o for paper-fidelity)")
+    harness_p.add_argument("--judge-model", default="gpt-6-luna",
+                           help="llm-judge: grader model (default gpt-6-luna; use gpt-4o for paper-fidelity)")
     harness_p.add_argument("--judge-url", default=None,
                            help="llm-judge: grader base URL (default: UPSTREAM_BASE_URL/OpenAI)")
     harness_p.add_argument("--judge-api-key", default=None,
@@ -1564,7 +1564,7 @@ def _run_menhir(args: argparse.Namespace) -> None:
             menhir_url=args.menhir_url,
             resume=False,
             scorer="containment",
-            judge_model="gpt-4o-mini",
+            judge_model="gpt-6-luna",
             judge_url=None,
             judge_api_key=None,
             confirm_menhir_reset=False,

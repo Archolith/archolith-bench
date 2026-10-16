@@ -65,15 +65,12 @@ LME_PORT_BRIEF="${LME_PORT_BRIEF:-8118}"               # analysis/brief_ab.sh (B
 LME_PORT_ENTROPY="${LME_PORT_ENTROPY:-8119}"           # analysis/entropy.sh (D0 retrieval entropy)
 
 # ---- Models ----
-# gpt-4o-mini (not nano): matches what Zep/Graphiti and Mem0 both use for LongMemEval
-# extraction, so results are comparable to their published numbers. Confirmed via direct
-# A/B test 2026-07-15 that nano measurably under-extracts vs mini under sparse context
-# (see menhir/.agent/reviews/rca-lme-stale-fact-retention-2026-07-15.md) -- mini recovers
-# more entities but does NOT fully fix the RELEVANT_SCHEMA_LIMIT=10 recency-window bug;
-# see menhir/.agent/plans/menhir-extraction-prompt-recency-recall-research.md for the
-# follow-on prompt-level research. Slower/costlier full-corpus builds than nano was chosen
-# for; accept the tradeoff for comparability, same as Zep/Mem0 did.
-LME_EXTRACT_MODEL="${LME_EXTRACT_MODEL:-gpt-4o-mini}"
+# gpt-6-luna: gpt-4o-mini is deprecated (2026-10). Mini had been chosen to match what Zep/Graphiti
+# and Mem0 used for LongMemEval extraction; with it gone that comparability is lost, so builds on
+# Luna are not directly comparable to their published numbers or to earlier mini builds. Menhir
+# shapes reasoning-model requests (max_completion_tokens, no temperature) and applies its gpt-6
+# extraction profile; the service tier below puts these calls on Flex.
+LME_EXTRACT_MODEL="${LME_EXTRACT_MODEL:-gpt-6-luna}"
 # Extraction defaults to the canonical OpenAI path for benchmark comparability.  A local
 # OpenAI-compatible endpoint can be selected for explicitly noncanonical model probes without
 # changing the embedding provider used by the corpus build.
@@ -81,13 +78,14 @@ LME_EXTRACT_PROVIDER="${LME_EXTRACT_PROVIDER:-openai}"
 LME_EXTRACT_BASE_URL="${LME_EXTRACT_BASE_URL:-}"
 LME_EXTRACT_API_KEY="${LME_EXTRACT_API_KEY:-not-needed}"
 LME_ANSWER_MODEL="${LME_ANSWER_MODEL:-gpt-4o}"
-LME_JUDGE_MODEL="${LME_JUDGE_MODEL:-gpt-4o-mini}"
+LME_JUDGE_MODEL="${LME_JUDGE_MODEL:-gpt-6-luna}"
 LME_EMBED_MODEL="${LME_EMBED_MODEL:-text-embedding-3-small}"
 LME_SCORER="${LME_SCORER:-llm-judge}"
-# OpenAI service tier for Menhir's calls. Menhir sends it only to reasoning models
-# (gpt-5/gpt-6/o-series) on the OpenAI endpoint, so gpt-4o-mini extraction is unaffected.
-# Empty sends no tier.
+# OpenAI service tier for Menhir's calls and the harness's answer/judge calls. Both send it only
+# to reasoning models (gpt-5/gpt-6/o-series) on the OpenAI endpoint, so a gpt-4o answer model is
+# unaffected. Empty sends no tier.
 LME_OPENAI_SERVICE_TIER="${LME_OPENAI_SERVICE_TIER:-flex}"
+export BENCHMARK_SERVICE_TIER="${BENCHMARK_SERVICE_TIER:-${LME_OPENAI_SERVICE_TIER}}"
 
 # ---- Anchored time (ingest-time; part of the graph's identity) ----
 # Resolver + blind attach check on for the n=500 build (owner decision, menhir #281).

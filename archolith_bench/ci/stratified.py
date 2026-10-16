@@ -60,7 +60,7 @@ def run_stratified_slice(
     *,
     menhir_url: str,
     output_dir: str | Path,
-    judge_model: str = "gpt-4o-mini",
+    judge_model: str = "gpt-6-luna",
     questions_per_type: int = DEFAULT_QUESTIONS_PER_TYPE,
     slice_types: tuple[str, ...] = DEFAULT_SLICE_TYPES,
     scorer: str = "llm-judge",

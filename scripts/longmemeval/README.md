@@ -54,8 +54,8 @@ The built-in analysis harnesses (`matrix`, `msc`, `ablation`) already loop acros
 
 ```bash
 # 1. Build the persistent graph once (~1 day for 500-item oracle variant was measured with
-#    LME_EXTRACT_MODEL=gpt-4.1-nano; now defaults to gpt-4o-mini (2026-07-15, comparability with
-#    Zep/Mem0) which is slower/costlier -- this estimate is stale until re-measured)
+#    LME_EXTRACT_MODEL=gpt-4.1-nano; now defaults to gpt-6-luna on Flex, which is slower --
+#    this estimate is stale until re-measured)
 ./lme.sh build 500
 
 # 2. Check graph status (read-only; safe to run mid-ingest)
@@ -117,8 +117,10 @@ Anchored time is on by default for builds: `LME_ANCHORED_TIME_RESOLVER=1` and
 `LME_ANCHORED_TIME_ATTACH=1`, with `LME_ANCHORED_TIME_MODEL` (and `_ATTACH_MODEL`) defaulting
 to `gpt-6-luna`. `LME_ANCHORED_TIME_EXPIRY` is wired but defaults to 0 until it has a live
 readback. Attach requires the resolver, and both require `LME_EXTRACT_PROVIDER=openai`.
-`LME_OPENAI_SERVICE_TIER` (default `flex`) is forwarded as `MENHIR_OPENAI_SERVICE_TIER`; Menhir
-applies it only to reasoning models, so `gpt-4o-mini` extraction is unaffected. These settings
+`LME_OPENAI_SERVICE_TIER` (default `flex`) is forwarded as `MENHIR_OPENAI_SERVICE_TIER` and, for
+the harness's answer and judge calls, as `BENCHMARK_SERVICE_TIER`; both apply it only to reasoning
+models on the OpenAI endpoint. The harness fails an item (it is not checkpointed, so a resume
+retries it) rather than scoring a failed answer or judge call. These settings
 and `LME_EXTRACT_MODEL` are part of the graph's provenance identity: a resume that changes them,
 or that sets them on a graph whose record predates them, is refused.
 
@@ -542,9 +544,10 @@ LME_PORT_ABL=8114               # analysis/ablation_sweep.sh
 LME_PORT_RQ=8109                # analysis/lib/retrieval_quality.py
 
 # Models
-LME_EXTRACT_MODEL=gpt-4o-mini  # matches Zep/Mem0's published LongMemEval extraction model (2026-07-15)
+LME_EXTRACT_MODEL=gpt-6-luna   # gpt-4o-mini is deprecated; not comparable to Zep/Mem0's mini numbers
 LME_ANSWER_MODEL=gpt-4o
-LME_JUDGE_MODEL=gpt-4o-mini
+LME_JUDGE_MODEL=gpt-6-luna
+LME_OPENAI_SERVICE_TIER=flex   # reasoning models only (Menhir and the harness)
 LME_EMBED_MODEL=text-embedding-3-small
 LME_SCORER=llm-judge
 

@@ -44,7 +44,6 @@ export LME_RESULTS_DIR="${BENCH_DIR}/results/lme-ku-buildout/${RUN_ID}"
 export LME_MANIFEST_PATH="${LME_RESULTS_DIR}/manifest.json"
 export LME_REVERT_SNAPSHOT_PATH="${LME_RESULTS_DIR}/date-backfill-revert.json"
 export LONGMEMEVAL_VARIANT=oracle
-export LME_EXTRACT_MODEL="${LME_EXTRACT_MODEL:-gpt-4o-mini}"
 
 set -a
 source "${SCRIPT_DIR}/config.sh"

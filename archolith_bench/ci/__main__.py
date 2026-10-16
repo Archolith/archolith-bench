@@ -24,7 +24,7 @@ def main() -> int:
     p.add_argument("--max-calls", type=int, default=200)
     p.add_argument("--max-usd", type=float, default=5.0)
     p.add_argument("--max-seconds", type=float, default=900.0)
-    p.add_argument("--judge-model", default="gpt-4o-mini")
+    p.add_argument("--judge-model", default="gpt-6-luna")
     p.add_argument("--questions-per-type", type=int, default=20)
     p.add_argument("--baseline-file", default="benchmarks/longmemeval-baseline.json")
     p.add_argument("--runs-dir", default=".bench/runs")

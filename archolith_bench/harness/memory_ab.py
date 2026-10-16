@@ -520,7 +520,11 @@ def _run_memory_arm(
                         dry_run_reset=dry_run_reset,
                     )
         messages = adapter.build_messages(memory_context, question)
-        text, latency_ms, usage = send_fn(chat_client, chat_base_url, api_key, messages, model)
+        # strict: a failed call raises before scoring/checkpointing, so a resume retries the item
+        # instead of keeping an error string graded as a wrong answer.
+        text, latency_ms, usage = send_fn(
+            chat_client, chat_base_url, api_key, messages, model, strict=True
+        )
         inp, out = _usage_tokens(usage)
         correct = score_fn(item, text) if score_fn is not None else adapter.score(item, text)
         scorer_usage = (

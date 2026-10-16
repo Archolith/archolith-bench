@@ -253,7 +253,8 @@ Set environment variables in `.env`:
 - `UPSTREAM_API_KEY` (required for runs)
 - `PROXY_URL` (default: `http://localhost:9800/v1`)
 - `UPSTREAM_BASE_URL` (default: `https://api.openai.com/v1`)
-- `BENCHMARK_MODEL` (default: `gpt-4o-mini`)
+- `BENCHMARK_MODEL` (default: `gpt-6-luna`)
+- `BENCHMARK_SERVICE_TIER` (default: unset; e.g. `flex`, sent only to reasoning models on api.openai.com)
 
 ## Checkpoints
 

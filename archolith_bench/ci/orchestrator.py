@@ -50,7 +50,7 @@ class OrchestratorConfig:
     max_calls: int = 200
     max_usd: float = 5.0
     max_seconds: float = 900.0
-    judge_model: str = "gpt-4o-mini"
+    judge_model: str = "gpt-6-luna"
     questions_per_type: int = 20
     baseline_file: str = "benchmarks/longmemeval-baseline.json"
     runs_dir: str = ".bench/runs"

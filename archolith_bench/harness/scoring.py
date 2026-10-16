@@ -7,7 +7,7 @@ our accuracy comparable to those, this provides an LLM-judge scorer with the sam
 shape as `adapter.score(item, response_text) -> bool`.
 
 For a publishable, apples-to-apples number use the same judge model the field uses
-(gpt-4o); gpt-4o-mini is the cheaper default for internal runs.
+(gpt-4o); gpt-6-luna is the default for internal runs (gpt-4o-mini is deprecated).
 """
 
 from __future__ import annotations
@@ -83,8 +83,9 @@ class LLMJudgeScorer:
 
     def __call__(self, item: dict, response_text: str) -> bool:
         messages = _judge_messages(item, response_text)
+        # strict: a judge failure must not parse as "no" (a silent wrong grade).
         text, _latency, usage = self.send_fn(
-            self._client, self.base_url, self.api_key, messages, self.model
+            self._client, self.base_url, self.api_key, messages, self.model, strict=True
         )
         self.last_usage = dict(usage or {})
         return _parse_yes(text)

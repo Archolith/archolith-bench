@@ -305,7 +305,7 @@ def main() -> None:
         raise SystemExit("canonical fixture or baseline checkpoint is missing")
 
     answer_model = os.environ.get("LME_ANSWER_MODEL", "gpt-4o")
-    judge_model = os.environ.get("LME_JUDGE_MODEL", "gpt-4o-mini")
+    judge_model = os.environ.get("LME_JUDGE_MODEL", "gpt-6-luna")
     provider_base_url = os.environ.get(
         "LME_TYPED_PACKET_BASE_URL", DEFAULT_PROVIDER_BASE_URL
     ).rstrip("/")
