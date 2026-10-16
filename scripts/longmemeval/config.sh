@@ -84,6 +84,22 @@ LME_ANSWER_MODEL="${LME_ANSWER_MODEL:-gpt-4o}"
 LME_JUDGE_MODEL="${LME_JUDGE_MODEL:-gpt-4o-mini}"
 LME_EMBED_MODEL="${LME_EMBED_MODEL:-text-embedding-3-small}"
 LME_SCORER="${LME_SCORER:-llm-judge}"
+# OpenAI service tier for Menhir's calls. Menhir sends it only to reasoning models
+# (gpt-5/gpt-6/o-series) on the OpenAI endpoint, so gpt-4o-mini extraction is unaffected.
+# Empty sends no tier.
+LME_OPENAI_SERVICE_TIER="${LME_OPENAI_SERVICE_TIER:-flex}"
+
+# ---- Anchored time (ingest-time; part of the graph's identity) ----
+# Resolver + blind attach check on for the n=500 build (owner decision, menhir #281).
+# Expiry is wired but off until it has a live readback.
+LME_ANCHORED_TIME_RESOLVER="${LME_ANCHORED_TIME_RESOLVER:-1}"
+LME_ANCHORED_TIME_ATTACH="${LME_ANCHORED_TIME_ATTACH:-1}"
+LME_ANCHORED_TIME_EXPIRY="${LME_ANCHORED_TIME_EXPIRY:-0}"
+LME_ANCHORED_TIME_MODEL="${LME_ANCHORED_TIME_MODEL:-gpt-6-luna}"
+LME_ANCHORED_TIME_ATTACH_MODEL="${LME_ANCHORED_TIME_ATTACH_MODEL:-${LME_ANCHORED_TIME_MODEL}}"
+# Per-episode LLM call budget. 100 is Menhir's default (above its measured p99 of 84). A refusal
+# marks the episode FAILED, and the optional flags add calls per episode.
+LME_MAX_LLM_CALLS_PER_JOB="${LME_MAX_LLM_CALLS_PER_JOB:-100}"
 
 # ---- Ingest policy ----
 # Legacy sentence splitting inflated knowledge-update items by roughly 8x and was

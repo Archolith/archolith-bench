@@ -113,6 +113,19 @@ changed or previously unrecorded mode. `observe` records decisions without apply
 `enforce` applies the automatic-memory identity contract, not a guarantee of fact attribution.
 Choose and freeze the mode before the final ingest; no mode or feature default is promoted here.
 
+Anchored time is on by default for builds: `LME_ANCHORED_TIME_RESOLVER=1` and
+`LME_ANCHORED_TIME_ATTACH=1`, with `LME_ANCHORED_TIME_MODEL` (and `_ATTACH_MODEL`) defaulting
+to `gpt-6-luna`. `LME_ANCHORED_TIME_EXPIRY` is wired but defaults to 0 until it has a live
+readback. Attach requires the resolver, and both require `LME_EXTRACT_PROVIDER=openai`.
+`LME_OPENAI_SERVICE_TIER` (default `flex`) is forwarded as `MENHIR_OPENAI_SERVICE_TIER`; Menhir
+applies it only to reasoning models, so `gpt-4o-mini` extraction is unaffected. These settings
+and `LME_EXTRACT_MODEL` are part of the graph's provenance identity: a resume that changes them,
+or that sets them on a graph whose record predates them, is refused.
+
+`retry.sh` exports the same ingest settings as `build_graph.sh` and runs
+`run_provenance.py check-retry` first, refusing to re-enrich a graph whose recorded settings,
+commits, or surface differ. It records its pass as a `retry-failed` phase.
+
 1. **Build**: `lme.sh build [N]` — ingest N items (default 30, full 500 in oracle mode takes ~1 day) into a fresh persistent Neo4j, then leave it up. Build finishes by promoting all memories to PERSISTENT scope (step 2), so builds end ready-to-recall.
 2. **Promote**: `lme.sh promote` — flip every LME memory from `SESSION` to `PERSISTENT` scope (run automatically at the end of `build`; also runnable standalone, e.g. after a partial/legacy build). Idempotent and non-destructive. See [Memory scope](#memory-scope-regular-vs-session) below.
 3. **Backup/Restore**: `lme.sh backup` / `lme.sh restore` — dump and restore for safe archival.
@@ -681,7 +694,7 @@ The Docker container takes 10-20s to start. If it persists, check `docker ps` an
 The ingest may not have finished. Check `lme.sh status` and wait for queue_depth==0.
 
 ### FAILED episodes
-The ingest script retries FAILED episodes once. If episodes still fail, they hit the per-job LLM budget (`MENHIR_MAX_LLM_CALLS_PER_JOB=20`). Run `lme.sh retry` to reset+drain them.
+The ingest script retries FAILED episodes once. If episodes still fail, they hit the per-job LLM budget (`LME_MAX_LLM_CALLS_PER_JOB`, default 100). Run `lme.sh retry` to reset+drain them.
 
 A scalar build then **stops** on any residual FAILED episode. This gate is strict and has no
 tolerance knob — a FAILED episode means a turn never reached the graph, so scalar views, user-founded

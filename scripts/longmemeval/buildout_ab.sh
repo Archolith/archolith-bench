@@ -3,6 +3,7 @@
 # then recall+QA each. Measures ingest-code quality (the temporal/belief work), which the
 # recall-only A/B on a shared graph could not see. Never touches the backed-up menhir-lme-neo4j.
 set -uo pipefail
+source "$(dirname "${BASH_SOURCE[0]}")/config.sh"   # LME_* models and call cap
 LIMIT="${LIMIT:-30}"
 ARCH=/c/Users/thron/IdeaProjects/projects/archolith
 BENCH="$ARCH/archolith-bench"
@@ -41,14 +42,14 @@ run_branch(){
       LONGMEMEVAL_VARIANT=oracle \
       MENHIR_LOG_DIR="$OUT/menhir-logs" \
       MENHIR_BENCHMARK_MODE=1 MENHIR_API_HOST=127.0.0.1 MENHIR_API_PORT="$PORT" \
-      MENHIR_MAX_LLM_CALLS_PER_JOB=20 MENHIR_INGEST_CONCURRENCY=8 \
+      MENHIR_MAX_LLM_CALLS_PER_JOB="$LME_MAX_LLM_CALLS_PER_JOB" MENHIR_INGEST_CONCURRENCY=8 \
       OTEL_SDK_DISABLED=true LANGFUSE_TRACING_ENABLED=false LANGFUSE_PUBLIC_KEY="" LANGFUSE_SECRET_KEY="" LANGFUSE_HOST="" \
       MENHIR_OPERATOR_KEY="" MENHIR_AGENT_KEY="" MENHIR_READONLY_KEY="" MENHIR_API_KEY="" \
       NEO4J_URI="bolt://localhost:$BOLT" NEO4J_USER=neo4j NEO4J_PASSWORD="$PW" NEO4J_DATABASE=neo4j \
       GRAPHITI_LLM_PROVIDER=openai MEMORY_GRAPHITI_PROVIDER=openai LLM_CHAT_PROVIDER=openai MEMORY_CHAT_PROVIDER=openai \
       GRAPHITI_RERANKER_PROVIDER=openai MEMORY_GRAPHITI_RERANKER_PROVIDER=openai \
       GRAPHITI_EMBED_PROVIDER=openai MEMORY_GRAPHITI_EMBED_PROVIDER=openai \
-      OPENAI_API_KEY="$OPENAI_KEY" OPENAI_CHAT_MODEL=gpt-4.1-nano OPENAI_EMBED_MODEL=text-embedding-3-small \
+      OPENAI_API_KEY="$OPENAI_KEY" OPENAI_CHAT_MODEL="$LME_EXTRACT_MODEL" OPENAI_EMBED_MODEL="$LME_EMBED_MODEL" \
       PYTHONPATH="$SRC/src"; \
     mkdir -p "$OUT/menhir-logs"; cd "$SRC" && "$BIN" serve --port "$PORT" ) >"$OUT/serve.log" 2>&1 &
   PID=$!
@@ -63,13 +64,13 @@ run_branch(){
     --manifest "$MANIFEST_INGEST" >>"$LOG" 2>&1
   log "$LABEL: ingest done exit=$?"
 
-  # ---- recall+QA against the just-built graph (gpt-4o answer, llm-judge) ----
+  # ---- recall+QA against the just-built graph (LME_ANSWER_MODEL answer, llm-judge) ----
   log "$LABEL: recall+QA..."
   ( cd "$BENCH" && \
-    UPSTREAM_BASE_URL="https://api.openai.com/v1" UPSTREAM_API_KEY="$OPENAI_KEY" BENCHMARK_MODEL="gpt-4o" \
+    UPSTREAM_BASE_URL="https://api.openai.com/v1" UPSTREAM_API_KEY="$OPENAI_KEY" BENCHMARK_MODEL="$LME_ANSWER_MODEL" \
     OPENAI_API_KEY="$OPENAI_KEY" LONGMEMEVAL_VARIANT=oracle \
     "$BENCH_BIN" harness longmemeval-menhir --menhir-url "$URL" --recall-only \
-      --model gpt-4o --scorer llm-judge --judge-model gpt-4o-mini --format markdown \
+      --model "$LME_ANSWER_MODEL" --scorer llm-judge --judge-model "$LME_JUDGE_MODEL" --format markdown \
       --output-dir "$OUT" --out "$OUT/harness_recall_ab.md" --limit "$LIMIT" --resume ) >>"$LOG" 2>&1
   log "$LABEL: recall+QA done exit=$?"
 

@@ -20,6 +20,16 @@ esac
 for lane in "${LME_COUNTER_STATE_ENABLED}" "${LME_SCALAR_STATE_ENABLED}" "${MENHIR_PERSONAL_MEMORY_EVENT_HISTORY_ENABLED}"; do
   case "${lane}" in 0|1) ;; *) die "processing lane settings must be 0 or 1" ;; esac
 done
+for flag in "${LME_ANCHORED_TIME_RESOLVER}" "${LME_ANCHORED_TIME_ATTACH}" "${LME_ANCHORED_TIME_EXPIRY}"; do
+  case "${flag}" in 0|1) ;; *) die "LME_ANCHORED_TIME_* settings must be 0 or 1" ;; esac
+done
+# Menhir builds the attach check only inside the resolver; attach without it would be recorded
+# as on while doing nothing.
+[ "${LME_ANCHORED_TIME_ATTACH}" = "0" ] || [ "${LME_ANCHORED_TIME_RESOLVER}" = "1" ] ||
+  die "LME_ANCHORED_TIME_ATTACH=1 requires LME_ANCHORED_TIME_RESOLVER=1"
+# The resolver uses the extraction client, so a local endpoint would receive the OpenAI model name.
+[ "${LME_EXTRACT_PROVIDER}" = "openai" ] || [ "${LME_ANCHORED_TIME_RESOLVER}" = "0" ] ||
+  die "anchored time needs LME_EXTRACT_PROVIDER=openai; set LME_ANCHORED_TIME_RESOLVER=0 for local extraction"
 case "${LME_INGEST_CONCURRENCY}" in
   ''|*[!0-9]*|0) die "LME_INGEST_CONCURRENCY must be a positive integer" ;;
 esac
@@ -150,6 +160,14 @@ cat > "${GRAPH_ATTEMPT_RECORD}" <<EOF
   "scalar_reconcile_subject": ${LME_SCALAR_RECONCILE_SUBJECT},
   "scalar_canonical_self": ${LME_SCALAR_CANONICAL_SELF},
   "canonical_self_binding_mode": "${LME_CANONICAL_SELF_BINDING_MODE}",
+  "extract_model": "${LME_EXTRACT_MODEL}",
+  "anchored_time_resolver_enabled": ${LME_ANCHORED_TIME_RESOLVER},
+  "anchored_time_attach_enabled": ${LME_ANCHORED_TIME_ATTACH},
+  "anchored_time_expiry_enabled": ${LME_ANCHORED_TIME_EXPIRY},
+  "anchored_time_model": "${LME_ANCHORED_TIME_MODEL}",
+  "anchored_time_attach_model": "${LME_ANCHORED_TIME_ATTACH_MODEL}",
+  "openai_service_tier": "${LME_OPENAI_SERVICE_TIER}",
+  "max_llm_calls_per_job": ${LME_MAX_LLM_CALLS_PER_JOB},
   "scalar_output_required": ${LME_REQUIRE_SCALAR_OUTPUT},
   "turn_evidence_required": ${LME_REQUIRE_TURN_EVIDENCE},
   "consolidation_audit_enabled": ${LME_CONSOLIDATION_AUDIT_ENABLED},
@@ -232,7 +250,15 @@ fi
   --setting "consolidation_audit_enabled=${LME_CONSOLIDATION_AUDIT_ENABLED}" \
   --setting "recall_audit_enabled=${LME_RECALL_AUDIT_ENABLED}" \
   --setting "menhir_log_level=${MENHIR_LOG_LEVEL:-${LME_MENHIR_LOG_LEVEL}}" \
-  --setting "turn_evidence_required=${LME_REQUIRE_TURN_EVIDENCE}"
+  --setting "turn_evidence_required=${LME_REQUIRE_TURN_EVIDENCE}" \
+  --setting "extract_model=${LME_EXTRACT_MODEL}" \
+  --setting "anchored_time_resolver_enabled=${LME_ANCHORED_TIME_RESOLVER}" \
+  --setting "anchored_time_attach_enabled=${LME_ANCHORED_TIME_ATTACH}" \
+  --setting "anchored_time_expiry_enabled=${LME_ANCHORED_TIME_EXPIRY}" \
+  --setting "anchored_time_model=${LME_ANCHORED_TIME_MODEL}" \
+  --setting "anchored_time_attach_model=${LME_ANCHORED_TIME_ATTACH_MODEL}" \
+  --setting "openai_service_tier=${LME_OPENAI_SERVICE_TIER}" \
+  --setting "max_llm_calls_per_job=${LME_MAX_LLM_CALLS_PER_JOB}"
 log "graph provenance recorded: ${GRAPH_PROVENANCE_PATH} (graph_fresh=${GRAPH_FRESH})"
 
 # ---- untracked-file preflight ----
@@ -289,9 +315,16 @@ export MENHIR_CANONICAL_SELF_BINDING_MODE="${LME_CANONICAL_SELF_BINDING_MODE}"
 export MENHIR_PERSONAL_MEMORY_CHAT_MODEL="${LME_EXTRACT_MODEL}"
 export MENHIR_PERSONAL_MEMORY_SUM_GROUNDING=1
 export LME_REQUIRE_TURN_EVIDENCE="${LME_REQUIRE_TURN_EVIDENCE}"
-# Per-episode LLM call budget. 100 is Menhir's default (above its measured p99 of 84). A refusal
-# marks the episode FAILED, and the optional flags add calls per episode, so 20 was too tight.
-export MENHIR_MAX_LLM_CALLS_PER_JOB="${LME_MAX_LLM_CALLS_PER_JOB:-100}"
+# Per-episode LLM call budget; see config.sh.
+export MENHIR_MAX_LLM_CALLS_PER_JOB="${LME_MAX_LLM_CALLS_PER_JOB}"
+# Anchored time and service tier: recorded in the attempt record above, and retry.sh must
+# export the same values (tests/test_lme_retry_parity.py).
+export MENHIR_ANCHORED_TIME_RESOLVER="${LME_ANCHORED_TIME_RESOLVER}"
+export MENHIR_ANCHORED_TIME_ATTACH="${LME_ANCHORED_TIME_ATTACH}"
+export MENHIR_ANCHORED_TIME_EXPIRY="${LME_ANCHORED_TIME_EXPIRY}"
+export MENHIR_ANCHORED_TIME_MODEL="${LME_ANCHORED_TIME_MODEL}"
+export MENHIR_ANCHORED_TIME_ATTACH_MODEL="${LME_ANCHORED_TIME_ATTACH_MODEL}"
+export MENHIR_OPENAI_SERVICE_TIER="${LME_OPENAI_SERVICE_TIER}"
 # Menhir allows this many distinct namespaces to enrich concurrently. ingest.py uses the same
 # value for its namespace window and keeps only one active episode in each namespace.
 export MENHIR_INGEST_CONCURRENCY="${LME_INGEST_CONCURRENCY}"

@@ -16,6 +16,7 @@ Verbs (all offline, no services touched)::
     run_provenance.py phase-start <path> --phase NAME [--manifest P] [--setting k=v ...]
     run_provenance.py phase-end   <path> --phase NAME --status STATUS [--setting k=v ...]
     run_provenance.py complete    <path> --harness-exit N
+    run_provenance.py check-retry <path> <retry-record.json> [--noncanonical]
 
 Types are coerced from ``--setting k=v``: ``true``/``false`` become booleans, digit strings
 become integers, everything else stays a string -- so the JSON stays machine-readable
@@ -48,6 +49,36 @@ IMMUTABLE_KEYS = (
     "counter_state_enabled",
     "event_history_enabled",
     "canonical_self_binding_mode",
+    "extract_model",
+    "anchored_time_resolver_enabled",
+    "anchored_time_attach_enabled",
+    "anchored_time_expiry_enabled",
+    "anchored_time_model",
+    "anchored_time_attach_model",
+)
+
+# Ingest behaviors that later code started recording. A graph whose record predates one of
+# them cannot show what it was built with, so a resume or retry that sets it is refused in
+# every mode rather than guessed: mixing an anchored-time-on enrichment into a graph built
+# without it (or the reverse) is not visible anywhere else.
+MUST_BE_RECORDED_KEYS = (
+    "canonical_self_binding_mode",
+    "extract_model",
+    "anchored_time_resolver_enabled",
+    "anchored_time_attach_enabled",
+    "anchored_time_expiry_enabled",
+    "anchored_time_model",
+    "anchored_time_attach_model",
+)
+
+# What retry.sh must reproduce exactly: it re-enriches FAILED episodes in an existing graph,
+# so any difference here makes one graph out of two configurations.
+RETRY_BEHAVIOR_KEYS = (
+    "container",
+    "scalar_state_enabled",
+    "counter_state_enabled",
+    "event_history_enabled",
+    *MUST_BE_RECORDED_KEYS,
 )
 
 # Code-commit keys are immutable in canonical mode. A resume that changes the Menhir or bench
@@ -156,11 +187,12 @@ def assert_same_run(
     """
     established = identity_of(previous)
     incoming = identity_of(attempt)
-    if "canonical_self_binding_mode" in incoming and "canonical_self_binding_mode" not in established:
-        raise ProvenanceMismatch(
-            "refusing to resume: original canonical_self_binding_mode was not recorded; "
-            "start a fresh run rather than inferring the existing graph's binding mode"
-        )
+    for key in MUST_BE_RECORDED_KEYS:
+        if key in incoming and key not in established:
+            raise ProvenanceMismatch(
+                f"refusing to resume: original {key} was not recorded; "
+                "start a fresh run rather than inferring the existing graph's setting"
+            )
     mismatched = {
         key: (value, incoming.get(key))
         for key, value in established.items()
@@ -177,51 +209,87 @@ def assert_same_run(
         )
 
     if not noncanonical:
-        established_commits = commits_of(previous)
-        incoming_commits = commits_of(attempt)
-        commit_mismatched = {
-            key: (value, incoming_commits.get(key))
-            for key, value in established_commits.items()
-            if incoming_commits.get(key) != value
-        }
-        if commit_mismatched:
-            details = ", ".join(
-                f"{key}: recorded={recorded!r} attempted={attempted!r}"
-                for key, (recorded, attempted) in sorted(commit_mismatched.items())
+        _assert_same_code(previous, attempt)
+
+
+def assert_retry_matches(
+    previous: dict[str, Any],
+    attempt: dict[str, Any],
+    *,
+    noncanonical: bool = False,
+) -> None:
+    """Refuse a retry pass whose ingest behavior differs from the graph it would re-enrich.
+
+    Unlike a resume, a retry does not know the fixture, so only ``RETRY_BEHAVIOR_KEYS`` are
+    compared -- but every one of them must be on both sides. Code drift is refused in
+    canonical mode exactly as for a resume.
+    """
+    established = identity_of(previous)
+    incoming = dict(attempt)
+    problems = []
+    for key in RETRY_BEHAVIOR_KEYS:
+        if key not in established:
+            problems.append(f"{key}: not recorded by the build")
+        elif key not in incoming:
+            problems.append(f"{key}: not set by this retry")
+        elif incoming[key] != established[key]:
+            problems.append(f"{key}: recorded={established[key]!r} attempted={incoming[key]!r}")
+    if problems:
+        raise ProvenanceMismatch(
+            "refusing retry: it would re-enrich this graph with different ingest behavior ("
+            + ", ".join(problems) + ")"
+        )
+    if not noncanonical:
+        _assert_same_code(previous, attempt)
+
+
+def _assert_same_code(previous: dict[str, Any], attempt: dict[str, Any]) -> None:
+    """Canonical-mode check that commits and the surface digest did not move."""
+    established_commits = commits_of(previous)
+    incoming_commits = commits_of(attempt)
+    commit_mismatched = {
+        key: (value, incoming_commits.get(key))
+        for key, value in established_commits.items()
+        if incoming_commits.get(key) != value
+    }
+    if commit_mismatched:
+        details = ", ".join(
+            f"{key}: recorded={recorded!r} attempted={attempted!r}"
+            for key, (recorded, attempted) in sorted(commit_mismatched.items())
+        )
+        raise ProvenanceMismatch(
+            "refusing canonical resume: code commits changed since the original attempt "
+            f"({details}). Set LME_NONCANONICAL=1 to permit mixed-code development runs."
+        )
+
+    # Surface drift. Checked after the commits so the clearer diagnosis wins when both
+    # moved; when only this one moved, the commits are identical and the cause is an
+    # uncommitted or untracked edit -- which no SHA comparison can see.
+    established_surface = surface_of(previous)
+    incoming_surface = surface_of(attempt)
+    for key, recorded in established_surface.items():
+        attempted = incoming_surface.get(key)
+        if attempted is None:
+            raise ProvenanceMismatch(
+                f"refusing canonical resume: the original attempt recorded {key} "
+                f"{recorded[:12]}... but this attempt recorded none, so it cannot show it "
+                "is running the same code. Set LME_NONCANONICAL=1 to permit it."
+            )
+        if attempted != recorded:
+            same_commits = commits_of(previous) == commits_of(attempt)
+            cause = (
+                " The commits are identical, so this is an uncommitted or untracked edit "
+                "to a declared surface file -- run `bench_surface.py fingerprint` to see "
+                "the current surface, and `git status` to find the change."
+                if same_commits else
+                " The commits also differ; see the commit error above."
             )
             raise ProvenanceMismatch(
-                "refusing canonical resume: code commits changed since the original attempt "
-                f"({details}). Set LME_NONCANONICAL=1 to permit mixed-code development runs."
+                f"refusing canonical resume: {key} changed since the original attempt "
+                f"(recorded={recorded[:12]}... attempted={attempted[:12]}...). Resuming "
+                "would build one graph from two different code states, making its score "
+                f"unattributable.{cause} Set LME_NONCANONICAL=1 to permit it."
             )
-
-        # Surface drift. Checked after the commits so the clearer diagnosis wins when both
-        # moved; when only this one moved, the commits are identical and the cause is an
-        # uncommitted or untracked edit -- which no SHA comparison can see.
-        established_surface = surface_of(previous)
-        incoming_surface = surface_of(attempt)
-        for key, recorded in established_surface.items():
-            attempted = incoming_surface.get(key)
-            if attempted is None:
-                raise ProvenanceMismatch(
-                    f"refusing canonical resume: the original attempt recorded {key} "
-                    f"{recorded[:12]}... but this attempt recorded none, so it cannot show it "
-                    "is running the same code. Set LME_NONCANONICAL=1 to permit it."
-                )
-            if attempted != recorded:
-                same_commits = commits_of(previous) == commits_of(attempt)
-                cause = (
-                    " The commits are identical, so this is an uncommitted or untracked edit "
-                    "to a declared surface file -- run `bench_surface.py fingerprint` to see "
-                    "the current surface, and `git status` to find the change."
-                    if same_commits else
-                    " The commits also differ; see the commit error above."
-                )
-                raise ProvenanceMismatch(
-                    f"refusing canonical resume: {key} changed since the original attempt "
-                    f"(recorded={recorded[:12]}... attempted={attempted[:12]}...). Resuming "
-                    "would build one graph from two different code states, making its score "
-                    f"unattributable.{cause} Set LME_NONCANONICAL=1 to permit it."
-                )
 
 
 def mark_interrupted(phases: list[dict[str, Any]], at: str) -> int:
@@ -376,6 +444,14 @@ def _build_parser() -> argparse.ArgumentParser:
     end_parser.add_argument("--status", required=True)
     end_parser.add_argument("--setting", action="append", default=[])
 
+    retry_parser = subparsers.add_parser("check-retry")
+    retry_parser.add_argument("path", type=Path)
+    retry_parser.add_argument("record", type=Path)
+    retry_parser.add_argument(
+        "--noncanonical", action="store_true",
+        help="Permit a retry under different code. Labels the run noncanonical.",
+    )
+
     complete_parser = subparsers.add_parser("complete")
     complete_parser.add_argument("path", type=Path)
     complete_parser.add_argument("--harness-exit", type=int, required=True)
@@ -390,6 +466,17 @@ def main(argv: list[str] | None = None) -> int:
         document = begin(
             args.path, _read(args.record), noncanonical=args.noncanonical,
         )
+    elif args.verb == "check-retry":
+        if not args.path.exists():
+            raise ProvenanceMismatch(
+                f"refusing retry: no graph provenance at {args.path}, so the build's ingest "
+                "behavior is unknown"
+            )
+        document = _read(args.path)
+        assert_retry_matches(document, _read(args.record), noncanonical=args.noncanonical)
+        if not args.noncanonical or document.get("noncanonical"):
+            return 0  # read-only: nothing to record
+        document["noncanonical"] = True
     elif args.verb == "phase-start":
         document = phase_start(
             _read(args.path),
