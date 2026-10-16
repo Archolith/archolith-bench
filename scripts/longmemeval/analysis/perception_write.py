@@ -2,7 +2,7 @@
 
 The capstone measurement's write phase. Arm A wrote ORACLE Views (gold answers, perfect perception);
 the tuning sweeps scored what the gate WOULD commit with no graph. This runs the real thing:
-`menhir.services.perception.perceive_and_fold` (k-sample gpt-4o-mini extractor, conjunctive veto-gate
+`menhir.services.perception.perceive_and_fold` (k-sample LLM extractor, conjunctive veto-gate
 at the precision-conservative threshold, holistic cross-check ON) over each `lme-<qid>` namespace's
 USER episodes from the LIVE benchmark graph, committing counter Views via `ViewRepository` — real
 MENTIONS provenance to real graph episodes, real embedded surfaces. Abstains are no-ops by design.
@@ -14,7 +14,8 @@ guard (a true-but-irrelevant committed View must not push gold out of reach).
 Cleanup (all writes carry source='perception-capstone'):
   MATCH (n:Entity {source:'perception-capstone'}) DETACH DELETE n
 
-Env: LME_BOLT (bolt://localhost:7689), LME_NEO4J_PW, PC_MODEL=gpt-4o-mini, PC_TEMP=0.7, PC_K=5,
+Env: LME_BOLT (bolt://localhost:7689), LME_NEO4J_PW, PT_MODEL=gpt-6-luna / PT_TEMP (via
+     perception_tune), PC_K=5,
      PC_THRESHOLD=1.0, PC_COUNT_LIMIT=14, PC_HELDOUT_LIMIT=12, PC_OUT (~/perception-write.json).
      OPENAI_API_KEY else archolith-bench/.env. STOP on 429 per protocol.
 """
@@ -46,8 +47,10 @@ if not BOLT.startswith("bolt://"):
     BOLT = f"bolt://localhost:{BOLT}"
 assert_not_prod(BOLT)
 PW = os.getenv("LME_NEO4J_PW", "lmedata123")
-MODEL = os.getenv("PC_MODEL", "gpt-4o-mini")
-TEMP = float(os.getenv("PC_TEMP", "0.7"))
+# The extractor is perception_tune's make_llm, so the model actually called is pt.MODEL
+# (PT_MODEL); reporting it from a separate PC_MODEL let the log disagree with the calls.
+MODEL = pt.MODEL
+TEMP = pt.TEMP
 K = int(os.getenv("PC_K", "5"))
 THRESHOLD = float(os.getenv("PC_THRESHOLD", "1.0"))
 COUNT_LIMIT = int(os.getenv("PC_COUNT_LIMIT", "14"))

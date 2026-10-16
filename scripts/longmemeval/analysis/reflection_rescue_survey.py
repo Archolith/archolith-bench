@@ -1,7 +1,8 @@
 """Phase 1 measurement harness: survey all assistant turns in the KU fixture for
 recoverable durable claims via reflection rescue.
 
-Runs 4o-mini (teacher) on every assistant turn with its preceding user context.
+Runs the teacher model (default gpt-6-luna on Flex; was 4o-mini) on every assistant turn
+with its preceding user context.
 Outputs a structured JSON with per-turn results so downstream analysis can:
   - Count assistant turns producing ≥1 candidate reflection
   - Measure precision against known gold answers
@@ -51,6 +52,12 @@ if not os.environ.get("OPENAI_API_KEY"):
     sys.exit(1)
 
 from openai import AsyncOpenAI  # noqa: E402
+
+if str(BENCH_ROOT) not in sys.path:
+    sys.path.insert(0, str(BENCH_ROOT))
+from archolith_bench.core.api import acall_with_flex_retry, openai_chat_kwargs  # noqa: E402
+
+DEFAULT_MODEL = "gpt-6-luna"
 
 # ---------------------------------------------------------------------------
 # Fixture loading
@@ -213,7 +220,7 @@ def _format_user_context(preceding: list[dict]) -> str:
 async def run_reflection_rescue(
     client: AsyncOpenAI,
     turn: AssistantTurn,
-    model: str = "gpt-4o-mini",
+    model: str = DEFAULT_MODEL,
 ) -> ReflectionResult:
     """Call the reflection rescue prompt on one assistant turn."""
     user_context = _format_user_context(turn.preceding_user_turns)
@@ -231,13 +238,12 @@ async def run_reflection_rescue(
 
     t0 = time.time()
     try:
-        resp = await client.chat.completions.create(
+        resp = await acall_with_flex_retry(lambda: client.chat.completions.create(
             model=model,
             messages=[{"role": "user", "content": prompt}],
-            temperature=0,
-            max_tokens=2048,
             response_format={"type": "json_object"},
-        )
+            **openai_chat_kwargs(model, max_tokens=2048, temperature=0),
+        ))
         result.latency_ms = int((time.time() - t0) * 1000)
         result.prompt_tokens = resp.usage.prompt_tokens if resp.usage else 0
         result.completion_tokens = resp.usage.completion_tokens if resp.usage else 0
@@ -261,7 +267,7 @@ async def run_reflection_rescue(
 async def run_batch(
     turns: list[AssistantTurn],
     *,
-    model: str = "gpt-4o-mini",
+    model: str = DEFAULT_MODEL,
     concurrency: int = 10,
     output_path: Path | None = None,
     resume_from: dict | None = None,
@@ -346,10 +352,12 @@ def _write_output(
     # Cost estimation.
     total_prompt_tokens = sum(r.prompt_tokens for r in results)
     total_completion_tokens = sum(r.completion_tokens for r in results)
-    # gpt-4o-mini pricing: $0.15/M input, $0.60/M output
-    cost_input = total_prompt_tokens * 0.15 / 1_000_000
-    cost_output = total_completion_tokens * 0.60 / 1_000_000
-    total_cost = cost_input + cost_output
+    # Only gpt-4o-mini has a known rate here ($0.15/M input, $0.60/M output); any other
+    # model is reported unpriced rather than costed at mini's rate.
+    if model == "gpt-4o-mini":
+        total_cost = (total_prompt_tokens * 0.15 + total_completion_tokens * 0.60) / 1_000_000
+    else:
+        total_cost = None
 
     # Confidence distribution.
     all_confidences = [
@@ -395,7 +403,7 @@ def _write_output(
         "cost": {
             "prompt_tokens": total_prompt_tokens,
             "completion_tokens": total_completion_tokens,
-            "estimated_cost_usd": round(total_cost, 4),
+            "estimated_cost_usd": round(total_cost, 4) if total_cost is not None else None,
         },
         "latency": {
             "avg_ms": round(avg_latency),
@@ -424,7 +432,8 @@ def _write_output(
     print(f"  Avg reflections/positive turn: {total_reflections/with_reflections:.1f}" if with_reflections else "", flush=True)
     print(f"  has_answer recovered: {has_answer_with_reflections}/{len(has_answer_turns)}", flush=True)
     print(f"  Errors: {errors}", flush=True)
-    print(f"  Cost: ${total_cost:.4f} ({total_prompt_tokens} prompt + {total_completion_tokens} completion tokens)", flush=True)
+    cost_text = f"${total_cost:.4f}" if total_cost is not None else f"unpriced for {model}"
+    print(f"  Cost: {cost_text} ({total_prompt_tokens} prompt + {total_completion_tokens} completion tokens)", flush=True)
     print(f"  Avg latency: {avg_latency:.0f}ms", flush=True)
     print(f"  Origins: {origin_counts}", flush=True)
     print(f"  Support types: {support_type_counts}", flush=True)
@@ -442,8 +451,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Run only the first N assistant turns (0 = all)",
     )
     ap.add_argument(
-        "--model", default="gpt-4o-mini",
-        help="Model to use for reflection extraction (default: gpt-4o-mini)",
+        "--model", default=DEFAULT_MODEL,
+        help=f"Model to use for reflection extraction (default: {DEFAULT_MODEL})",
     )
     ap.add_argument(
         "--concurrency", type=int, default=10,

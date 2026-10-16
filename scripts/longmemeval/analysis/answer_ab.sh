@@ -5,7 +5,7 @@
 # The Views are re-derivable (re-run the consolidation) — this leaves the graph WITHOUT them; restore
 # with:  BENCH_DIR/scripts/longmemeval/analysis/perception_write.py PC_SCOPE=all PC_SOURCE=perception-lme
 #
-# Cost: gpt-4o answers + gpt-4o-mini judges over the counting slice x2 arms (~14x4 calls). STOP on 429.
+# Cost: LME_ANSWER_MODEL answers + LME_JUDGE_MODEL (gpt-6-luna, Flex) judges over the counting slice x2 arms (~14x4 calls). STOP on 429.
 set -uo pipefail
 HERE="$(dirname "${BASH_SOURCE[0]}")"
 source "$HERE/../config.sh"

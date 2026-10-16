@@ -23,7 +23,8 @@ contain what's needed to derive that answer, independent of how any other arm di
 answers "is this a real retrieval gap" rather than "which arm looks nicer".
 
 Usage: MENHIR_URL=http://localhost:8109 OPENAI_API_KEY=... python recall_lab_investigate.py
-Env: MENHIR_URL, OPENAI_API_KEY, LME_BOLT, LME_NEO4J_PW, LME_JUDGE_MODEL (default gpt-4o-mini),
+Env: MENHIR_URL, OPENAI_API_KEY, LME_BOLT, LME_NEO4J_PW, LME_JUDGE_MODEL (default gpt-6-luna),
+     BENCHMARK_SERVICE_TIER (default flex),
      RLI_EXPLORER_URL (default = MENHIR_URL, since Explorer is mounted on the same app/port).
 """
 from __future__ import annotations
@@ -34,8 +35,14 @@ import json
 import os
 import random
 import re
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
+
+_BENCH_ROOT = str(Path(__file__).resolve().parents[4])
+if _BENCH_ROOT not in sys.path:
+    sys.path.insert(0, _BENCH_ROOT)
+from archolith_bench.core.api import call_with_flex_retry, openai_chat_kwargs  # noqa: E402
 
 import httpx
 from graphiti_core import Graphiti
@@ -50,7 +57,7 @@ BOLT = os.getenv("LME_BOLT", "bolt://localhost:7689")
 if not BOLT.startswith("bolt://"):
     BOLT = f"bolt://localhost:{BOLT}"
 PW = os.getenv("LME_NEO4J_PW", "lmedata123")
-JUDGE_MODEL = os.getenv("LME_JUDGE_MODEL", "gpt-4o-mini")
+JUDGE_MODEL = os.getenv("LME_JUDGE_MODEL", "gpt-6-luna")
 CAP = int(os.getenv("LME_TOPK", "10"))  # fewer than retrieval_quality.py's 20: judge context is bounded
 
 # Hand-picked from the 2026-07-15 full n=500 run's per-question table (full_gate_recal.log):
@@ -205,14 +212,15 @@ def judge_question(client: OpenAI, question: str, gold: str, arms: dict[str, lis
     anonymous = [(f"R{i}", results) for i, (_label, results) in enumerate(shuffled, start=1)]
     alias_to_label = {alias: label for alias, (label, _r) in zip((a for a, _ in anonymous), shuffled)}
 
-    resp = client.chat.completions.create(
-        model=JUDGE_MODEL, temperature=0.0, max_tokens=900,
+    resp = call_with_flex_retry(lambda: client.chat.completions.create(
+        model=JUDGE_MODEL,
         response_format={"type": "json_object"},
         messages=[
             {"role": "system", "content": _JUDGE_SYSTEM},
             {"role": "user", "content": _judge_prompt(question, gold, anonymous)},
         ],
-    )
+        **openai_chat_kwargs(JUDGE_MODEL, max_tokens=900, temperature=0.0),
+    ))
     raw = resp.choices[0].message.content or ""
     try:
         parsed = _parse_judge_json(raw)

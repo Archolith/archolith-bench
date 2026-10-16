@@ -1,7 +1,7 @@
 """Lever A (σ WINDOW) live measurement — windowed acquisition counts over the D0 counting slice.
 
 The A5 phase of `menhir-frontier/.agent/plans/perception-window-and-triangulation.md`. For each
-target qid: extract acquisition events (real gpt-4o-mini, k samples), fold each sample to a lossless
+target qid: extract acquisition events (real LLM via perception_tune, k samples), fold each sample to a lossless
 timeline, then answer the question's WINDOW ("how many X in the last month?") as a read-time δ — the
 relative phrase resolved against the question date, `count_in_window` over the timeline. Reports the
 k-sample distribution + mode vs gold. Dataset+LLM only, no graph writes. STOP on 429 per protocol.

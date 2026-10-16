@@ -374,7 +374,9 @@ def test_run_acceptance_writes_report_and_aggregates_usage(tmp_path):
     assert by_case["41698283"]["query_routing_measured"] is True
     assert by_case["0977f2af"]["query_routing_measured"] is True
     assert by_case["control-intent-only"]["query_routing_measured"] is False
-    assert report["config"]["model"] == "gpt-4o-mini"
+    assert report["config"]["model"] == "gpt-6-luna"
+    assert report["config"]["temperature"] is None  # a reasoning model takes none
+    assert report["config"]["requested_temperature"] == 0.7
     assert report["config"]["max_tokens"] == 512
     assert report["config"]["llm_error_retries"] == 1
     num_calls = report["usage"]["calls"]
@@ -385,7 +387,8 @@ def test_run_acceptance_writes_report_and_aggregates_usage(tmp_path):
     assert report["usage"]["cached_tokens"] == num_calls * 3
     assert all(call["raw_usage"]["prompt_tokens"] == 10 for call in report["usage"]["per_call"])
     assert all(call["finish_reason"] == "stop" for call in report["usage"]["per_call"])
-    assert all(request["max_tokens"] == 512 for request in requests)
+    assert all(request["max_completion_tokens"] == 16384 for request in requests)
+    assert all("max_tokens" not in request and "temperature" not in request for request in requests)
     assert report["aggregate"]["llm_error_retries"] == 0
     assert report["provenance"]["source_fixture"]["sha256"]["match_mode"] in {"raw", "canonical_crlf"}
     assert report["provenance"]["fixture"]["raw_sha256"]

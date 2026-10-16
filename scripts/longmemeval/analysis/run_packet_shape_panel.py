@@ -352,8 +352,10 @@ def main() -> None:
     )
 
     adapter = get_adapter("longmemeval-menhir")
-    answer_model = os.environ.get("LME_ANSWER_MODEL", "gpt-4o-mini")
-    judge_model = os.environ.get("LME_JUDGE_MODEL", "gpt-4o-mini")
+    answer_model = os.environ.get("LME_ANSWER_MODEL", "gpt-6-luna")
+    judge_model = os.environ.get("LME_JUDGE_MODEL", "gpt-6-luna")
+    # send_chat sends a service tier only when this is set; an offline panel should use Flex.
+    os.environ.setdefault("BENCHMARK_SERVICE_TIER", "flex")
     outputs: dict[str, Any] = {}
     started_at = datetime.now(UTC).isoformat()
     for shape in ("compact_labeled", "typed_json"):

@@ -54,6 +54,91 @@ def build_chat_body(model: str, messages: list[dict], base_url: str) -> tuple[di
     return body, timeout
 
 
+def openai_chat_kwargs(
+    model: str,
+    *,
+    max_tokens: int | None = None,
+    temperature: float | None = None,
+    base_url: str | None = None,
+    default_tier: str = "flex",
+) -> dict:
+    """Model-dependent kwargs for an OpenAI SDK ``chat.completions.create`` call.
+
+    For analysis tools (not latency measurements), so the tier defaults to ``flex``;
+    ``BENCHMARK_SERVICE_TIER`` overrides it, and an empty value sends none. A reasoning model
+    gets no temperature (it rejects one) and ``max_completion_tokens`` of at least
+    ``REASONING_MAX_COMPLETION_TOKENS``, since reasoning is counted inside that ceiling.
+    ``base_url=None`` means the SDK default, api.openai.com.
+    """
+    kwargs: dict = {}
+    if is_reasoning_model(model):
+        if max_tokens is not None:
+            kwargs["max_completion_tokens"] = max(int(max_tokens), REASONING_MAX_COMPLETION_TOKENS)
+        tier = os.getenv(SERVICE_TIER_ENV, default_tier).strip().lower()
+        if tier and (base_url is None or "api.openai.com" in str(base_url).lower()):
+            kwargs["service_tier"] = tier
+            if tier == "flex":
+                kwargs["timeout"] = float(FLEX_TIMEOUT_S)
+    else:
+        if max_tokens is not None:
+            kwargs["max_tokens"] = max_tokens
+        if temperature is not None:
+            kwargs["temperature"] = temperature
+    return kwargs
+
+
+def is_flex_capacity_error(exc: BaseException) -> bool:
+    """True for a 429 meaning Flex has no capacity right now (retry later), not a rate limit.
+
+    Accepts an OpenAI SDK error (``status_code``/``body``) or an ``httpx.HTTPStatusError``
+    (``response``), whose message omits the body.
+    """
+    response = getattr(exc, "response", None)
+    status = getattr(exc, "status_code", None) or getattr(response, "status_code", None)
+    if status != 429:
+        return False
+    try:
+        response_text = getattr(response, "text", "") or ""
+    except Exception:  # noqa: BLE001 - an unread streamed body has no text
+        response_text = ""
+    text = f"{exc} {getattr(exc, 'body', '')} {getattr(exc, 'code', '')} {response_text}".lower()
+    return any(marker in text for marker in _CAPACITY_MARKERS)
+
+
+def call_with_flex_retry(fn, *, retries: int = FLEX_CAPACITY_RETRIES, sleep=None):  # noqa: ANN001, ANN201
+    """Call ``fn()``, waiting out Flex capacity 429s; every other error is raised unchanged."""
+    sleep = sleep or time.sleep
+    attempt = 0
+    while True:
+        try:
+            return fn()
+        except Exception as exc:
+            if not is_flex_capacity_error(exc) or attempt >= retries:
+                raise
+            wait = min(300, 15 * 2 ** attempt)
+            attempt += 1
+            print(f"  [429] Flex capacity unavailable, waiting {wait}s ({attempt}/{retries})...")
+            sleep(wait)
+
+
+async def acall_with_flex_retry(fn, *, retries: int = FLEX_CAPACITY_RETRIES, sleep=None):  # noqa: ANN001, ANN201
+    """Async ``call_with_flex_retry``: ``fn()`` returns an awaitable."""
+    import asyncio
+
+    sleep = sleep or asyncio.sleep
+    attempt = 0
+    while True:
+        try:
+            return await fn()
+        except Exception as exc:
+            if not is_flex_capacity_error(exc) or attempt >= retries:
+                raise
+            wait = min(300, 15 * 2 ** attempt)
+            attempt += 1
+            print(f"  [429] Flex capacity unavailable, waiting {wait}s ({attempt}/{retries})...")
+            await sleep(wait)
+
+
 def send_chat(
     client: httpx.Client,
     base_url: str,

@@ -4,7 +4,7 @@
 #   node_plain : fact_edges off, frontier oracle OFF   -> boring node-only baseline
 #   frontier   : fact_edges off, frontier defaults ON  -> oracle ranking + lens fix
 #   pointer    : fact_edges on, mode=pointer (lens-gated), oracle ON
-# For each config: answer-score (gpt-4o + gpt-4o-mini judge, recall-only) across all 6
+# For each config: answer-score (LME_ANSWER_MODEL + LME_JUDGE_MODEL judge, recall-only) across all 6
 # question types, LME_PER_TYPE each = 90 questions/config. Graph already holds all 500 namespaces.
 set -uo pipefail
 

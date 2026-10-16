@@ -26,7 +26,7 @@ PER = int(os.getenv("BRIEF_PER_TYPE", "10"))
 TYPES = os.getenv("BRIEF_TYPES", "temporal-reasoning,knowledge-update,multi-session").split(",")
 OPENAI_KEY = os.environ.get("OPENAI_API_KEY", "")  # only required for MODE=score (answer+judge)
 ANSWER_MODEL = os.getenv("ANSWER_MODEL", "gpt-4o")
-JUDGE_MODEL = os.getenv("JUDGE_MODEL", "gpt-4o-mini")
+JUDGE_MODEL = os.getenv("JUDGE_MODEL", "gpt-6-luna")
 OUT = os.getenv("BRIEF_OUT_DIR", os.path.expanduser("~/lme-brief-ab"))
 os.makedirs(OUT, exist_ok=True)
 
@@ -87,13 +87,38 @@ _JUDGE_SYS = ("You grade whether a predicted answer matches the gold answer for 
 def _chat(c, model, system, user):
     if not OPENAI_KEY:
         raise SystemExit("MODE=score requires OPENAI_API_KEY")
-    r = c.post("https://api.openai.com/v1/chat/completions",
-               headers={"Authorization": f"Bearer {OPENAI_KEY}"},
-               json={"model": model, "temperature": 0,
-                     "messages": [{"role": "system", "content": system},
-                                  {"role": "user", "content": user}]})
-    r.raise_for_status()
-    return r.json()["choices"][0]["message"]["content"].strip()
+    _bench = os.path.abspath(os.path.join(_HERE, "..", "..", ".."))
+    if _bench not in sys.path:
+        sys.path.insert(0, _bench)
+    from archolith_bench.core.api import call_with_flex_retry, openai_chat_kwargs
+
+    # A reasoning model (gpt-6-luna) gets Flex and no temperature; gpt-4o keeps temperature 0.
+    kwargs = openai_chat_kwargs(model, temperature=0)
+    timeout = kwargs.pop("timeout", 120)
+    body = {"model": model,
+            "messages": [{"role": "system", "content": system},
+                         {"role": "user", "content": user}],
+            **kwargs}
+
+    def _post():
+        resp = c.post("https://api.openai.com/v1/chat/completions",
+                      headers={"Authorization": f"Bearer {OPENAI_KEY}"},
+                      json=body, timeout=timeout)
+        resp.raise_for_status()
+        return resp
+
+    try:
+        r = call_with_flex_retry(_post)
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 429:
+            print("\n!!! 429 RATE LIMIT — STOPPING per protocol.", e.response.text[:200])
+            raise SystemExit(2)
+        raise
+    content = (r.json()["choices"][0]["message"].get("content") or "").strip()
+    if not content:
+        # An empty reasoning reply must not be graded as a "no" (or answered as nothing).
+        raise RuntimeError(f"{model}: empty completion")
+    return content
 
 
 def score():

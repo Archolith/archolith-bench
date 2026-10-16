@@ -10,7 +10,7 @@ derivation (`extract_stated_total`) as gate veto-4, so a confidently-wrong itemi
 reproduces the prior baseline. Target: that qid flips to abstain, held-out FP unchanged.
 
 WHAT IT MEASURES (dataset + LLM only — NO graph, NO writes). For each namespace we run the real
-k-sample extractor (gpt-4o-mini, temp>0) ONCE, then replay the deterministic `gate` at several
+k-sample extractor (PT_MODEL; temp>0 only on a non-reasoning model) ONCE, then replay the deterministic `gate` at several
 thresholds over the SAME samples (so the sweep is free after extraction):
 
   * counting slice (the 14 numeric-answer qids): a commit is CORRECT if its value == gold, WRONG if
@@ -24,7 +24,8 @@ held-out. Recall (correct commits) is the free variable; precision is the constr
 
 API-RATE PROTOCOL: on a 429 we STOP immediately and report — never keep hammering the key.
 
-Env: OPENAI_API_KEY (else read from archolith-bench/.env), PT_MODEL=gpt-4o-mini, PT_TEMP=0.7, PT_K=5,
+Env: OPENAI_API_KEY (else read from archolith-bench/.env), PT_MODEL=gpt-6-luna, PT_TEMP=0.7 (not
+     sent to reasoning models), PT_K=5, BENCHMARK_SERVICE_TIER (default flex),
      PT_THRESHOLDS=0.6,0.8,1.0, PT_COUNT_LIMIT=14, PT_HELDOUT_LIMIT=12, PT_EMBED=1 (dedup on),
      PT_CROSS=1 (Lever B cross-check on; 0 = prior baseline), PT_OUT (~/perception-tune.json).
      Reuses entropy._items/_evidence_prefixes for the same slice.
@@ -52,7 +53,14 @@ from menhir.services.perception import (  # noqa: E402
 sys.path.insert(0, os.path.dirname(__file__))
 import entropy  # noqa: E402
 
-MODEL = os.getenv("PT_MODEL", "gpt-4o-mini")
+_BENCH_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+if _BENCH_ROOT not in sys.path:
+    sys.path.insert(0, _BENCH_ROOT)
+from archolith_bench.core.api import call_with_flex_retry, openai_chat_kwargs  # noqa: E402
+
+# gpt-4o-mini is deprecated. A reasoning model takes no temperature, so on Luna PT_TEMP is not
+# sent and the k samples come from the model's default sampling (thresholds were tuned on mini).
+MODEL = os.getenv("PT_MODEL", "gpt-6-luna")
 TEMP = float(os.getenv("PT_TEMP", "0.7"))
 K = int(os.getenv("PT_K", "5"))
 THRESHOLDS = [float(x) for x in os.getenv("PT_THRESHOLDS", "0.6,0.8,1.0").split(",")]
@@ -92,11 +100,13 @@ def _rate_limit_stop(exc: Exception) -> None:
 def make_llm(client):
     def llm_complete(system: str, user: str) -> str:
         try:
-            r = client.chat.completions.create(
-                model=MODEL, temperature=TEMP,
+            # Flex capacity 429s are waited out; any other 429 still stops per protocol.
+            r = call_with_flex_retry(lambda: client.chat.completions.create(
+                model=MODEL,
                 messages=[{"role": "system", "content": system},
                           {"role": "user", "content": user}],
-            )
+                **openai_chat_kwargs(MODEL, temperature=TEMP),
+            ))
             return r.choices[0].message.content or ""
         except Exception as e:  # noqa: BLE001
             if "429" in str(e) or "rate limit" in str(e).lower():

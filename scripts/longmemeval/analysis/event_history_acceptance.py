@@ -45,9 +45,17 @@ from archolith_bench.deterministic_scalar_shadow import (  # noqa: E402
     _git_metadata,
     resolve_menhir_root,
 )
+from archolith_bench.core.api import (  # noqa: E402
+    call_with_flex_retry,
+    is_flex_capacity_error,
+    openai_chat_kwargs,
+)
 
 FIXTURE_SCHEMA_VERSION = 1
-MODEL_DEFAULT = "gpt-4o-mini"
+# gpt-4o-mini is deprecated. A reasoning model takes no temperature, so on Luna the vote samples
+# come from the model's default sampling, not TEMPERATURE_DEFAULT; the report records the
+# temperature as null in that case. Vote thresholds were calibrated on mini at 0.7.
+MODEL_DEFAULT = "gpt-6-luna"
 TEMPERATURE_DEFAULT = 0.7
 SAMPLES_DEFAULT = 3
 REQUIRED_VOTES_DEFAULT = 2
@@ -369,8 +377,12 @@ class UsageRecorder:
 
     def __init__(self, model: str, temperature: float, max_tokens: int) -> None:
         self.model = model
-        self.temperature = temperature
         self.max_tokens = max_tokens
+        self.request_kwargs = openai_chat_kwargs(
+            model, max_tokens=max_tokens, temperature=temperature
+        )
+        # The temperature actually sent: None when the model does not take one.
+        self.temperature = self.request_kwargs.get("temperature")
         self.calls: list[dict[str, Any]] = []
         self._total = Counter()
         self._missing_usage = 0
@@ -428,6 +440,8 @@ class UsageRecorder:
             "model": self.model,
             "temperature": self.temperature,
             "max_tokens": self.max_tokens,
+            "max_completion_tokens": self.request_kwargs.get("max_completion_tokens"),
+            "service_tier": self.request_kwargs.get("service_tier"),
             "per_call": list(self.calls),
         }
 
@@ -439,17 +453,23 @@ def make_llm_complete(
     def llm_complete(system: str, user: str) -> str:
         started = time.monotonic()
         try:
-            response = client.chat.completions.create(
-                model=recorder.model,
-                temperature=recorder.temperature,
-                messages=[
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": user},
-                ],
-                max_tokens=recorder.max_tokens,
+            # Flex capacity 429s are waited out; any other 429 still stops the run.
+            response = call_with_flex_retry(
+                lambda: client.chat.completions.create(
+                    model=recorder.model,
+                    messages=[
+                        {"role": "system", "content": system},
+                        {"role": "user", "content": user},
+                    ],
+                    **recorder.request_kwargs,
+                )
             )
         except Exception as exc:  # noqa: BLE001 - normalize provider errors
             status_code = getattr(exc, "status_code", None)
+            if status_code == 429 and is_flex_capacity_error(exc):
+                raise EventHistoryRunnerError(
+                    "OpenAI Flex capacity unavailable (429) after retries; stopping"
+                ) from exc
             if status_code == 429:
                 reset = getattr(getattr(exc, "response", None), "headers", None)
                 reset_epoch = reset.get("x-ratelimit-reset-epoch", "unknown") if reset else "unknown"
@@ -603,7 +623,9 @@ def run_acceptance(
         },
         "config": {
             "model": model,
-            "temperature": temperature,
+            "temperature": recorder.temperature,
+            "requested_temperature": temperature,
+            "service_tier": recorder.request_kwargs.get("service_tier"),
             "samples": samples,
             "required_votes": required_votes,
             "max_tokens": max_tokens,

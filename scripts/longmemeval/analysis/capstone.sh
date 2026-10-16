@@ -9,7 +9,7 @@
 #   capstone.sh cleanup          delete every View this capstone wrote (source tag scoped)
 #
 # Cost: the two entropy probes are GPT-free (recall + query embeds); the write phase is the only
-# LLM-billed step (~26 namespaces x k=5 gpt-4o-mini + cross-checks). STOP on 429 per protocol.
+# LLM-billed step (~26 namespaces x k=5 PT_MODEL extractions + cross-checks). STOP on 429 per protocol.
 set -uo pipefail
 
 HERE="$(dirname "${BASH_SOURCE[0]}")"
