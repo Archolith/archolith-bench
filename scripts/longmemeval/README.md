@@ -117,7 +117,8 @@ Anchored time is on by default for builds: `LME_ANCHORED_TIME_RESOLVER=1` and
 `LME_ANCHORED_TIME_ATTACH=1`, with `LME_ANCHORED_TIME_MODEL` (and `_ATTACH_MODEL`) defaulting
 to `gpt-6-luna`. `LME_ANCHORED_TIME_EXPIRY` is wired but defaults to 0 until it has a live
 readback. Attach requires the resolver, and both require `LME_EXTRACT_PROVIDER=openai`.
-`LME_OPENAI_SERVICE_TIER` (default `flex`) is forwarded as `MENHIR_OPENAI_SERVICE_TIER` and, for
+`LME_OPENAI_SERVICE_TIER` (default `flex`) is forwarded as `MENHIR_OPENAI_SERVICE_TIER` (set in
+`config.sh`, so the recall and analysis serves of every wrapper get it too, not only the build) and, for
 the harness's answer and judge calls, as `BENCHMARK_SERVICE_TIER`; both apply it only to reasoning
 models on the OpenAI endpoint. The harness fails an item (it is not checkpointed, so a resume
 retries it) rather than scoring a failed answer or judge call. These settings

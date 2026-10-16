@@ -519,6 +519,37 @@ def _queue_depth(admin: httpx.Client, menhir_url: str) -> int:
         return -1
 
 
+class ProviderStoppedError(RuntimeError):
+    """Menhir reports a provider state that waiting cannot fix (quota exhausted, auth failure)."""
+
+
+def _provider_stop_reason(admin: httpx.Client, menhir_url: str) -> str | None:
+    """Menhir's standing provider quota/auth failure from /api/health, or None.
+
+    An unreadable health response is not a stop: the drain's own counts still decide.
+    """
+    try:
+        resp = admin.get(menhir_url.rstrip("/") + "/api/health")
+        resp.raise_for_status()
+        body = resp.json()
+    except Exception:
+        return None
+    for key in ("provider_quota_exhausted", "provider_auth_failure"):
+        value = body.get(key) if isinstance(body, dict) else None
+        if value:
+            return f"{key}: {value}"
+    return None
+
+
+def _raise_if_provider_stopped(admin: httpx.Client, menhir_url: str) -> None:
+    stop_reason = _provider_stop_reason(admin, menhir_url)
+    if stop_reason:
+        raise ProviderStoppedError(
+            f"menhir reports {stop_reason}; stopping the ingest (fix the provider account, "
+            "then resume)"
+        )
+
+
 def _backend(admin: httpx.Client, menhir_url: str, op: str, body: dict | None = None):
     """Invoke an internal backend operation; raises on HTTP error."""
     url = menhir_url.rstrip("/") + "/api/internal/backend/" + op
@@ -640,6 +671,9 @@ def _drain_many(
         for namespace in ordered_namespaces
     }
     while time.time() - t0 < timeout_s:
+        # Quota exhaustion fails every later episode fast and retries cannot fix it, so stop the
+        # build here instead of settling into a window of FAILED rows and moving on.
+        _raise_if_provider_stopped(admin, menhir_url)
         qd = _queue_depth(admin, menhir_url)
         last = {namespace: _ns_state_counts(namespace) for namespace in ordered_namespaces}
         # pending/enriching==-1 means cypher timed out / Neo4j temporarily unreachable. Treat
@@ -858,6 +892,9 @@ def _ingest_window(
         submit_next(index)
 
     while active:
+        # Checked before the FAILED-episode retry below: under exhausted quota that retry and
+        # every later turn would fail fast, one by one, for the rest of the window.
+        _raise_if_provider_stopped(admin, menhir_url)
         if time.time() - started_at >= timeout_s:
             pending = ", ".join(
                 f"{window[index].namespace}:{episode_uuid}"

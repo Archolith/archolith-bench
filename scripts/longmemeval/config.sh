@@ -86,6 +86,9 @@ LME_SCORER="${LME_SCORER:-llm-judge}"
 # unaffected. Empty sends no tier.
 LME_OPENAI_SERVICE_TIER="${LME_OPENAI_SERVICE_TIER:-flex}"
 export BENCHMARK_SERVICE_TIER="${BENCHMARK_SERVICE_TIER:-${LME_OPENAI_SERVICE_TIER}}"
+# Every wrapper that serves Menhir sources this file, so the recall/analysis serves get the same
+# tier as the build. build_graph.sh and retry.sh still export it explicitly (provenance parity).
+export MENHIR_OPENAI_SERVICE_TIER="${MENHIR_OPENAI_SERVICE_TIER:-${LME_OPENAI_SERVICE_TIER}}"
 
 # ---- Anchored time (ingest-time; part of the graph's identity) ----
 # Resolver + blind attach check on for the n=500 build (owner decision, menhir #281).

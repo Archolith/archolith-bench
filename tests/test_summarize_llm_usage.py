@@ -279,6 +279,76 @@ def test_batch_slug_is_half_the_sync_rate(tmp_path) -> None:
     assert batch["cost_usd"] == round(sync["cost_usd"] / 2, 6)
 
 
+def test_gpt6_luna_is_priced_at_the_published_standard_rate(tmp_path) -> None:
+    """$0.10 in / $0.01 cached / $0.50 out per 1M (developers.openai.com, 2026-10-15)."""
+    db = _usage_db(tmp_path, [
+        ("a", "t", "r", "chat", "gpt-6-luna", "chat", "completed",
+         1_000_000, 1_000_000, 2_000_000, 400_000, 0),
+    ])
+    summary = summarize_llm_usage(db, run_id="r")
+    assert summary["unpriced_calls"] == 0
+    assert summary["cost_usd"] == round(0.6 * 0.10 + 0.4 * 0.01 + 1.0 * 0.50, 6)
+
+
+def test_flex_figure_halves_luna_and_leaves_other_models_at_their_rate(tmp_path) -> None:
+    """The tier is not recorded per call, so Flex is reported beside Standard, never instead."""
+    db = _usage_db(tmp_path, [
+        ("a", "t", "r", "chat", "gpt-6-luna", "chat", "completed",
+         1_000_000, 1_000_000, 2_000_000, 0, 0),
+        ("b", "t", "r", "embedding", "text-embedding-3-small", "embed", "completed",
+         1_000_000, 0, 1_000_000, 0, 0),
+    ])
+    summary = summarize_llm_usage(db, run_id="r")
+    assert summary["cost_usd"] == round(0.60 + 0.02, 6)
+    assert summary["cost_usd_flex"] == round(0.30 + 0.02, 6)
+    assert summary["flex_rate_models"] == ["gpt-6-luna"]
+
+
+def test_unpriced_rows_carry_no_flex_figure(tmp_path) -> None:
+    db = _usage_db(tmp_path, [
+        ("a", "t", "r", "chat", "some-new-model", "chat", "completed", 10, 1, 11, 0, 0),
+    ])
+    summary = summarize_llm_usage(db, run_id="r")
+    assert summary["by_model"][0]["cost_usd_flex"] is None
+    assert summary["cost_usd_flex"] == 0.0
+
+
+def test_failures_are_counted_by_error_code_when_recorded(tmp_path) -> None:
+    db = _usage_db(tmp_path, [])
+    with sqlite3.connect(db) as conn:
+        conn.execute("ALTER TABLE llm_usage_events ADD COLUMN error_code TEXT")
+        conn.executemany(
+            "INSERT INTO llm_usage_events (call_id, recorded_at, run_id, kind, model, status,"
+            " error_code) VALUES (?, 't', ?, 'chat', 'gpt-6-luna', ?, ?)",
+            [
+                ("a", "r", "failed", "RateLimitError:429:resource_unavailable"),
+                ("b", "r", "failed", "RateLimitError:429:resource_unavailable"),
+                ("c", "r", "failed", None),
+                ("d", "r", "completed", None),
+                ("e", "other-run", "failed", "APITimeoutError"),
+            ],
+        )
+    summary = summarize_llm_usage(db, run_id="r")
+    assert summary["error_code_recorded"] is True
+    assert summary["failed_by_error_code"] == {
+        "RateLimitError:429:resource_unavailable": 2,
+        "unrecorded": 1,
+    }
+    unfiltered = summarize_llm_usage(db)
+    assert unfiltered["failed_by_error_code"]["APITimeoutError"] == 1
+
+
+def test_a_sidecar_without_error_code_says_so(tmp_path) -> None:
+    """An empty breakdown from an old sidecar must not read as 'no failures'."""
+    db = _usage_db(tmp_path, [
+        ("a", "t", "r", "chat", "gpt-6-luna", "chat", "failed", 0, 0, 0, 0, 0),
+    ])
+    summary = summarize_llm_usage(db, run_id="r")
+    assert summary["failed_calls"] == 1
+    assert summary["error_code_recorded"] is False
+    assert summary["failed_by_error_code"] == {}
+
+
 def test_luna_and_luna_pro_are_priced_identically(tmp_path) -> None:
     def rows(model):
         return [("a", "t", "r", "chat", model, "chat", "completed",

@@ -118,8 +118,8 @@ def _new_harness_group(label: str, value: str) -> dict[str, int | str]:
 # matching core/metrics.py's convention -- no live pricing lookups.
 #
 # core.metrics.PRICING_DEFAULTS is not reused here because it is keyed by *provider* and its
-# "openai" entry is gpt-4o ($2.50/$10.00), the answer model. Ingest runs on gpt-4o-mini, 16x
-# cheaper on input; pricing ingest at the gpt-4o rate would overstate a 78-item buildout by
+# "openai" entry is gpt-4o ($2.50/$10.00), the answer model. Ingest ran on gpt-4o-mini (now
+# gpt-6-luna), 16x+ cheaper on input; pricing ingest at the gpt-4o rate would overstate a 78-item buildout by
 # roughly an order of magnitude.
 #
 # Embeddings have no output tokens, so their output rate is 0.0 rather than unknown.
@@ -139,6 +139,10 @@ INGEST_RATES_USD_PER_1M: dict[str, tuple[float, float, float]] = {
     "gpt-4o-mini": (0.15, 0.60, 0.075),
     "gpt-4.1-mini": (0.40, 1.60, 0.10),
     "gpt-4.1-nano": (0.10, 0.40, 0.025),
+    # Standard tier, short context (<=272K input), from developers.openai.com/api/docs/pricing
+    # and /models/gpt-6-luna on 2026-10-15. The usage row does not record the service tier, so
+    # this Standard rate is the headline figure; see FLEX_RATES_USD_PER_1M for the Flex figure.
+    "gpt-6-luna": (0.10, 0.50, 0.01),
     # chat -- OpenRouter slugs. Fetched from openrouter.ai/api/v1/models on 2026-09-08:
     # prompt 2e-7/token = $0.20/M, completion 1.2e-6 = $1.20/M, cache read 2e-8 = $0.02/M.
     # luna and luna-pro are priced identically, so Pro is capability upside at no extra cost.
@@ -154,9 +158,33 @@ INGEST_RATES_USD_PER_1M: dict[str, tuple[float, float, float]] = {
     "text-embedding-3-large": (0.13, 0.0, 0.13),
 }
 RATES_DATED = (
-    "OpenAI rates as of 2026-09 (openai.com/api/pricing); OpenRouter slugs fetched from "
+    "OpenAI rates as of 2026-09 (openai.com/api/pricing), gpt-6-luna and its Flex rate from "
+    "developers.openai.com/api/docs/pricing 2026-10-15; OpenRouter slugs fetched from "
     "openrouter.ai/api/v1/models 2026-09-08"
 )
+
+# Flex rates, only where OpenAI publishes one (Flex is 50% of Standard for gpt-6-luna). Neither
+# llm_usage_events nor provider usage says which tier served a call, so the summary reports the
+# Flex total ALONGSIDE the Standard one instead of choosing: a Flex run that silently fell back
+# to Standard would otherwise be under-reported. Models without an entry keep their own rate.
+FLEX_RATES_USD_PER_1M: dict[str, tuple[float, float, float]] = {
+    "gpt-6-luna": (0.05, 0.25, 0.005),
+}
+
+
+def _row_cost(row: dict[str, Any], rates: tuple[float, float, float]) -> float:
+    input_rate, output_rate, cached_rate = rates
+    total_input = int(row.get("input_tokens") or 0)
+    cached_input = int(row.get("cached_input_tokens") or 0)
+    # cached_input is a subset of total_input; clamp so a provider quirk cannot make the
+    # fresh half negative and silently credit the bill.
+    cached_input = max(0, min(cached_input, total_input))
+    fresh_input = total_input - cached_input
+    return (
+        fresh_input / 1_000_000 * input_rate
+        + cached_input / 1_000_000 * cached_rate
+        + int(row.get("output_tokens") or 0) / 1_000_000 * output_rate
+    )
 
 
 def price_usage(by_model: list[dict[str, Any]]) -> dict[str, Any]:
@@ -168,31 +196,31 @@ def price_usage(by_model: list[dict[str, Any]]) -> dict[str, Any]:
     """
     priced: list[dict[str, Any]] = []
     total = 0.0
+    flex_total = 0.0
+    flex_models: set[str] = set()
     unpriced: dict[str, int] = {}
     for row in by_model:
         model = str(row.get("model") or "")
         rates = INGEST_RATES_USD_PER_1M.get(model)
         if rates is None:
             unpriced[model] = unpriced.get(model, 0) + int(row.get("calls") or 0)
-            priced.append({**row, "cost_usd": None})
+            priced.append({**row, "cost_usd": None, "cost_usd_flex": None})
             continue
-        input_rate, output_rate, cached_rate = rates
-        total_input = int(row.get("input_tokens") or 0)
-        cached_input = int(row.get("cached_input_tokens") or 0)
-        # cached_input is a subset of total_input; clamp so a provider quirk cannot make the
-        # fresh half negative and silently credit the bill.
-        cached_input = max(0, min(cached_input, total_input))
-        fresh_input = total_input - cached_input
-        cost = (
-            fresh_input / 1_000_000 * input_rate
-            + cached_input / 1_000_000 * cached_rate
-            + int(row.get("output_tokens") or 0) / 1_000_000 * output_rate
-        )
+        cost = _row_cost(row, rates)
+        flex_rates = FLEX_RATES_USD_PER_1M.get(model)
+        if flex_rates is not None:
+            flex_models.add(model)
+        flex_cost = cost if flex_rates is None else _row_cost(row, flex_rates)
         total += cost
-        priced.append({**row, "cost_usd": round(cost, 6)})
+        flex_total += flex_cost
+        priced.append({**row, "cost_usd": round(cost, 6), "cost_usd_flex": round(flex_cost, 6)})
     return {
         "by_model": priced,
         "cost_usd": round(total, 6),
+        # The same usage with every model that has a published Flex rate priced at it. The
+        # tier is not recorded per call, so this is the Flex figure, not a measured bill.
+        "cost_usd_flex": round(flex_total, 6),
+        "flex_rate_models": sorted(flex_models),
         "rates_dated": RATES_DATED,
         # Present and non-empty means `cost_usd` is a floor, not the total.
         "unpriced_models": dict(sorted(unpriced.items())),
@@ -251,6 +279,26 @@ def summarize_llm_usage(db_path: Path, *, run_id: str | None = None) -> dict[str
             """,
             params,
         ).fetchall()
+        # error_code arrived with Menhir PR #290; older sidecars lack the column, and a missing
+        # breakdown must read as "not recorded", not as "no failures".
+        columns = {
+            str(col[1]) for col in conn.execute("PRAGMA table_info(llm_usage_events)").fetchall()
+        }
+        failed_by_error_code: dict[str, int] | None = None
+        if "error_code" in columns:
+            failed_where = f"{where} AND status = 'failed'" if where else "WHERE status = 'failed'"
+            failed_by_error_code = {
+                str(code or "unrecorded"): int(n)
+                for code, n in conn.execute(
+                    f"""
+                    SELECT error_code, COUNT(*) FROM llm_usage_events
+                    {failed_where}
+                    GROUP BY error_code
+                    ORDER BY COUNT(*) DESC, error_code
+                    """,
+                    params,
+                ).fetchall()
+            }
 
     rows = [dict(row) for row in by_model]
 
@@ -282,6 +330,8 @@ def summarize_llm_usage(db_path: Path, *, run_id: str | None = None) -> dict[str
         **payload,
         "available": True,
         **dict(totals),
+        "error_code_recorded": failed_by_error_code is not None,
+        "failed_by_error_code": failed_by_error_code or {},
         **pricing,
     }
 

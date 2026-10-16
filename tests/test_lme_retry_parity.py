@@ -330,6 +330,22 @@ def test_config_defaults() -> None:
     assert result.stdout.split() == ["1", "1", "0", "gpt-6-luna", "gpt-6-luna", "flex", "100"]
 
 
+@pytest.mark.parametrize("overrides, expected", [
+    ({}, "flex"),
+    ({"LME_OPENAI_SERVICE_TIER": "default"}, "default"),
+    ({"MENHIR_OPENAI_SERVICE_TIER": "priority"}, "priority"),
+])
+def test_config_forwards_the_service_tier_to_every_menhir_serve(overrides, expected) -> None:
+    """Recall/analysis wrappers start Menhir after sourcing config.sh only, never build_graph.sh."""
+    keys = ("LME_OPENAI_SERVICE_TIER=", "export MENHIR_OPENAI_SERVICE_TIER=")
+    config = (LME / "config.sh").read_text(encoding="utf-8")
+    lines = "\n".join(line for line in config.splitlines() if line.startswith(keys))
+    assert "MENHIR_OPENAI_SERVICE_TIER" in lines
+    command = "set -eu\n" + lines + '\nbash -c \'printf "%s" "$MENHIR_OPENAI_SERVICE_TIER"\''
+    result = subprocess.run([_bash(), "-c", command], env=_clean_env(**overrides), capture_output=True, text=True, check=True)
+    assert result.stdout == expected
+
+
 def test_attach_model_follows_resolver_model_override() -> None:
     command = "set -eu\n" + _config_lines() + '\nprintf "%s\\n" "$LME_ANCHORED_TIME_ATTACH_MODEL"'
     env = _clean_env(LME_ANCHORED_TIME_MODEL="gpt-6-sol")
