@@ -1,3 +1,8 @@
+## 2026-10-16 - Run the drill-down tool loop over the Responses API for OpenAI reasoning models
+
+- gpt-6-luna rejects function tools on `/v1/chat/completions` unless reasoning is turned off, which made the first `--drill-down` run fail with a 400. `send_with_tools` now sends OpenAI reasoning models through `/v1/responses` (`send_responses_with_tools`), keeping their default reasoning so the tool arm stays comparable with the other arms. Other models keep the chat-completions loop.
+- Same contract as the chat loop: shared retry policy, last round forbids tools, an incomplete or empty reply raises instead of being graded. Reasoning items are passed back with tool results, as the API requires.
+
 ## 2026-10-16 - Let the answer model drill into collapsed Menhir counts
 
 - `harness --recall-only --drill-down`: when Menhir collapses a scalar View to its total, the recall shows Menhir's own `built from N items; drill down: get_scalar_view_items(view_uuid=...)` line, and the answer model gets that tool plus a prompt note to use it as needed. Calls are served from `GET /api/scalar-views/{view_uuid}/items`, only for views shown in that item's recall and only in its namespace.

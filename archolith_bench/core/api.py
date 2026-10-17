@@ -334,20 +334,125 @@ def send_chat_with_tools(
         convo.append({"role": "assistant", "content": message.get("content"), "tool_calls": tool_calls})
         for call in tool_calls:
             function = call.get("function") or {}
-            name = str(function.get("name") or "")
-            raw_args = function.get("arguments") or "{}"
-            try:
-                arguments = json.loads(raw_args)
-            except (TypeError, ValueError):
-                arguments = None
-            if isinstance(arguments, dict):
-                result = run_tool(name, arguments)
-            else:
-                result = json.dumps({"error": "arguments must be a JSON object"})
-            calls.append({"name": name, "arguments": arguments if isinstance(arguments, dict) else raw_args,
-                          "result": result})
+            result = _run_tool_call(function.get("name"), function.get("arguments"), run_tool, calls)
             convo.append({"role": "tool", "tool_call_id": str(call.get("id") or ""), "content": result})
     return _fail(f"still calling tools after {max_rounds} rounds")
+
+
+def _run_tool_call(name, raw_args, run_tool, calls: list[dict]) -> str:  # noqa: ANN001
+    """Parse one tool call's JSON arguments, run it, log it, and return the result string.
+
+    Arguments that are not a JSON object go back to the model as an error without running the tool.
+    """
+    name = str(name or "")
+    raw_args = raw_args or "{}"
+    try:
+        arguments = json.loads(raw_args)
+    except (TypeError, ValueError):
+        arguments = None
+    if isinstance(arguments, dict):
+        result = run_tool(name, arguments)
+    else:
+        result = json.dumps({"error": "arguments must be a JSON object"})
+    calls.append({"name": name, "arguments": arguments if isinstance(arguments, dict) else raw_args,
+                  "result": result})
+    return result
+
+
+def _responses_tool(tool: dict) -> dict:
+    """A chat-completions function tool in the Responses API's flat shape."""
+    function = tool.get("function")
+    if tool.get("type") == "function" and isinstance(function, dict):
+        return {"type": "function", **function}
+    return tool
+
+
+def send_responses_with_tools(
+    client: httpx.Client,
+    base_url: str,
+    api_key: str,
+    messages: list[dict],
+    model: str,
+    *,
+    tools: list[dict],
+    run_tool,  # noqa: ANN001 - (name: str, arguments: dict) -> str
+    max_rounds: int = 4,
+    strict: bool = True,
+    max_retries: int = 5,
+) -> tuple[str, float, dict, list[dict]]:
+    """send_chat_with_tools over /v1/responses.
+
+    OpenAI reasoning models (gpt-6-luna) reject function tools on /v1/chat/completions unless
+    reasoning is turned off; /v1/responses keeps their default reasoning, so a tool arm stays
+    comparable with arms answered by send_chat. Same contract and return value as
+    send_chat_with_tools. Every output item, reasoning included, is passed back with the tool
+    results, as the API requires.
+    """
+    url = f"{base_url.rstrip('/')}/responses"
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    chat_body, timeout = build_chat_body(model, messages, base_url)
+    body_base: dict = {"model": model, "tools": [_responses_tool(tool) for tool in tools]}
+    if "max_completion_tokens" in chat_body:
+        body_base["max_output_tokens"] = chat_body["max_completion_tokens"]
+    elif "max_tokens" in chat_body:
+        body_base["max_output_tokens"] = chat_body["max_tokens"]
+    for key in ("service_tier", "temperature"):
+        if key in chat_body:
+            body_base[key] = chat_body[key]
+    input_items: list[dict] = list(messages)
+    usage: dict = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "tool_rounds": 0}
+    calls: list[dict] = []
+    total_start = time.monotonic()
+
+    def _fail(message: str) -> tuple[str, float, dict, list[dict]]:
+        if strict:
+            raise ChatCallFailed(f"{model}: {message}")
+        return message, (time.monotonic() - total_start) * 1000, usage, calls
+
+    for round_idx in range(max_rounds):
+        body = dict(body_base, input=input_items)
+        if round_idx == max_rounds - 1:
+            body["tool_choice"] = "none"
+        resp, error = _post_chat_with_retries(client, url, body, headers, timeout, total_start, max_retries)
+        if resp is None:
+            return _fail(error)
+        if resp.status_code != 200:
+            return _fail(f"[ERROR {resp.status_code}]: {resp.text[:300]}")
+        data = resp.json()
+        round_usage = data.get("usage") or {}
+        usage["prompt_tokens"] += int(round_usage.get("input_tokens") or 0)
+        usage["completion_tokens"] += int(round_usage.get("output_tokens") or 0)
+        usage["total_tokens"] += int(round_usage.get("total_tokens") or 0)
+        usage["tool_rounds"] = round_idx + 1
+        output = [item for item in data.get("output") or [] if isinstance(item, dict)]
+        function_calls = [item for item in output if item.get("type") == "function_call"]
+        if not function_calls:
+            text = "".join(
+                str(part.get("text") or "")
+                for item in output if item.get("type") == "message"
+                for part in item.get("content") or []
+                if isinstance(part, dict) and part.get("type") == "output_text"
+            )
+            if strict and not text.strip():
+                raise ChatCallFailed(
+                    f"{model}: empty response (status={data.get('status')!r}, "
+                    f"incomplete={data.get('incomplete_details')!r})"
+                )
+            return text, (time.monotonic() - total_start) * 1000, usage, calls
+        input_items = input_items + output
+        for call in function_calls:
+            result = _run_tool_call(call.get("name"), call.get("arguments"), run_tool, calls)
+            input_items.append(
+                {"type": "function_call_output", "call_id": str(call.get("call_id") or ""), "output": result}
+            )
+    return _fail(f"still calling tools after {max_rounds} rounds")
+
+
+def send_with_tools(client, base_url, api_key, messages, model, **kwargs):  # noqa: ANN001, ANN003, ANN201
+    """The tool loop for ``model``: Responses for OpenAI reasoning models, chat completions otherwise."""
+    if is_reasoning_model(model) and "api.openai.com" in (base_url or "").lower():
+        return send_responses_with_tools(client, base_url, api_key, messages, model, **kwargs)
+    return send_chat_with_tools(client, base_url, api_key, messages, model, **kwargs)
 
 
 def _proxy_base(proxy_url: str) -> str:
