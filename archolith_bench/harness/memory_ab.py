@@ -26,7 +26,7 @@ import httpx
 if TYPE_CHECKING:
     from .checkpoint import MemoryCheckpoint
 
-from ..core.api import API_KEY, MODEL, PROXY_URL, send_chat, send_chat_with_tools
+from ..core.api import API_KEY, MODEL, PROXY_URL, send_chat, send_with_tools
 from ..core.metrics import PricingModel, compute_arm_cost
 from .base import ABResult, ArmResult, TaskResult, _compute_deltas, _pick_pricing, _usage_tokens
 from .drill_down import (
@@ -461,7 +461,7 @@ def _run_memory_arm(
     score_fn=None,  # noqa: ANN001
     record_turn_evidence: bool = True,
     drill_down: bool = False,
-    tool_send_fn=send_chat_with_tools,  # noqa: ANN001
+    tool_send_fn=send_with_tools,  # noqa: ANN001
 ) -> ArmResult:
     results: list[TaskResult] = []
     turn_dicts: list[dict] = []
@@ -619,7 +619,7 @@ def run_memory_ab(
     score_fn=None,  # noqa: ANN001
     record_turn_evidence: bool = True,
     drill_down: bool = False,
-    tool_send_fn=send_chat_with_tools,  # noqa: ANN001
+    tool_send_fn=send_with_tools,  # noqa: ANN001
 ) -> ABResult:
     """Run an ingest-then-recall memory benchmark across arms.
 

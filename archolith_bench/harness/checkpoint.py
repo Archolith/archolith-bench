@@ -47,6 +47,16 @@ def checkpoint_path_for(
     return Path(output_dir) / name
 
 
+def checkpoint_prompt_tag(adapter: object, *, drill_down: bool = False) -> str | None:
+    """The ``prompt_tag`` for a run: the adapter's prompt fingerprint, marked for drill-down.
+
+    Drill-down changes how answers are produced but not the arm names, so without the mark a
+    resume would mix drill-down and plain answers in one checkpoint.
+    """
+    tag = getattr(adapter, "prompt_fingerprint", None)
+    return f"{tag or ''}dd" if drill_down else tag
+
+
 class MemoryCheckpoint:
     """Append-only JSONL checkpoint of completed (arm, task_id) TaskResults."""
 

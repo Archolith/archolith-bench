@@ -33,6 +33,19 @@ def test_checkpoint_is_keyed_by_the_answer_prompt(tmp_path) -> None:
     assert checkpoint_path_for(tmp_path, "b", "m", variant="s").name == ".checkpoint_b_s_m.jsonl"
 
 
+def test_drill_down_runs_get_their_own_checkpoint(tmp_path) -> None:
+    from archolith_bench.harness.checkpoint import checkpoint_prompt_tag
+
+    adapter = LongMemEvalMemoryAdapter
+    plain = checkpoint_prompt_tag(adapter, drill_down=False)
+    drill = checkpoint_prompt_tag(adapter, drill_down=True)
+    assert plain == adapter.prompt_fingerprint and drill == f"{plain}dd"
+    paths = {checkpoint_path_for(tmp_path, "b", "m", variant="s", prompt_tag=tag) for tag in (plain, drill)}
+    assert len(paths) == 2
+    assert checkpoint_prompt_tag(object()) is None
+    assert checkpoint_prompt_tag(object(), drill_down=True) == "dd"
+
+
 def test_veto_policy_is_scoped_to_verdict_records() -> None:
     assert ("Safe veto policy (structured verdict and authoritative records only; never use it to "
             "drop an ordinary memory that answers the question)") in _MEMORY_SYSTEM_PROMPT
