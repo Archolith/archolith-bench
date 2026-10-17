@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from decimal import Decimal, InvalidOperation
 import uuid
+from collections.abc import Iterable
 from typing import Any
 from urllib.parse import quote
 
@@ -20,6 +21,35 @@ import httpx
 _BLOCKING_EVENT_GATES = frozenset({"anchor", "ambiguity", "time", "scope", "no_candidate"})
 # Menhir tags facts found by searching a question's verbs (MENHIR_FRONTIER_VERB_FACETS) with this kind.
 _VERB_FACET_SCORE_KIND = "verb_facet"
+# Menhir appends at most 3 such facts; the client enforces the same cap, so a server change or a
+# tagging bug cannot grow the context past ``limit`` without bound.
+VERB_FACET_MAX = 3
+
+
+class RecallSnippets(list):
+    """Rendered recall snippets. ``extras`` are the verb-facet snippets among them: they sit
+    outside ``limit``, so a caller that re-caps the context must not count them."""
+
+    def __init__(self, snippets: Iterable[str] = (), extras: Iterable[str] = ()) -> None:
+        super().__init__(snippets)
+        self.extras: tuple[str, ...] = tuple(extras)
+
+
+def is_verb_facet(item: dict[str, Any]) -> bool:
+    return str(item.get("retrieval_score_kind") or "") == _VERB_FACET_SCORE_KIND
+
+
+def place_verb_facets(
+    snippets: list[str], n_head: int, facet_snippets: list[str], limit: int
+) -> RecallSnippets:
+    """Cut ``snippets`` to ``limit``, then put up to VERB_FACET_MAX facet snippets right after
+    the first ``n_head`` (the verdict blocks). Facets do not count toward ``limit``."""
+    kept = snippets[:limit]
+    facets = facet_snippets[:VERB_FACET_MAX]
+    if not facets:
+        return RecallSnippets(kept)
+    split = min(n_head, len(kept))
+    return RecallSnippets(kept[:split] + facets + kept[split:], facets)
 
 
 def _format_duration_alias(value: Any, unit: str) -> str | None:
@@ -637,18 +667,12 @@ class HttpMenhirClient:
                     else:
                         prefix = f"[RELATED {memory_type} MEMORY | non-authoritative]"
                     text = f"{prefix} {text}"
-                if str(item.get("retrieval_score_kind") or "") == _VERB_FACET_SCORE_KIND:
+                if is_verb_facet(item):
                     facet_snippets.append(text)
                 else:
                     snippets.append(text)
 
-        kept = snippets[:limit]
-        if not facet_snippets:
-            return kept
-        # Verb-facet facts are extras Menhir appends beyond its ranked results: they go right after
-        # the verdicts and do not count toward ``limit``, so the cut above is unchanged.
-        split = min(n_head, len(kept))
-        return kept[:split] + facet_snippets + kept[split:]
+        return place_verb_facets(snippets, n_head, facet_snippets, limit)
 
     def get_scalar_view_items(
         self, namespace: str, view_uuid: str, *, offset: int = 0, limit: int = 20

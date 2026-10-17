@@ -1,3 +1,10 @@
+## 2026-10-17 - Keep Menhir verb-facet facts outside the limit in every memory mode
+
+- The value-augmented arms and agentic recall re-capped the context to `recall_limit`, so verb-facet facts displaced ranked memories there. `recall()` now returns the facet snippets as `extras`, and those merges keep them in place without counting them. Agentic recall keeps at most 3 in total.
+- The client keeps at most 3 facet facts per recall, the same cap Menhir uses.
+- The Recall Lab rescore scripts render facet facts the same way as the client.
+- Responses without facet facts give the same context as before.
+
 ## 2026-10-16 - Let the answer model drill into collapsed Menhir counts
 
 - `harness --recall-only --drill-down`: when Menhir collapses a scalar View to its total, the recall shows Menhir's own `built from N items; drill down: get_scalar_view_items(view_uuid=...)` line, and the answer model gets that tool plus a prompt note to use it as needed. Calls are served from `GET /api/scalar-views/{view_uuid}/items`, only for views shown in that item's recall and only in its namespace.
