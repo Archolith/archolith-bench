@@ -20,6 +20,7 @@ can still be added behind a flag later for official evidence runs.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -166,7 +167,16 @@ _MEMORY_SYSTEM_PROMPT = (
     "from retrieval/list order or from when Menhir learned the memory. A 'superseded belief' label means "
     "the fact is historical; a 'current belief' label means it remains current. If source time is unknown, "
     "do not invent an ordering.\n\n"
-    "Safe veto policy: ignore a memory item only when it does not match the question's subject, attribute, "
+    "For questions that count distinct things (\"how many\" items, events, times or places) or ask for a "
+    "list: list every candidate item from the retrieved memory and rate how well it fits the category the "
+    "question names: high (clearly fits), medium (fits under a reasonable everyday reading of the "
+    "question's wording), low (only a stretch). Count high and medium, each distinct item once. Give one "
+    "final number; you may then briefly mention low items you left out. When \"how many\" instead asks "
+    "for a single current quantity (an amount the user has or has reached now), do not count mentions: "
+    "answer with the latest supported value, following the rules above.\n\n"
+    "Safe veto policy (structured verdict and authoritative records only; never use it to drop an ordinary "
+    "memory that answers the question): ignore such a record only when it does not match the question's "
+    "subject, attribute, "
     "scope, unit, or time; when it is superseded for a current-value question; when its provenance clearly "
     "does not support its claimed value. If multiple authoritative current records conflict, veto the "
     "conflicting set and say you don't know; do not arbitrarily choose one. Never veto a matching, supported "
@@ -205,11 +215,21 @@ class LongMemEvalMemoryAdapter:
     def question(self, item: dict) -> str:
         return item.get("question", "")
 
-    def build_messages(self, memory_context: str, question: str) -> list[dict]:
+    # Checkpoint key: a resume never mixes answers from different answer prompts.
+    prompt_fingerprint = hashlib.sha256(
+        (_MEMORY_SYSTEM_PROMPT + "\x00dated-user-message-v1").encode("utf-8")).hexdigest()[:10]
+
+    def question_date(self, item: dict) -> str | None:
+        return str(item.get("question_date") or "").strip() or None
+
+    def build_messages(
+        self, memory_context: str, question: str, question_date: str | None = None
+    ) -> list[dict]:
         mem = memory_context.strip() or "(no relevant memory found)"
+        dated = f"Current date: {question_date}\n\n" if question_date else ""
         return [
             {"role": "system", "content": _MEMORY_SYSTEM_PROMPT},
-            {"role": "user", "content": f"Retrieved memory:\n{mem}\n\nQuestion: {question}"},
+            {"role": "user", "content": f"{dated}Retrieved memory:\n{mem}\n\nQuestion: {question}"},
         ]
 
     def score(self, item: dict, response_text: str) -> bool:

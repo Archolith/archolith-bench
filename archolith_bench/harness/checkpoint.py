@@ -33,14 +33,17 @@ def checkpoint_path_for(
     model: str,
     *,
     variant: str | None = None,
+    prompt_tag: str | None = None,
 ) -> Path:
-    """Deterministic checkpoint file for a (benchmark, variant, answer-model) run.
+    """Deterministic checkpoint file for a (benchmark, variant, answer-model[, prompt]) run.
 
     Keyed on the answer model and dataset variant because both change the scored
-    outcome; mixing them in one checkpoint would corrupt the aggregate.
+    outcome; mixing them in one checkpoint would corrupt the aggregate. An adapter whose
+    answer prompt changes passes ``prompt_tag`` so a resume never mixes prompt versions.
     """
     variant = variant if variant is not None else (os.getenv("LONGMEMEVAL_VARIANT", "s") or "s")
-    name = f".checkpoint_{_slug(benchmark_id)}_{_slug(variant)}_{_slug(model)}.jsonl"
+    tag = f"_p{_slug(prompt_tag)}" if prompt_tag else ""
+    name = f".checkpoint_{_slug(benchmark_id)}_{_slug(variant)}_{_slug(model)}{tag}.jsonl"
     return Path(output_dir) / name
 
 
