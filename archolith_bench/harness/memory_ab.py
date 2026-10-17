@@ -529,7 +529,14 @@ def _run_memory_arm(
                         reset_confirmed=reset_confirmed,
                         dry_run_reset=dry_run_reset,
                     )
-        messages = adapter.build_messages(memory_context, question)
+        # An adapter may supply the question's date for the answer prompt; others keep the 2-arg call.
+        date_fn = getattr(adapter, "question_date", None)
+        question_date = date_fn(item) if callable(date_fn) else None
+        messages = (
+            adapter.build_messages(memory_context, question, question_date=question_date)
+            if question_date
+            else adapter.build_messages(memory_context, question)
+        )
         # Drill-down: offer the tool (and say when to use it) only when this item's recall shows
         # a collapsed View to drill into; every other item is answered exactly as before.
         view_ids = drill_down_view_ids(memory_context) if drill_down and drill_namespace else []
