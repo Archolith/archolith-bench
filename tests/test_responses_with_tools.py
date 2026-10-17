@@ -73,7 +73,7 @@ def test_runs_the_call_passes_reasoning_back_and_answers(monkeypatch) -> None:
     assert ran == [("get_scalar_view_items", {"view_uuid": "v-1"})]
     path, first = seen[0]
     assert path == "/v1/responses"
-    assert first["tools"] == [{"type": "function", **DRILL_DOWN_TOOL["function"]}]
+    assert first["tools"] == [{"type": "function", "strict": False, **DRILL_DOWN_TOOL["function"]}]
     assert first["input"] == MSGS and "tool_choice" not in first
     assert first["service_tier"] == "flex"
     assert first["max_output_tokens"] == api.REASONING_MAX_COMPLETION_TOKENS
@@ -114,6 +114,79 @@ def test_incomplete_reply_is_not_graded() -> None:
             _client([incomplete], []), OPENAI, "k", MSGS, "gpt-6-luna",
             tools=[DRILL_DOWN_TOOL], run_tool=lambda _n, _a: "{}",
         )
+
+
+def test_incomplete_reply_with_partial_text_is_not_graded() -> None:
+    truncated = httpx.Response(200, json={
+        "status": "incomplete", "incomplete_details": {"reason": "max_output_tokens"},
+        "output": [REASONING, {"type": "message", "role": "assistant",
+                               "content": [{"type": "output_text", "text": "The answer is par"}]}],
+        "usage": {},
+    })
+    with pytest.raises(ChatCallFailed, match="not completed.*max_output_tokens"):
+        send_responses_with_tools(
+            _client([truncated], []), OPENAI, "k", MSGS, "gpt-6-luna",
+            tools=[DRILL_DOWN_TOOL], run_tool=lambda _n, _a: "{}",
+        )
+
+
+def test_truncated_function_call_is_not_run() -> None:
+    truncated = httpx.Response(200, json={
+        "status": "incomplete", "incomplete_details": {"reason": "max_output_tokens"},
+        "output": [{"type": "function_call", "id": "fc_1", "call_id": "call_1",
+                    "name": "get_scalar_view_items", "arguments": '{"view_uuid": "v-'}],
+        "usage": {},
+    })
+    ran: list = []
+    with pytest.raises(ChatCallFailed, match="not completed"):
+        send_responses_with_tools(
+            _client([truncated, _answer()], []), OPENAI, "k", MSGS, "gpt-6-luna",
+            tools=[DRILL_DOWN_TOOL], run_tool=lambda n, a: ran.append(a) or "{}",
+        )
+    assert ran == []
+
+
+def test_failed_response_reports_the_api_error() -> None:
+    failed = httpx.Response(200, json={
+        "status": "failed", "error": {"code": "server_error", "message": "boom"},
+        "output": [], "usage": {},
+    })
+    with pytest.raises(ChatCallFailed, match="server_error"):
+        send_responses_with_tools(
+            _client([failed], []), OPENAI, "k", MSGS, "gpt-6-luna",
+            tools=[DRILL_DOWN_TOOL], run_tool=lambda _n, _a: "{}",
+        )
+
+
+def test_server_error_status_fails_strictly() -> None:
+    with pytest.raises(ChatCallFailed, match=r"\[ERROR 500\]"):
+        send_responses_with_tools(
+            _client([httpx.Response(500, text="oops")], []), OPENAI, "k", MSGS, "gpt-6-luna",
+            tools=[DRILL_DOWN_TOOL], run_tool=lambda _n, _a: "{}", max_retries=0,
+        )
+
+
+def test_parallel_calls_all_run_and_return_in_order(monkeypatch) -> None:
+    monkeypatch.delenv(api.SERVICE_TIER_ENV, raising=False)
+    two = httpx.Response(200, json={
+        "status": "completed",
+        "output": [REASONING,
+                   {"type": "function_call", "id": "fc_1", "call_id": "call_a",
+                    "name": "get_scalar_view_items", "arguments": '{"view_uuid": "v-1"}'},
+                   {"type": "function_call", "id": "fc_2", "call_id": "call_b",
+                    "name": "get_scalar_view_items", "arguments": '{"view_uuid": "v-2"}'}],
+        "usage": {},
+    })
+    seen: list = []
+    text, *_ = send_responses_with_tools(
+        _client([two, _answer()], seen), OPENAI, "k", MSGS, "gpt-6-luna",
+        tools=[DRILL_DOWN_TOOL], run_tool=lambda _n, a: json.dumps({"for": a["view_uuid"]}),
+    )
+    assert text == "Three"
+    assert "service_tier" not in seen[0][1]
+    outputs = [item for item in seen[1][1]["input"] if item.get("type") == "function_call_output"]
+    assert [(o["call_id"], json.loads(o["output"])["for"]) for o in outputs] == [
+        ("call_a", "v-1"), ("call_b", "v-2")]
 
 
 def test_bad_arguments_go_back_without_running_the_tool() -> None:

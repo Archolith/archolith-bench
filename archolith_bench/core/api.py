@@ -360,10 +360,14 @@ def _run_tool_call(name, raw_args, run_tool, calls: list[dict]) -> str:  # noqa:
 
 
 def _responses_tool(tool: dict) -> dict:
-    """A chat-completions function tool in the Responses API's flat shape."""
+    """A chat-completions function tool in the Responses API's flat shape.
+
+    ``strict`` is pinned False unless the tool sets it: chat completions default to non-strict,
+    and a strict schema must list every property as required, which optional tool args do not.
+    """
     function = tool.get("function")
     if tool.get("type") == "function" and isinstance(function, dict):
-        return {"type": "function", **function}
+        return {"type": "function", "strict": False, **function}
     return tool
 
 
@@ -425,6 +429,13 @@ def send_responses_with_tools(
         usage["total_tokens"] += int(round_usage.get("total_tokens") or 0)
         usage["tool_rounds"] = round_idx + 1
         output = [item for item in data.get("output") or [] if isinstance(item, dict)]
+        status_detail = (
+            f"status={data.get('status')!r}, incomplete={data.get('incomplete_details')!r}, "
+            f"error={data.get('error')!r}"
+        )
+        # Checked before the tool branch: a truncated reply or function call is not graded or run.
+        if strict and data.get("status") not in (None, "completed"):
+            raise ChatCallFailed(f"{model}: response not completed ({status_detail})")
         function_calls = [item for item in output if item.get("type") == "function_call"]
         if not function_calls:
             text = "".join(
@@ -434,10 +445,7 @@ def send_responses_with_tools(
                 if isinstance(part, dict) and part.get("type") == "output_text"
             )
             if strict and not text.strip():
-                raise ChatCallFailed(
-                    f"{model}: empty response (status={data.get('status')!r}, "
-                    f"incomplete={data.get('incomplete_details')!r})"
-                )
+                raise ChatCallFailed(f"{model}: empty response ({status_detail})")
             return text, (time.monotonic() - total_start) * 1000, usage, calls
         input_items = input_items + output
         for call in function_calls:

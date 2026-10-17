@@ -1,7 +1,9 @@
 ## 2026-10-16 - Run the drill-down tool loop over the Responses API for OpenAI reasoning models
 
 - gpt-6-luna rejects function tools on `/v1/chat/completions` unless reasoning is turned off, which made the first `--drill-down` run fail with a 400. `send_with_tools` now sends OpenAI reasoning models through `/v1/responses` (`send_responses_with_tools`), keeping their default reasoning so the tool arm stays comparable with the other arms. Other models keep the chat-completions loop.
-- Same contract as the chat loop: shared retry policy, last round forbids tools, an incomplete or empty reply raises instead of being graded. Reasoning items are passed back with tool results, as the API requires.
+- Same contract as the chat loop: shared retry policy, last round forbids tools. Any response whose status is not `completed`, or an empty reply, raises instead of being graded or having its tool calls run; the error carries the API's status, incomplete details and error. Reasoning items are passed back with tool results, as the API requires.
+- The tool is sent with `strict: false`, matching chat-completions semantics for its optional arguments.
+- `--resume` with `--drill-down` uses its own checkpoint file, so drill-down and plain answers for the same arm never mix.
 
 ## 2026-10-16 - Let the answer model drill into collapsed Menhir counts
 

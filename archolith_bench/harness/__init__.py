@@ -33,7 +33,7 @@ from .external import (
 )
 from .longbench_v2 import LongBenchV2Adapter
 from .longmemeval import LongMemEvalAdapter, LongMemEvalMemoryAdapter
-from .checkpoint import MemoryCheckpoint, checkpoint_path_for
+from .checkpoint import MemoryCheckpoint, checkpoint_path_for, checkpoint_prompt_tag
 from .memory_ab import (
     DEFAULT_MEMORY_ARMS,
     NO_MEMORY,
@@ -183,6 +183,7 @@ __all__ = [
     "write_phase3_evidence",
     "write_scalar_state_evidence",
     "checkpoint_path_for",
+    "checkpoint_prompt_tag",
     "NO_MEMORY",
     "VALUE_RECALL",
     "VALUE_RECALL_V2_CURRENT",

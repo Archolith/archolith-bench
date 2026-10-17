@@ -69,7 +69,7 @@ def with_drill_down_instruction(messages: list[dict]) -> list[dict]:
 
 
 def make_drill_down_runner(client: Any, namespace: str, view_ids: list[str]) -> Callable[[str, dict], str]:
-    """A ``run_tool(name, arguments) -> str`` for send_chat_with_tools.
+    """A ``run_tool(name, arguments) -> str`` for send_with_tools.
 
     Only ``get_scalar_view_items`` on a view id shown in this item's recall is served, always in
     this item's namespace; anything else gets an error message the model can read. Menhir HTTP
