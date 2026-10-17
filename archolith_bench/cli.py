@@ -321,6 +321,11 @@ def main(argv: list[str] | None = None) -> None:
                                 "per-question namespaces (--namespace-template). Skips ingest AND "
                                 "reset, so no --confirm-menhir-reset is needed. Use after the graph "
                                 "is ingested+enriched once (the LongMemEval Mode-B recall-only A/B).")
+    harness_p.add_argument("--drill-down", action="store_true",
+                           help="Memory benchmarks, with --recall-only: when Menhir collapses a "
+                                "scalar View to 'built from N items', show its drill-down line and "
+                                "give the answer model the get_scalar_view_items tool (with a "
+                                "prompt note to use it as needed) to page through those items.")
     harness_p.add_argument("--namespace-template", default="lme-{question_id}",
                            help="Recall-only: namespace per item, formatted with {question_id} "
                                 "(default: lme-{question_id}, matching _ingest_lme.py).")
@@ -1259,7 +1264,9 @@ def _run_harness(args: argparse.Namespace) -> None:
             assert_not_production(args.menhir_url)
             menhir_key = _resolve_menhir_bearer_key()
             print(f"  auth: {'bearer set' if menhir_key else 'no key (expects an auth-disabled instance)'}")
-            client = HttpMenhirClient(args.menhir_url, api_key=menhir_key)
+            client = HttpMenhirClient(
+                args.menhir_url, api_key=menhir_key, drill_down=getattr(args, "drill_down", False)
+            )
             send_fn = send_chat
         checkpoint = None
         if getattr(args, "resume", False):
@@ -1305,6 +1312,7 @@ def _run_harness(args: argparse.Namespace) -> None:
             checkpoint=checkpoint,
             score_fn=score_fn,
             record_turn_evidence=not getattr(args, "no_record_turn_evidence", False),
+            drill_down=getattr(args, "drill_down", False),
         )
     elif is_external(adapter):
         results_fixtures = (

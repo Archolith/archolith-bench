@@ -193,15 +193,49 @@ def send_chat(
         return message, latency_ms, {}
 
     total_start = time.monotonic()
+    resp, error = _post_chat_with_retries(client, url, body, headers, timeout, total_start, max_retries)
+    if resp is None:
+        return _fail(error)
+
+    latency_ms = (time.monotonic() - total_start) * 1000
+
+    if resp.status_code != 200:
+        return _fail(f"[ERROR {resp.status_code}]: {resp.text[:300]}")
+
+    data = resp.json()
+    choice = (data.get("choices") or [{}])[0]
+    text = (choice.get("message") or {}).get("content", "") or ""
+    usage = data.get("usage", {})
+    if strict and not text.strip():
+        # A reasoning model that spends its whole budget thinking returns empty content with
+        # finish_reason "length"; scoring that as an answer is a silent wrong grade.
+        raise ChatCallFailed(f"{model}: empty completion (finish_reason={choice.get('finish_reason')!r})")
+    return text, latency_ms, usage
+
+
+def _post_chat_with_retries(
+    client: httpx.Client,
+    url: str,
+    body: dict,
+    headers: dict,
+    timeout: float,
+    total_start: float,
+    max_retries: int = 5,
+) -> tuple[httpx.Response | None, str]:
+    """POST one chat request with send_chat's retry policy.
+
+    Returns ``(response, "")`` -- possibly a non-200 that the caller reports -- or
+    ``(None, message)`` on a timeout or transport error. ``insufficient_quota`` is never retried.
+    """
     attempt = 0
     capacity_attempt = 0
     while True:
         try:
             resp = client.post(url, json=body, headers=headers, timeout=timeout)
         except httpx.TimeoutException:
-            return _fail(f"[TIMEOUT after {(time.monotonic() - total_start):.0f}s]")
+            return None, f"[TIMEOUT after {(time.monotonic() - total_start):.0f}s]"
         except httpx.HTTPError as e:
-            return _fail(f"[HTTP ERROR]: {e}")
+            return None, f"[HTTP ERROR]: {e}"
 
         if resp.status_code == 429:
             body_text = (resp.text or "").lower()
@@ -233,20 +267,87 @@ def send_chat(
 
         break
 
-    latency_ms = (time.monotonic() - total_start) * 1000
+    return resp, ""
 
-    if resp.status_code != 200:
-        return _fail(f"[ERROR {resp.status_code}]: {resp.text[:300]}")
 
-    data = resp.json()
-    choice = (data.get("choices") or [{}])[0]
-    text = (choice.get("message") or {}).get("content", "") or ""
-    usage = data.get("usage", {})
-    if strict and not text.strip():
-        # A reasoning model that spends its whole budget thinking returns empty content with
-        # finish_reason "length"; scoring that as an answer is a silent wrong grade.
-        raise ChatCallFailed(f"{model}: empty completion (finish_reason={choice.get('finish_reason')!r})")
-    return text, latency_ms, usage
+def send_chat_with_tools(
+    client: httpx.Client,
+    base_url: str,
+    api_key: str,
+    messages: list[dict],
+    model: str,
+    *,
+    tools: list[dict],
+    run_tool,  # noqa: ANN001 - (name: str, arguments: dict) -> str
+    max_rounds: int = 4,
+    strict: bool = True,
+    max_retries: int = 5,
+) -> tuple[str, float, dict, list[dict]]:
+    """Chat with function tools: run each tool call through ``run_tool`` and ask again.
+
+    Makes at most ``max_rounds`` model calls. The last one is sent with ``tool_choice="none"``,
+    so the model has to answer. Each call uses send_chat's retry policy.
+
+    Returns (text, latency_ms, usage summed over rounds, tool-call log). On failure it raises
+    ``ChatCallFailed`` when ``strict``; otherwise the error string comes back as the text.
+    Errors from ``run_tool`` propagate, so a broken memory backend is never graded.
+    """
+    url = f"{base_url.rstrip('/')}/chat/completions"
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    convo = list(messages)
+    body_base, timeout = build_chat_body(model, convo, base_url)
+    if "deepseek" in (base_url or "").lower() or "deepseek" in (model or "").lower():
+        body_base["thinking"] = {"type": "disabled"}
+    usage: dict = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "tool_rounds": 0}
+    calls: list[dict] = []
+    total_start = time.monotonic()
+
+    def _fail(message: str) -> tuple[str, float, dict, list[dict]]:
+        if strict:
+            raise ChatCallFailed(f"{model}: {message}")
+        return message, (time.monotonic() - total_start) * 1000, usage, calls
+
+    for round_idx in range(max_rounds):
+        body = dict(body_base, messages=convo, tools=tools)
+        if round_idx == max_rounds - 1:
+            body["tool_choice"] = "none"
+        resp, error = _post_chat_with_retries(client, url, body, headers, timeout, total_start, max_retries)
+        if resp is None:
+            return _fail(error)
+        if resp.status_code != 200:
+            return _fail(f"[ERROR {resp.status_code}]: {resp.text[:300]}")
+        data = resp.json()
+        round_usage = data.get("usage") or {}
+        for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
+            usage[key] += int(round_usage.get(key) or 0)
+        usage["tool_rounds"] = round_idx + 1
+        choice = (data.get("choices") or [{}])[0]
+        message = choice.get("message") or {}
+        tool_calls = message.get("tool_calls") or []
+        if not tool_calls:
+            text = message.get("content") or ""
+            if strict and not text.strip():
+                raise ChatCallFailed(
+                    f"{model}: empty completion (finish_reason={choice.get('finish_reason')!r})"
+                )
+            return text, (time.monotonic() - total_start) * 1000, usage, calls
+        convo.append({"role": "assistant", "content": message.get("content"), "tool_calls": tool_calls})
+        for call in tool_calls:
+            function = call.get("function") or {}
+            name = str(function.get("name") or "")
+            raw_args = function.get("arguments") or "{}"
+            try:
+                arguments = json.loads(raw_args)
+            except (TypeError, ValueError):
+                arguments = None
+            if isinstance(arguments, dict):
+                result = run_tool(name, arguments)
+            else:
+                result = json.dumps({"error": "arguments must be a JSON object"})
+            calls.append({"name": name, "arguments": arguments if isinstance(arguments, dict) else raw_args,
+                          "result": result})
+            convo.append({"role": "tool", "tool_call_id": str(call.get("id") or ""), "content": result})
+    return _fail(f"still calling tools after {max_rounds} rounds")
 
 
 def _proxy_base(proxy_url: str) -> str:

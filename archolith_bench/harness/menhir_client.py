@@ -10,6 +10,7 @@ from __future__ import annotations
 from decimal import Decimal, InvalidOperation
 import uuid
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 
@@ -111,8 +112,12 @@ def _recall_item_text(item: dict[str, Any]) -> str:
     return text or source_time
 
 
-def _format_authority_record(record: dict[str, Any]) -> str:
-    """Render structured scalar authority as compact, provenance-rich LLM context."""
+def _format_authority_record(record: dict[str, Any], *, drill_down: bool = False) -> str:
+    """Render structured scalar authority as compact, provenance-rich LLM context.
+
+    With ``drill_down``, a View whose items were collapsed away gets Menhir's own drill-down
+    line (same wording and condition as menhir's context_builder), naming its view_uuid.
+    """
     kind = str(record.get("kind") or "").strip().lower()
     status = str(record.get("status") or "").strip().lower()
     founded = record.get("has_foundation") is not False
@@ -152,6 +157,19 @@ def _format_authority_record(record: dict[str, Any]) -> str:
         if support:
             lines.append("provenance:")
             lines.extend(f"- {item}" for item in support)
+    view_uuid = str(record.get("view_uuid") or "").strip()
+    total = record.get("contributors_total")
+    if (
+        drill_down
+        and record.get("contributors_truncated") is True
+        and not contributors
+        and isinstance(total, int)
+        and total > 0
+        and view_uuid
+    ):
+        lines.append(
+            f"- built from {total} items; drill down: get_scalar_view_items(view_uuid={view_uuid})"
+        )
     return "\n".join(lines)
 
 
@@ -312,6 +330,7 @@ class HttpMenhirClient:
         ingest_path: str = "/api/memory",
         recall_path: str = "/api/recall",
         timeout: float = 180.0,
+        drill_down: bool = False,
     ) -> None:
         """
         Initialize HTTP client against a real menhir instance.
@@ -326,8 +345,11 @@ class HttpMenhirClient:
             ingest_path: Episode ingest endpoint (default "/api/memory").
             recall_path: Recall endpoint (default "/api/recall").
             timeout: Request timeout in seconds.
+            drill_down: Render the drill-down line on collapsed scalar Views, for an answer
+                model that has the get_scalar_view_items tool.
         """
         self._base_url = base_url
+        self._drill_down = drill_down
         self._ingest_path = ingest_path
         self._recall_path = recall_path
         self._client = httpx.Client(timeout=timeout)
@@ -580,7 +602,7 @@ class HttpMenhirClient:
 
         snippets: list[str] = []
         for record in authority_records:
-            rendered = _format_authority_record(record)
+            rendered = _format_authority_record(record, drill_down=self._drill_down)
             if rendered:
                 snippets.append(rendered)
 
@@ -615,6 +637,20 @@ class HttpMenhirClient:
                     snippets.append(text)
 
         return snippets[:limit]
+
+    def get_scalar_view_items(
+        self, namespace: str, view_uuid: str, *, offset: int = 0, limit: int = 20
+    ) -> dict[str, Any]:
+        """Page the items a scalar View was built from (GET /api/scalar-views/{uuid}/items)."""
+        url = self._base_url.rstrip("/") + f"/api/scalar-views/{quote(view_uuid, safe='')}/items"
+        response = self._client.get(
+            url,
+            params={"namespace": namespace, "offset": offset, "limit": limit},
+            headers=self._headers,
+        )
+        response.raise_for_status()
+        data = response.json()
+        return data if isinstance(data, dict) else {"items": data}
 
     def recall_raw(self, group_id: str, query: str, limit: int = 10) -> dict[str, Any]:
         """Return the unmodified HTTP recall response for benchmark assertions."""
