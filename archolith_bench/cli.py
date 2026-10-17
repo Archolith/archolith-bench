@@ -1199,6 +1199,7 @@ def _run_harness(args: argparse.Namespace) -> None:
         ab_result_to_dict,
         assert_not_production,
         checkpoint_path_for,
+        checkpoint_prompt_tag,
         get_adapter,
         is_external,
         is_memory,
@@ -1270,8 +1271,10 @@ def _run_harness(args: argparse.Namespace) -> None:
             send_fn = send_chat
         checkpoint = None
         if getattr(args, "resume", False):
-            ckpt_path = checkpoint_path_for(args.output_dir, adapter.benchmark_id, args.model,
-                                            prompt_tag=getattr(adapter, "prompt_fingerprint", None))
+            ckpt_path = checkpoint_path_for(
+                args.output_dir, adapter.benchmark_id, args.model,
+                prompt_tag=checkpoint_prompt_tag(adapter, drill_down=getattr(args, "drill_down", False)),
+            )
             checkpoint = MemoryCheckpoint(ckpt_path)
             done = checkpoint.done_count()
             print(f"  [resume] checkpoint {ckpt_path} ({done} item-results already recorded)")
