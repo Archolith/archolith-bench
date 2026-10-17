@@ -48,6 +48,8 @@ from archolith_bench.harness.menhir_client import (  # noqa: E402
     HttpMenhirClient,
     _format_authority_record,
     _recall_item_text,
+    is_verb_facet,
+    place_verb_facets,
 )
 
 ARM_E_TUNING: dict[str, Any] = {
@@ -106,6 +108,8 @@ class RecallLabArmEClient(HttpMenhirClient):
             if rendered:
                 snippets.append(rendered)
 
+        n_head = len(snippets)
+        facet_snippets: list[str] = []
         for item in items:
             if str(item.get("uuid") or "") in authority_view_ids:
                 continue
@@ -120,11 +124,13 @@ class RecallLabArmEClient(HttpMenhirClient):
                     prefix = f"[CURRENT {memory_type} MEMORY | authoritative]"
                 else:
                     prefix = f"[RELATED {memory_type} MEMORY | non-authoritative]"
-                snippets.append(f"{prefix} {text}")
+                text = f"{prefix} {text}"
+            if is_verb_facet(item):
+                facet_snippets.append(text)
             else:
                 snippets.append(text)
 
-        return snippets[:limit]
+        return place_verb_facets(snippets, n_head, facet_snippets, limit)
 
 
 def main() -> None:

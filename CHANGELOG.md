@@ -1,3 +1,10 @@
+## 2026-10-17 - Keep Menhir verb-facet facts outside the limit in every memory mode
+
+- The value-augmented arms and agentic recall re-capped the context to `recall_limit`, so verb-facet facts displaced ranked memories there. `recall()` now returns the facet snippets as `extras`, and those merges keep them in place without counting them. Agentic recall keeps at most 3 in total.
+- The client keeps at most 3 facet facts per recall, the same cap Menhir uses.
+- The Recall Lab rescore scripts render facet facts the same way as the client.
+- Responses without facet facts give the same context as before.
+
 ## 2026-10-16 - Run the drill-down tool loop over the Responses API for OpenAI reasoning models
 
 - gpt-6-luna rejects function tools on `/v1/chat/completions` unless reasoning is turned off, which made the first `--drill-down` run fail with a 400. `send_with_tools` now sends OpenAI reasoning models through `/v1/responses` (`send_responses_with_tools`), keeping their default reasoning so the tool arm stays comparable with the other arms. Other models keep the chat-completions loop.

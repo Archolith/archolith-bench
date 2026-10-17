@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 import os
 import re
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from contextlib import nullcontext
 from statistics import mean
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
@@ -35,7 +35,7 @@ from .drill_down import (
     make_drill_down_runner,
     with_drill_down_instruction,
 )
-from .menhir_client import HttpMenhirClient
+from .menhir_client import VERB_FACET_MAX, HttpMenhirClient
 from .targets import PROD_NAME_MARKERS, TargetRefused, assert_allowed_target
 from .value_nodes import ValueGraph
 from .value_nodes_v2 import SupersededValueGraph
@@ -154,23 +154,57 @@ def _plan_recall_queries(
     return queries[:6]
 
 
+def _merge_within_limit(snippets: list[str], recall_limit: int, extras: Iterable[str] = ()) -> list[str]:
+    """Dedup ``snippets`` in order and keep at most ``recall_limit`` of them (at least one, as
+    the merge loops always did). Verb-facet ``extras`` keep their place and do not count."""
+    extra_set = set(extras)
+    cap = max(recall_limit, 1)
+    merged: list[str] = []
+    seen: set[str] = set()
+    counted = 0
+    for snippet in snippets:
+        if snippet in seen:
+            continue
+        is_extra = snippet in extra_set
+        if not is_extra and counted >= cap:
+            continue
+        seen.add(snippet)
+        merged.append(snippet)
+        counted += not is_extra
+    return merged
+
+
 def _agentic_recall(client: "MenhirClient", group_id: str, subqueries: list[str], recall_limit: int) -> str:
     """Recall each sub-query and union the snippets (dedup, order-preserving), capped at
-    recall_limit total so the answer context stays size-comparable to single-query recall."""
+    recall_limit total so the answer context stays size-comparable to single-query recall.
+    Verb-facet extras do not count toward the cap; at most VERB_FACET_MAX are kept in all."""
     per_q = max(3, recall_limit // max(1, len(subqueries)))
+    cap = max(recall_limit, 1)
     seen: set[str] = set()
     merged: list[str] = []
+    counted = 0
+    facets_kept = 0
     for sq in subqueries:
         try:
             snippets = client.recall(group_id, sq, limit=per_q)
         except Exception:
             snippets = []
+        extras = set(getattr(snippets, "extras", ()))
         for snip in snippets:
-            if snip not in seen:
-                seen.add(snip)
-                merged.append(snip)
-                if len(merged) >= recall_limit:
-                    return "\n".join(merged)
+            if snip in seen:
+                continue
+            if snip in extras:
+                if facets_kept >= VERB_FACET_MAX:
+                    continue
+                facets_kept += 1
+            elif counted >= cap:
+                continue
+            else:
+                counted += 1
+            seen.add(snip)
+            merged.append(snip)
+        if counted >= cap:
+            return "\n".join(merged)
     return "\n".join(merged)
 
 
@@ -191,16 +225,8 @@ def _value_augmented_recall(
     graph = ValueGraph.from_item(f"value-{task_id}", item, adapter.sessions(item))
     value_limit = min(4, max(1, recall_limit // 3))
     value_snippets = graph.recall(question, limit=value_limit)
-    merged: list[str] = []
-    seen: set[str] = set()
-    for snippet in [*value_snippets, *recalled]:
-        if snippet in seen:
-            continue
-        seen.add(snippet)
-        merged.append(snippet)
-        if len(merged) >= recall_limit:
-            break
-    return "\n".join(merged)
+    extras = getattr(recalled, "extras", ())
+    return "\n".join(_merge_within_limit([*value_snippets, *recalled], recall_limit, extras))
 
 
 def _value_augmented_recall_v2(
@@ -222,16 +248,8 @@ def _value_augmented_recall_v2(
     graph = SupersededValueGraph.from_item(f"value2-{task_id}", item, adapter.sessions(item))
     value_limit = min(4, max(1, recall_limit // 3))
     value_snippets = graph.recall(question, limit=value_limit, emit_history=emit_history)
-    merged: list[str] = []
-    seen: set[str] = set()
-    for snippet in [*value_snippets, *recalled]:
-        if snippet in seen:
-            continue
-        seen.add(snippet)
-        merged.append(snippet)
-        if len(merged) >= recall_limit:
-            break
-    return "\n".join(merged)
+    extras = getattr(recalled, "extras", ())
+    return "\n".join(_merge_within_limit([*value_snippets, *recalled], recall_limit, extras))
 
 
 def _snippet_has_stale(snippet: str, stale: set[str]) -> bool:
@@ -265,16 +283,8 @@ def _value_augmented_recall_v3(
     if suppress:
         stale = graph.stale_value_strings(question)
         backfill = [s for s in recalled if not _snippet_has_stale(s, stale)]
-    merged: list[str] = []
-    seen: set[str] = set()
-    for snippet in [*value_snippets, *backfill]:
-        if snippet in seen:
-            continue
-        seen.add(snippet)
-        merged.append(snippet)
-        if len(merged) >= recall_limit:
-            break
-    return "\n".join(merged)
+    extras = getattr(recalled, "extras", ())
+    return "\n".join(_merge_within_limit([*value_snippets, *backfill], recall_limit, extras))
 
 
 def _value_augmented_recall_v4(
@@ -294,16 +304,8 @@ def _value_augmented_recall_v4(
     )
     value_limit = min(4, max(1, recall_limit // 3))
     value_snippets = graph.advisory_recall(question, limit=value_limit)
-    merged: list[str] = []
-    seen: set[str] = set()
-    for snippet in [*value_snippets, *recalled]:
-        if snippet in seen:
-            continue
-        seen.add(snippet)
-        merged.append(snippet)
-        if len(merged) >= recall_limit:
-            break
-    return "\n".join(merged)
+    extras = getattr(recalled, "extras", ())
+    return "\n".join(_merge_within_limit([*value_snippets, *recalled], recall_limit, extras))
 
 
 def _value_augmented_recall_v5(
@@ -321,16 +323,8 @@ def _value_augmented_recall_v5(
     )
     value_limit = min(4, max(1, recall_limit // 3))
     value_snippets = graph.derived_recall(question, limit=value_limit)
-    merged: list[str] = []
-    seen: set[str] = set()
-    for snippet in [*value_snippets, *recalled]:
-        if snippet in seen:
-            continue
-        seen.add(snippet)
-        merged.append(snippet)
-        if len(merged) >= recall_limit:
-            break
-    return "\n".join(merged)
+    extras = getattr(recalled, "extras", ())
+    return "\n".join(_merge_within_limit([*value_snippets, *recalled], recall_limit, extras))
 
 
 def _value_context_for_arm(
