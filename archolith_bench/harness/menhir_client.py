@@ -8,6 +8,7 @@ HttpMenhirClient: HTTP client scaffolded for a real throwaway menhir instance.
 from __future__ import annotations
 
 from decimal import Decimal, InvalidOperation
+import json
 import uuid
 from collections.abc import Iterable
 from typing import Any
@@ -160,6 +161,32 @@ def _recall_item_text(item: dict[str, Any]) -> str:
     return text or source_time
 
 
+def _format_count(n: Any) -> str:
+    """A count as an int when integral, otherwise as-is."""
+    if isinstance(n, float) and n.is_integer():
+        return str(int(n))
+    return str(n)
+
+
+def _count_match_lines(record: dict[str, Any]) -> list[str]:
+    """Menhir 4R match audit on a counted View: per-action sums and item names (JSON strings).
+    Malformed or missing fields add no line."""
+    lines: list[str] = []
+    try:
+        actions = json.loads(record["count_actions"]) if record.get("count_actions") else None
+    except (TypeError, ValueError):
+        actions = None
+    if isinstance(actions, dict) and actions:
+        lines.append("per action: " + ", ".join(f"{k} {_format_count(n)}" for k, n in actions.items()))
+    try:
+        items = json.loads(record["count_items"]) if record.get("count_items") else None
+    except (TypeError, ValueError):
+        items = None
+    if isinstance(items, list) and items:
+        lines.append("items: " + ", ".join(str(x) for x in items))
+    return lines
+
+
 def _format_authority_record(record: dict[str, Any], *, drill_down: bool = False) -> str:
     """Render structured scalar authority as compact, provenance-rich LLM context.
 
@@ -182,11 +209,17 @@ def _format_authority_record(record: dict[str, Any], *, drill_down: bool = False
     attribute = str(record.get("attribute") or "value").strip().replace("_", " ")
     scope = str(record.get("scope") or "").strip().replace("_", " ")
     value = _format_authority_value(record)
-    if record.get("lower_bound") is True:
+    lower_bound = record.get("lower_bound") is True
+    if lower_bound:
         value = f"at least {value} you mentioned"
+        uncertain = record.get("count_uncertain")
+        if isinstance(uncertain, (int, float)) and not isinstance(uncertain, bool) and uncertain > 0:
+            value = f"{value}, plus {_format_count(uncertain)} more that may be repeats"
     fact_name = f"{attribute} ({scope})" if scope else attribute
     subject_prefix = f"{subject} — " if subject else ""
     lines.append(f"current fact: {subject_prefix}{fact_name} = {value}")
+    if lower_bound:
+        lines.extend(_count_match_lines(record))
 
     valid_at = str(record.get("valid_at") or "").strip()
     if valid_at:
