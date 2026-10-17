@@ -18,6 +18,8 @@ import httpx
 # When the event authority layer reports one of these, recall emits an advisory and
 # suppresses the ordinary result items (there is no authoritative event to compare them against).
 _BLOCKING_EVENT_GATES = frozenset({"anchor", "ambiguity", "time", "scope", "no_candidate"})
+# Menhir tags facts found by searching a question's verbs (MENHIR_FRONTIER_VERB_FACETS) with this kind.
+_VERB_FACET_SCORE_KIND = "verb_facet"
 
 
 def _format_duration_alias(value: Any, unit: str) -> str | None:
@@ -611,6 +613,8 @@ class HttpMenhirClient:
             if rendered:
                 snippets.append(rendered)
 
+        n_head = len(snippets)
+        facet_snippets: list[str] = []
         for item in items:
             if isinstance(item, str):
                 if item.strip():
@@ -632,11 +636,19 @@ class HttpMenhirClient:
                         prefix = f"[CURRENT {memory_type} MEMORY | authoritative]"
                     else:
                         prefix = f"[RELATED {memory_type} MEMORY | non-authoritative]"
-                    snippets.append(f"{prefix} {text}")
+                    text = f"{prefix} {text}"
+                if str(item.get("retrieval_score_kind") or "") == _VERB_FACET_SCORE_KIND:
+                    facet_snippets.append(text)
                 else:
                     snippets.append(text)
 
-        return snippets[:limit]
+        kept = snippets[:limit]
+        if not facet_snippets:
+            return kept
+        # Verb-facet facts are extras Menhir appends beyond its ranked results: they go right after
+        # the verdicts and do not count toward ``limit``, so the cut above is unchanged.
+        split = min(n_head, len(kept))
+        return kept[:split] + facet_snippets + kept[split:]
 
     def get_scalar_view_items(
         self, namespace: str, view_uuid: str, *, offset: int = 0, limit: int = 20
