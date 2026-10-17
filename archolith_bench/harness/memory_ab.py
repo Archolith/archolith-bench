@@ -35,7 +35,7 @@ from .drill_down import (
     make_drill_down_runner,
     with_drill_down_instruction,
 )
-from .menhir_client import VERB_FACET_MAX, HttpMenhirClient
+from .menhir_client import COUNTED_AUTHORITY_MAX, VERB_FACET_MAX, HttpMenhirClient
 from .targets import PROD_NAME_MARKERS, TargetRefused, assert_allowed_target
 from .value_nodes import ValueGraph
 from .value_nodes_v2 import SupersededValueGraph
@@ -177,23 +177,31 @@ def _merge_within_limit(snippets: list[str], recall_limit: int, extras: Iterable
 def _agentic_recall(client: "MenhirClient", group_id: str, subqueries: list[str], recall_limit: int) -> str:
     """Recall each sub-query and union the snippets (dedup, order-preserving), capped at
     recall_limit total so the answer context stays size-comparable to single-query recall.
-    Verb-facet extras do not count toward the cap; at most VERB_FACET_MAX are kept in all."""
+    Verb-facet extras do not count toward the cap; at most VERB_FACET_MAX are kept in all.
+    Counted verdicts likewise sit outside the cap, at most COUNTED_AUTHORITY_MAX in all."""
     per_q = max(3, recall_limit // max(1, len(subqueries)))
     cap = max(recall_limit, 1)
     seen: set[str] = set()
     merged: list[str] = []
     counted = 0
     facets_kept = 0
+    verdicts_kept = 0
     for sq in subqueries:
         try:
             snippets = client.recall(group_id, sq, limit=per_q)
         except Exception:
             snippets = []
         extras = set(getattr(snippets, "extras", ()))
+        counted_verdicts = set(getattr(snippets, "counted", ()))
         for snip in snippets:
             if snip in seen:
                 continue
-            if snip in extras:
+            if snip in counted_verdicts:
+                # Counted verdicts (counted_authority_only) have their own cap, outside the limit.
+                if verdicts_kept >= COUNTED_AUTHORITY_MAX:
+                    continue
+                verdicts_kept += 1
+            elif snip in extras:
                 if facets_kept >= VERB_FACET_MAX:
                     continue
                 facets_kept += 1

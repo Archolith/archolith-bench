@@ -24,15 +24,31 @@ _VERB_FACET_SCORE_KIND = "verb_facet"
 # Menhir appends at most 3 such facts; the client enforces the same cap, so a server change or a
 # tagging bug cannot grow the context past ``limit`` without bound.
 VERB_FACET_MAX = 3
+# With ``counted_authority_only``, at most this many counted verdicts render after the memories,
+# outside ``limit``.
+COUNTED_AUTHORITY_MAX = 3
 
 
 class RecallSnippets(list):
-    """Rendered recall snippets. ``extras`` are the verb-facet snippets among them: they sit
-    outside ``limit``, so a caller that re-caps the context must not count them."""
+    """Rendered recall snippets. ``extras`` are the verb-facet snippets and counted verdicts among
+    them: they sit outside ``limit``, so a caller that re-caps the context must not count them.
+    ``counted`` is the counted-verdict subset, capped separately from the facets."""
 
-    def __init__(self, snippets: Iterable[str] = (), extras: Iterable[str] = ()) -> None:
+    def __init__(
+        self, snippets: Iterable[str] = (), extras: Iterable[str] = (),
+        counted: Iterable[str] = (),
+    ) -> None:
         super().__init__(snippets)
         self.extras: tuple[str, ...] = tuple(extras)
+        self.counted: tuple[str, ...] = tuple(counted)
+
+
+def is_counted_advisory(record: dict[str, Any]) -> bool:
+    """A verdict from a counting-lane View that does not lead."""
+    return (
+        str(record.get("basis") or "").strip().lower() == "counted"
+        and str(record.get("status") or "").strip().lower() == "advisory"
+    )
 
 
 def is_verb_facet(item: dict[str, Any]) -> bool:
@@ -166,6 +182,8 @@ def _format_authority_record(record: dict[str, Any], *, drill_down: bool = False
     attribute = str(record.get("attribute") or "value").strip().replace("_", " ")
     scope = str(record.get("scope") or "").strip().replace("_", " ")
     value = _format_authority_value(record)
+    if record.get("lower_bound") is True:
+        value = f"at least {value} you mentioned"
     fact_name = f"{attribute} ({scope})" if scope else attribute
     subject_prefix = f"{subject} — " if subject else ""
     lines.append(f"current fact: {subject_prefix}{fact_name} = {value}")
@@ -363,6 +381,7 @@ class HttpMenhirClient:
         recall_path: str = "/api/recall",
         timeout: float = 180.0,
         drill_down: bool = False,
+        counted_authority_only: bool = False,
     ) -> None:
         """
         Initialize HTTP client against a real menhir instance.
@@ -379,9 +398,13 @@ class HttpMenhirClient:
             timeout: Request timeout in seconds.
             drill_down: Render the drill-down line on collapsed scalar Views, for an answer
                 model that has the get_scalar_view_items tool.
+            counted_authority_only: Counted advisory verdicts (basis "counted") do not mark the
+                memories non-authoritative; they render after the memories, outside ``limit``,
+                at most COUNTED_AUTHORITY_MAX. Other verdicts are unchanged.
         """
         self._base_url = base_url
         self._drill_down = drill_down
+        self._counted_authority_only = counted_authority_only
         self._ingest_path = ingest_path
         self._recall_path = recall_path
         self._client = httpx.Client(timeout=timeout)
@@ -606,6 +629,14 @@ class HttpMenhirClient:
                     record for record in raw_event_authority if isinstance(record, dict)
                 ]
 
+        counted_records: list[dict[str, Any]] = []
+        if self._counted_authority_only:
+            counted_records = [r for r in authority_records if is_counted_advisory(r)]
+            authority_records = [r for r in authority_records if not is_counted_advisory(r)]
+        counted_view_ids = {
+            str(record["view_uuid"]) for record in counted_records if record.get("view_uuid")
+        }
+
         has_authority = bool(authority_records) or bool(event_authority_records)
         event_blocked = any(
             str(record.get("status") or "").strip().lower() == "advisory"
@@ -655,6 +686,8 @@ class HttpMenhirClient:
             elif isinstance(item, dict):
                 if has_authority and str(item.get("uuid") or "") in authority_view_ids:
                     continue
+                if str(item.get("uuid") or "") in counted_view_ids:
+                    continue  # rendered as its verdict after the memories
                 text = _recall_item_text(item)
                 if not text:
                     continue
@@ -672,7 +705,15 @@ class HttpMenhirClient:
                 else:
                     snippets.append(text)
 
-        return place_verb_facets(snippets, n_head, facet_snippets, limit)
+        placed = place_verb_facets(snippets, n_head, facet_snippets, limit)
+        counted = [
+            rendered
+            for record in counted_records[:COUNTED_AUTHORITY_MAX]
+            if (rendered := _format_authority_record(record, drill_down=self._drill_down))
+        ]
+        if not counted:
+            return placed
+        return RecallSnippets([*placed, *counted], [*placed.extras, *counted], counted)
 
     def get_scalar_view_items(
         self, namespace: str, view_uuid: str, *, offset: int = 0, limit: int = 20
