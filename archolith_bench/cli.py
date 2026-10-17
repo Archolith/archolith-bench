@@ -326,6 +326,11 @@ def main(argv: list[str] | None = None) -> None:
                                 "scalar View to 'built from N items', show its drill-down line and "
                                 "give the answer model the get_scalar_view_items tool (with a "
                                 "prompt note to use it as needed) to page through those items.")
+    harness_p.add_argument("--counted-authority-only", action="store_true",
+                           help="Memory benchmarks: Menhir verdicts from counted Views (basis "
+                                "'counted', advisory) no longer mark the other memories "
+                                "non-authoritative; they render after the memories, outside "
+                                "--recall-limit (at most 3). Other verdicts are unchanged.")
     harness_p.add_argument("--namespace-template", default="lme-{question_id}",
                            help="Recall-only: namespace per item, formatted with {question_id} "
                                 "(default: lme-{question_id}, matching _ingest_lme.py).")
@@ -1266,14 +1271,17 @@ def _run_harness(args: argparse.Namespace) -> None:
             menhir_key = _resolve_menhir_bearer_key()
             print(f"  auth: {'bearer set' if menhir_key else 'no key (expects an auth-disabled instance)'}")
             client = HttpMenhirClient(
-                args.menhir_url, api_key=menhir_key, drill_down=getattr(args, "drill_down", False)
+                args.menhir_url, api_key=menhir_key, drill_down=getattr(args, "drill_down", False),
+                counted_authority_only=getattr(args, "counted_authority_only", False),
             )
             send_fn = send_chat
         checkpoint = None
         if getattr(args, "resume", False):
             ckpt_path = checkpoint_path_for(
                 args.output_dir, adapter.benchmark_id, args.model,
-                prompt_tag=checkpoint_prompt_tag(adapter, drill_down=getattr(args, "drill_down", False)),
+                prompt_tag=checkpoint_prompt_tag(
+                    adapter, drill_down=getattr(args, "drill_down", False),
+                    counted_authority_only=getattr(args, "counted_authority_only", False)),
             )
             checkpoint = MemoryCheckpoint(ckpt_path)
             done = checkpoint.done_count()

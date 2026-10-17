@@ -47,14 +47,21 @@ def checkpoint_path_for(
     return Path(output_dir) / name
 
 
-def checkpoint_prompt_tag(adapter: object, *, drill_down: bool = False) -> str | None:
-    """The ``prompt_tag`` for a run: the adapter's prompt fingerprint, marked for drill-down.
+def checkpoint_prompt_tag(
+    adapter: object, *, drill_down: bool = False, counted_authority_only: bool = False,
+) -> str | None:
+    """The ``prompt_tag`` for a run: the adapter's prompt fingerprint, marked for drill-down and
+    for counted-authority-only rendering.
 
-    Drill-down changes how answers are produced but not the arm names, so without the mark a
-    resume would mix drill-down and plain answers in one checkpoint.
+    Both change how answers are produced but not the arm names, so without the mark a resume
+    would mix them with plain answers in one checkpoint.
     """
     tag = getattr(adapter, "prompt_fingerprint", None)
-    return f"{tag or ''}dd" if drill_down else tag
+    if drill_down:
+        tag = f"{tag or ''}dd"
+    if counted_authority_only:
+        tag = f"{tag or ''}ca"
+    return tag
 
 
 class MemoryCheckpoint:
