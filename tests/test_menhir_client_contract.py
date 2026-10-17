@@ -641,3 +641,82 @@ def test_recall_event_authority_tolerates_malformed_and_empty_layers(http_client
         "event_authority_layer": [],
     }
     assert client.recall("lme-e5", "dog") == ["Biscuit: The dog is Biscuit."]
+
+
+_STARS_AUTHORITY = {
+    "kind": "current",
+    "status": "leads",
+    "subject": "user",
+    "attribute": "stars_needed",
+    "value": "120",
+    "valid_at": "2023-07-30T03:56:00Z",
+    "view_uuid": "view-120",
+    "has_foundation": True,
+    "contributors": [],
+}
+
+
+def _facet_fact(uuid: str, fact: str) -> dict:
+    return {
+        "uuid": uuid,
+        "name": fact,
+        "content": fact,
+        "memory_type": "SEMANTIC",
+        "retrieval_score_kind": "verb_facet",
+        "temporal_facts": [{"fact": fact, "valid_at": "2023-05-01T00:00:00Z"}],
+    }
+
+
+def test_recall_verb_facet_facts_follow_verdicts_outside_the_limit(http_client):
+    """Verb-facet facts go right after the verdicts and do not take one of the ``limit`` slots."""
+    client, fake = http_client
+    fake.response_data = {
+        "results": [
+            {"uuid": "m1", "name": "A", "content": "Ranked memory one.", "memory_type": "SEMANTIC"},
+            {"uuid": "m2", "name": "B", "content": "Ranked memory two.", "memory_type": "SEMANTIC"},
+            _facet_fact("e1", "The user needs to return the boots to Zara."),
+        ],
+        "authority_layer": [_STARS_AUTHORITY],
+    }
+
+    recalled = client.recall("lme-1", "How many items do I need to pick up or return?", limit=2)
+
+    # Without the facet fact the cut keeps [verdict, m1]; the fact is inserted, nothing else moves.
+    assert len(recalled) == 3
+    assert recalled[0].startswith("[AUTHORITATIVE CURRENT MEMORY]")
+    assert recalled[1].startswith("[RELATED semantic MEMORY | non-authoritative]")
+    assert "return the boots to Zara" in recalled[1]
+    assert "2023-05-01T00:00:00Z" in recalled[1]
+    assert "Ranked memory one." in recalled[2]
+    assert not any("Ranked memory two." in s for s in recalled)
+
+
+def test_recall_verb_facet_facts_lead_when_there_is_no_verdict(http_client):
+    client, fake = http_client
+    fake.response_data = {
+        "results": [
+            {"name": "A", "content": "Ranked memory one."},
+            _facet_fact("e1", "The user still needs to pick up the navy blue blazer."),
+            {"name": "B", "content": "Ranked memory two."},
+        ]
+    }
+
+    recalled = client.recall("ns-1", "What do I need to pick up?", limit=1)
+
+    assert len(recalled) == 2
+    assert recalled[0].startswith("The user still needs to pick up the navy blue blazer.")
+    assert recalled[1] == "A: Ranked memory one."
+
+
+def test_recall_without_verb_facet_facts_keeps_the_limit_cut(http_client):
+    client, fake = http_client
+    fake.response_data = {
+        "results": [{"name": n, "content": f"Memory {n}."} for n in ("A", "B", "C")],
+        "authority_layer": [_STARS_AUTHORITY],
+    }
+
+    recalled = client.recall("lme-1", "stars", limit=2)
+
+    assert len(recalled) == 2
+    assert recalled[0].startswith("[AUTHORITATIVE CURRENT MEMORY]")
+    assert "Memory A." in recalled[1]
