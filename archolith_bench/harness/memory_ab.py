@@ -26,9 +26,15 @@ import httpx
 if TYPE_CHECKING:
     from .checkpoint import MemoryCheckpoint
 
-from ..core.api import API_KEY, MODEL, PROXY_URL, send_chat
+from ..core.api import API_KEY, MODEL, PROXY_URL, send_chat, send_chat_with_tools
 from ..core.metrics import PricingModel, compute_arm_cost
 from .base import ABResult, ArmResult, TaskResult, _compute_deltas, _pick_pricing, _usage_tokens
+from .drill_down import (
+    DRILL_DOWN_TOOL,
+    drill_down_view_ids,
+    make_drill_down_runner,
+    with_drill_down_instruction,
+)
 from .menhir_client import HttpMenhirClient
 from .targets import PROD_NAME_MARKERS, TargetRefused, assert_allowed_target
 from .value_nodes import ValueGraph
@@ -454,6 +460,8 @@ def _run_memory_arm(
     checkpoint: "MemoryCheckpoint | None" = None,
     score_fn=None,  # noqa: ANN001
     record_turn_evidence: bool = True,
+    drill_down: bool = False,
+    tool_send_fn=send_chat_with_tools,  # noqa: ANN001
 ) -> ArmResult:
     results: list[TaskResult] = []
     turn_dicts: list[dict] = []
@@ -468,6 +476,7 @@ def _run_memory_arm(
                 turn_dicts.append({"input_tokens": cached.input_tokens, "output_tokens": cached.output_tokens})
                 continue
         question = adapter.question(item)
+        drill_namespace = None
         if arm == NO_MEMORY or client is None:
             memory_context = ""
         elif recall_only:
@@ -475,6 +484,7 @@ def _run_memory_arm(
             # namespaces (e.g. lme-<question_id>), so skip ingest AND reset entirely and
             # recall in place. No new_group, no mutation -> needs no --confirm-menhir-reset.
             group_id = namespace_template.format(question_id=item.get("question_id") or task_id)
+            drill_namespace = group_id
             recalled = client.recall(group_id, question, limit=recall_limit)
             memory_context = _value_context_for_arm(
                 arm, adapter, item, recalled, question, recall_limit, task_id
@@ -520,11 +530,23 @@ def _run_memory_arm(
                         dry_run_reset=dry_run_reset,
                     )
         messages = adapter.build_messages(memory_context, question)
+        # Drill-down: offer the tool (and say when to use it) only when this item's recall shows
+        # a collapsed View to drill into; every other item is answered exactly as before.
+        view_ids = drill_down_view_ids(memory_context) if drill_down and drill_namespace else []
         # strict: a failed call raises before scoring/checkpointing, so a resume retries the item
         # instead of keeping an error string graded as a wrong answer.
-        text, latency_ms, usage = send_fn(
-            chat_client, chat_base_url, api_key, messages, model, strict=True
-        )
+        if view_ids:
+            text, latency_ms, usage, tool_calls = tool_send_fn(
+                chat_client, chat_base_url, api_key, with_drill_down_instruction(messages), model,
+                tools=[DRILL_DOWN_TOOL],
+                run_tool=make_drill_down_runner(client, drill_namespace, view_ids),
+                strict=True,
+            )
+            usage = dict(usage, drill_down_view_ids=view_ids, drill_down_calls=tool_calls)
+        else:
+            text, latency_ms, usage = send_fn(
+                chat_client, chat_base_url, api_key, messages, model, strict=True
+            )
         inp, out = _usage_tokens(usage)
         correct = score_fn(item, text) if score_fn is not None else adapter.score(item, text)
         scorer_usage = (
@@ -589,6 +611,8 @@ def run_memory_ab(
     checkpoint: "MemoryCheckpoint | None" = None,
     score_fn=None,  # noqa: ANN001
     record_turn_evidence: bool = True,
+    drill_down: bool = False,
+    tool_send_fn=send_chat_with_tools,  # noqa: ANN001
 ) -> ABResult:
     """Run an ingest-then-recall memory benchmark across arms.
 
@@ -609,8 +633,14 @@ def run_memory_ab(
     `score_fn`: optional `(item, response_text) -> bool` override for grading (e.g. an
     LLMJudgeScorer for LongMemEval-comparable accuracy). Defaults to `adapter.score`
     (the offline containment scorer). If it exposes `.close()`, it is closed on exit.
+
+    `drill_down`: give the answer model the get_scalar_view_items tool for collapsed scalar
+    Views (the client must render their drill-down lines). Recall-only, because otherwise the
+    namespace is reset before the answer call and there is nothing left to drill into.
     """
     assert_known_arms(arms)
+    if drill_down and not recall_only:
+        raise ValueError("drill_down needs recall_only: the namespace is reset before answering otherwise")
     items = adapter.load_items(subset, limit, fixture_path)
     pricing = _pick_pricing(model, pricing)
     needs_client = any(a != NO_MEMORY for a in arms)
@@ -660,6 +690,8 @@ def run_memory_ab(
                         checkpoint=checkpoint,
                         score_fn=score_fn,
                         record_turn_evidence=record_turn_evidence,
+                        drill_down=drill_down,
+                        tool_send_fn=tool_send_fn,
                     )
     finally:
         if score_fn is not None and hasattr(score_fn, "close"):
