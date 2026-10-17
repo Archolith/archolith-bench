@@ -20,6 +20,7 @@ can still be added behind a flag later for official evidence runs.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -166,10 +167,13 @@ _MEMORY_SYSTEM_PROMPT = (
     "from retrieval/list order or from when Menhir learned the memory. A 'superseded belief' label means "
     "the fact is historical; a 'current belief' label means it remains current. If source time is unknown, "
     "do not invent an ordering.\n\n"
-    "For \"how many\" or list questions: list every candidate item from the retrieved memory and rate how "
-    "well it fits the category the question names: high (clearly fits), medium (fits under a reasonable "
-    "everyday reading of the question's wording), low (only a stretch). Count high and medium. Give one "
-    "final number; you may then briefly mention low items you left out.\n\n"
+    "For questions that count distinct things (\"how many\" items, events, times or places) or ask for a "
+    "list: list every candidate item from the retrieved memory and rate how well it fits the category the "
+    "question names: high (clearly fits), medium (fits under a reasonable everyday reading of the "
+    "question's wording), low (only a stretch). Count high and medium, each distinct item once. Give one "
+    "final number; you may then briefly mention low items you left out. When \"how many\" instead asks "
+    "for a single current quantity (an amount the user has or has reached now), do not count mentions: "
+    "answer with the latest supported value, following the rules above.\n\n"
     "Safe veto policy (structured verdict and authoritative records only; never use it to drop an ordinary "
     "memory that answers the question): ignore such a record only when it does not match the question's "
     "subject, attribute, "
@@ -210,6 +214,10 @@ class LongMemEvalMemoryAdapter:
 
     def question(self, item: dict) -> str:
         return item.get("question", "")
+
+    # Checkpoint key: a resume never mixes answers from different answer prompts.
+    prompt_fingerprint = hashlib.sha256(
+        (_MEMORY_SYSTEM_PROMPT + "\x00dated-user-message-v1").encode("utf-8")).hexdigest()[:10]
 
     def question_date(self, item: dict) -> str | None:
         return str(item.get("question_date") or "").strip() or None

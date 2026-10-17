@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from archolith_bench.harness.checkpoint import checkpoint_path_for
 from archolith_bench.harness.longmemeval import _MEMORY_SYSTEM_PROMPT, LongMemEvalMemoryAdapter
 from archolith_bench.harness.memory_ab import run_memory_ab
 
@@ -9,11 +10,27 @@ DATE = "2023/02/15 (Wed) 19:47"
 
 
 def test_counting_rule_rates_fit_and_counts_high_and_medium() -> None:
-    assert 'For "how many" or list questions: list every candidate item' in _MEMORY_SYSTEM_PROMPT
+    assert 'For questions that count distinct things ("how many" items' in _MEMORY_SYSTEM_PROMPT
+    assert "list every candidate item" in _MEMORY_SYSTEM_PROMPT
     assert "high (clearly fits)" in _MEMORY_SYSTEM_PROMPT
     assert "medium (fits under a reasonable everyday reading" in _MEMORY_SYSTEM_PROMPT
     assert "low (only a stretch)" in _MEMORY_SYSTEM_PROMPT
-    assert "Count high and medium. Give one final number" in _MEMORY_SYSTEM_PROMPT
+    assert "Count high and medium, each distinct item once. Give one final number" in _MEMORY_SYSTEM_PROMPT
+
+
+def test_current_quantity_questions_answer_the_value_not_a_count() -> None:
+    assert ('When "how many" instead asks for a single current quantity (an amount the user has or has '
+            "reached now), do not count mentions: answer with the latest supported value"
+            ) in _MEMORY_SYSTEM_PROMPT
+
+
+def test_checkpoint_is_keyed_by_the_answer_prompt(tmp_path) -> None:
+    fp = LongMemEvalMemoryAdapter.prompt_fingerprint
+    assert len(fp) == 10
+    path = checkpoint_path_for(tmp_path, "longmemeval-menhir", "m", variant="oracle", prompt_tag=fp)
+    assert path.name == f".checkpoint_longmemeval-menhir_oracle_m_p{fp}.jsonl"
+    # Callers without a tag keep the old name.
+    assert checkpoint_path_for(tmp_path, "b", "m", variant="s").name == ".checkpoint_b_s_m.jsonl"
 
 
 def test_veto_policy_is_scoped_to_verdict_records() -> None:
