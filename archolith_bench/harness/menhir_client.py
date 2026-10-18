@@ -403,7 +403,7 @@ class StubMenhirClient:
         self._groups[group_id].append(f"{role}: {content}")
 
     def recall(
-        self, group_id: str, query: str, limit: int = 10
+        self, group_id: str, query: str, limit: int = 10, *, counted_verdict_limit: int | None = None
     ) -> list[str]:
         """
         Return up to `limit` snippets for the group, ranked by word-token overlap.
@@ -476,6 +476,11 @@ class HttpMenhirClient:
         self._headers: dict[str, str] = {}
         if api_key:
             self._headers["Authorization"] = f"Bearer {api_key}"
+
+    @property
+    def counted_authority_only(self) -> bool:
+        """Whether recall takes a per-call ``counted_verdict_limit``."""
+        return self._counted_authority_only
 
     def __enter__(self):
         """Return this client for context-manager use."""
@@ -630,7 +635,7 @@ class HttpMenhirClient:
         response.raise_for_status()
 
     def recall(
-        self, group_id: str, query: str, limit: int = 10
+        self, group_id: str, query: str, limit: int = 10, *, counted_verdict_limit: int | None = None
     ) -> list[str]:
         """
         POST a query to the recall endpoint and build LLM-facing snippets.
@@ -663,8 +668,11 @@ class HttpMenhirClient:
             # It is required for changed/previous/later questions and does not add stale candidates.
             "include_invalidated": True,
         }
+        effective_verdict_limit = COUNTED_AUTHORITY_MAX
         if self._counted_authority_only:
-            payload["counted_verdict_limit"] = COUNTED_AUTHORITY_MAX
+            if counted_verdict_limit is not None:
+                effective_verdict_limit = max(0, min(COUNTED_AUTHORITY_MAX, counted_verdict_limit))
+            payload["counted_verdict_limit"] = effective_verdict_limit
         response = self._client.post(url, json=payload, headers=self._headers)
         response.raise_for_status()
         data = response.json()
@@ -775,7 +783,7 @@ class HttpMenhirClient:
         placed = place_verb_facets(snippets, n_head, facet_snippets, limit)
         counted = [
             rendered
-            for record in counted_records[:COUNTED_AUTHORITY_MAX]
+            for record in counted_records[:effective_verdict_limit]
             if (rendered := _format_authority_record(record, drill_down=self._drill_down))
         ]
         if not counted:
@@ -1063,7 +1071,9 @@ class StubPhase3Client:
         views = self._build_views(namespace)
         return {"namespace": namespace, "count": len(views), "views": views, "receipts": []}
 
-    def recall(self, namespace: str, query: str, limit: int = 10) -> list[str]:
+    def recall(
+        self, namespace: str, query: str, limit: int = 10, *, counted_verdict_limit: int | None = None
+    ) -> list[str]:
         """Return one snippet per current View (so recall_after > recall_before once Views exist)."""
         return [f"{v['subject']} {v['counter']} {v['value']}" for v in self._build_views(namespace)]
 

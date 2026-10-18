@@ -178,7 +178,8 @@ def _agentic_recall(client: "MenhirClient", group_id: str, subqueries: list[str]
     """Recall each sub-query and union the snippets (dedup, order-preserving), capped at
     recall_limit total so the answer context stays size-comparable to single-query recall.
     Verb-facet extras do not count toward the cap; at most VERB_FACET_MAX are kept in all.
-    Counted verdicts likewise sit outside the cap, at most COUNTED_AUTHORITY_MAX in all."""
+    Counted verdicts likewise sit outside the cap, at most COUNTED_AUTHORITY_MAX in all.
+    Each subquery is told how many counted verdicts can still be shown, so Menhir keeps evidence for the rest."""
     per_q = max(3, recall_limit // max(1, len(subqueries)))
     cap = max(recall_limit, 1)
     seen: set[str] = set()
@@ -187,8 +188,11 @@ def _agentic_recall(client: "MenhirClient", group_id: str, subqueries: list[str]
     facets_kept = 0
     verdicts_kept = 0
     for sq in subqueries:
+        # Only counted-mode clients take the limit; the except below would hide a TypeError.
+        kw = ({"counted_verdict_limit": max(0, COUNTED_AUTHORITY_MAX - verdicts_kept)}
+              if getattr(client, "counted_authority_only", False) else {})
         try:
-            snippets = client.recall(group_id, sq, limit=per_q)
+            snippets = client.recall(group_id, sq, limit=per_q, **kw)
         except Exception:
             snippets = []
         extras = set(getattr(snippets, "extras", ()))
@@ -401,7 +405,9 @@ class MenhirClient(Protocol):
         """Ingest one conversation turn into the memory store under group_id."""
         ...
 
-    def recall(self, group_id: str, query: str, limit: int = 10) -> list[str]:
+    def recall(
+        self, group_id: str, query: str, limit: int = 10, *, counted_verdict_limit: int | None = None
+    ) -> list[str]:
         """Return recalled memory snippets for the query, scoped to group_id."""
         ...
 
