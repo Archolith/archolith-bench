@@ -57,6 +57,28 @@ def _client(data: dict, *, on: bool) -> HttpMenhirClient:
     return client
 
 
+class _CapturingHttp(_Http):
+    def post(self, url, **kw):  # noqa: ANN001, ANN003, ANN201
+        self.posted = kw["json"]
+        return super().post(url, **kw)
+
+
+def _posted_payload(*, on: bool) -> dict:
+    client = HttpMenhirClient("http://localhost:9999", counted_authority_only=on)
+    http = _CapturingHttp({"results": []})
+    client._client = http
+    client.recall("ns", "q", limit=3)
+    return http.posted
+
+
+def test_on_sends_counted_verdict_limit() -> None:
+    assert _posted_payload(on=True)["counted_verdict_limit"] == COUNTED_AUTHORITY_MAX
+
+
+def test_off_does_not_send_counted_verdict_limit() -> None:
+    assert "counted_verdict_limit" not in _posted_payload(on=False)
+
+
 def test_is_counted_advisory_needs_counted_basis_and_advisory_status() -> None:
     assert is_counted_advisory(_verdict("kit_count", 5, basis="counted"))
     assert not is_counted_advisory(_verdict("kit_count", 5, basis="counted", status="leads"))

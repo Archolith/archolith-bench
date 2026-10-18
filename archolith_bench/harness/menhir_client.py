@@ -464,7 +464,8 @@ class HttpMenhirClient:
                 model that has the get_scalar_view_items tool.
             counted_authority_only: Counted advisory verdicts (basis "counted") do not mark the
                 memories non-authoritative; they render after the memories, outside ``limit``,
-                at most COUNTED_AUTHORITY_MAX. Other verdicts are unchanged.
+                at most COUNTED_AUTHORITY_MAX (also sent to Menhir so evidence for unshown
+                counted verdicts stays in recall). Other verdicts are unchanged.
         """
         self._base_url = base_url
         self._drill_down = drill_down
@@ -662,6 +663,8 @@ class HttpMenhirClient:
             # It is required for changed/previous/later questions and does not add stale candidates.
             "include_invalidated": True,
         }
+        if self._counted_authority_only:
+            payload["counted_verdict_limit"] = COUNTED_AUTHORITY_MAX
         response = self._client.post(url, json=payload, headers=self._headers)
         response.raise_for_status()
         data = response.json()
