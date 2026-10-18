@@ -105,6 +105,24 @@ PRICING_DEFAULTS: dict[str, PricingModel] = {
         output=10.00,
         comment="Rates as of 2026-06: gpt-4o",
     ),
+    # 2026-10-18: official gpt-6-luna rates. input_cache_write stays None on purpose:
+    # compute_turn_cost would price the whole miss bucket at it (Anthropic semantics).
+    "gpt-6-luna": PricingModel(
+        provider="gpt-6-luna",
+        input_full=0.10,
+        input_cache_hit=0.01,
+        input_cache_miss=0.10,
+        output=0.50,
+        comment="OpenAI gpt-6-luna Standard, short context (2026-10-18).",
+    ),
+    "gpt-6-luna-flex": PricingModel(
+        provider="gpt-6-luna-flex",
+        input_full=0.05,
+        input_cache_hit=0.005,
+        input_cache_miss=0.05,
+        output=0.25,
+        comment="OpenAI gpt-6-luna Flex = 50% of Standard (2026-10-18).",
+    ),
     "anthropic": PricingModel(
         provider="anthropic",
         input_full=3.00,
