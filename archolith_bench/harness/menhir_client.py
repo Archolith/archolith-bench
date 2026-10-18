@@ -7,6 +7,7 @@ HttpMenhirClient: HTTP client scaffolded for a real throwaway menhir instance.
 
 from __future__ import annotations
 
+import datetime
 from decimal import Decimal, InvalidOperation
 import json
 import uuid
@@ -187,6 +188,18 @@ def _count_match_lines(record: dict[str, Any]) -> list[str]:
     return lines
 
 
+def _iso_day(value: Any) -> str:
+    """First 10 chars of an ISO string when it parses as a date; else the raw string."""
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    try:
+        datetime.date.fromisoformat(text[:10])
+    except ValueError:
+        return text
+    return text[:10]
+
+
 def _format_authority_record(record: dict[str, Any], *, drill_down: bool = False) -> str:
     """Render structured scalar authority as compact, provenance-rich LLM context.
 
@@ -234,7 +247,25 @@ def _format_authority_record(record: dict[str, Any], *, drill_down: bool = False
             quote = str(contributor.get("stated_span") or "").strip()
             operation = str(contributor.get("operation") or "").strip().lower()
             source_time = str(contributor.get("valid_at") or "").strip()
-            parts = [part for part in (operation, f'"{quote}"' if quote else "", source_time) if part]
+            if operation == "occurrence" and any(
+                key in contributor for key in ("source_sentence", "event_at", "event_basis", "mentioned_at")
+            ):
+                event_day = _iso_day(contributor.get("event_at"))
+                mentioned_day = _iso_day(contributor.get("mentioned_at")) or _iso_day(source_time)
+                sentence = str(contributor.get("source_sentence") or "").strip()
+                parts = [
+                    part
+                    for part in (
+                        operation,
+                        f'"{quote}"' if quote else "",
+                        f"event {event_day}" if event_day else "",
+                        f"mentioned {mentioned_day}" if mentioned_day else "",
+                        f'sentence: "{sentence}"' if sentence else "",
+                    )
+                    if part
+                ]
+            else:
+                parts = [part for part in (operation, f'"{quote}"' if quote else "", source_time) if part]
             if parts:
                 support.append(" | ".join(parts))
         if support:
