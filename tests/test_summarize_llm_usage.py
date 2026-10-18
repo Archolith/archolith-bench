@@ -349,6 +349,97 @@ def test_a_sidecar_without_error_code_says_so(tmp_path) -> None:
     assert summary["failed_by_error_code"] == {}
 
 
+def _set_usage_json(db, call_id, usage) -> None:
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            "UPDATE llm_usage_events SET provider_usage_json = ? WHERE call_id = ?",
+            (json.dumps(usage), call_id),
+        )
+
+
+def test_cache_writes_are_priced_at_the_write_rate_from_provider_json(tmp_path) -> None:
+    """Old-schema DB: cache_write_tokens come from provider_usage_json."""
+    db = _usage_db(tmp_path, [
+        ("a", "t", "r", "chat", "gpt-6-luna", "chat", "completed",
+         1_000_000, 0, 1_000_000, 300_000, 0),
+    ])
+    _set_usage_json(db, "a", {
+        "prompt_tokens": 1_000_000,
+        "prompt_tokens_details": {"cached_tokens": 300_000, "cache_write_tokens": 200_000},
+    })
+    summary = summarize_llm_usage(db, run_id="r")
+    assert summary["cache_write_input_tokens"] == 200_000
+    assert summary["by_model"][0]["cache_write_input_tokens"] == 200_000
+    # fresh 500k @ 0.10 + cached 300k @ 0.01 + write 200k @ 0.125
+    assert summary["cost_usd"] == round(0.5 * 0.10 + 0.3 * 0.01 + 0.2 * 0.125, 6)
+    assert summary["cost_usd_flex"] == round(0.5 * 0.05 + 0.3 * 0.005 + 0.2 * 0.0625, 6)
+    assert summary["tier_source"] == "unrecorded"
+
+
+def test_cache_write_column_is_used_when_present(tmp_path) -> None:
+    db = _usage_db(tmp_path, [
+        ("a", "t", "r", "chat", "gpt-6-luna", "chat", "completed",
+         1_000_000, 0, 1_000_000, 0, 0),
+    ])
+    with sqlite3.connect(db) as conn:
+        conn.execute("ALTER TABLE llm_usage_events ADD COLUMN cache_write_input_tokens INTEGER")
+        conn.execute("UPDATE llm_usage_events SET cache_write_input_tokens = 400000")
+    summary = summarize_llm_usage(db, run_id="r")
+    assert summary["cache_write_input_tokens"] == 400_000
+    assert summary["cost_usd"] == round(0.6 * 0.10 + 0.4 * 0.125, 6)
+
+
+def test_cache_write_cannot_drive_fresh_negative(tmp_path) -> None:
+    db = _usage_db(tmp_path, [
+        ("a", "t", "r", "chat", "gpt-6-luna", "chat", "completed", 1_000, 0, 1_000, 600, 0),
+    ])
+    _set_usage_json(db, "a", {"prompt_tokens_details": {"cache_write_tokens": 999_999}})
+    cost = summarize_llm_usage(db, run_id="r")["cost_usd"]
+    assert cost == round(600 / 1e6 * 0.01 + 400 / 1e6 * 0.125, 6)
+
+
+def test_other_models_write_at_their_input_rate(tmp_path) -> None:
+    db = _usage_db(tmp_path, [
+        ("a", "t", "r", "chat", "gpt-4o-mini", "chat", "completed",
+         1_000_000, 0, 1_000_000, 0, 0),
+    ])
+    _set_usage_json(db, "a", {"prompt_tokens_details": {"cache_write_tokens": 500_000}})
+    assert summarize_llm_usage(db, run_id="r")["cost_usd"] == 0.15
+
+
+def test_recorded_service_tier_prices_flex_rows_at_flex(tmp_path) -> None:
+    db = _usage_db(tmp_path, [
+        ("a", "t", "r", "chat", "gpt-6-luna", "chat", "completed",
+         1_000_000, 1_000_000, 2_000_000, 0, 0),
+        ("b", "t", "r", "chat", "gpt-6-luna", "chat", "completed",
+         1_000_000, 1_000_000, 2_000_000, 0, 0),
+        ("c", "t", "r", "chat", "gpt-6-luna", "chat", "completed",
+         1_000_000, 1_000_000, 2_000_000, 0, 0),
+    ])
+    with sqlite3.connect(db) as conn:
+        conn.execute("ALTER TABLE llm_usage_events ADD COLUMN service_tier TEXT")
+        conn.execute("UPDATE llm_usage_events SET service_tier = 'flex' WHERE call_id = 'a'")
+        conn.execute("UPDATE llm_usage_events SET service_tier = 'default' WHERE call_id = 'b'")
+        # call c keeps a NULL tier and must price at Standard
+    summary = summarize_llm_usage(db, run_id="r")
+    assert summary["tier_source"] == "recorded"
+    assert summary["cost_usd"] == round(0.30 + 0.60 + 0.60, 6)
+    assert summary["cost_usd_standard"] == round(0.60 * 3, 6)
+    assert summary["cost_usd_flex"] == round(0.30 * 3, 6)
+    assert {r["service_tier"] for r in summary["by_model"]} == {"flex", "default", None}
+
+
+def test_unrecorded_tier_keeps_standard_headline(tmp_path) -> None:
+    db = _usage_db(tmp_path, [
+        ("a", "t", "r", "chat", "gpt-6-luna", "chat", "completed",
+         1_000_000, 1_000_000, 2_000_000, 0, 0),
+    ])
+    summary = summarize_llm_usage(db, run_id="r")
+    assert summary["tier_source"] == "unrecorded"
+    assert summary["cost_usd"] == summary["cost_usd_standard"] == 0.60
+    assert summary["cost_usd_flex"] == 0.30
+
+
 def test_luna_and_luna_pro_are_priced_identically(tmp_path) -> None:
     def rows(model):
         return [("a", "t", "r", "chat", model, "chat", "completed",

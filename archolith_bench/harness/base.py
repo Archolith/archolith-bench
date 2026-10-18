@@ -10,6 +10,7 @@ versus the direct baseline — the only honest, advertisable Archolith claim.
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -17,7 +18,15 @@ from statistics import mean
 from typing import Protocol, runtime_checkable
 
 from ..arms import ARMS
-from ..core.api import API_KEY, DIRECT_URL, MODEL, PROXY_URL, apply_arm_config, send_chat
+from ..core.api import (
+    API_KEY,
+    DIRECT_URL,
+    MODEL,
+    PROXY_URL,
+    SERVICE_TIER_ENV,
+    apply_arm_config,
+    send_chat,
+)
 from ..core.metrics import PRICING_DEFAULTS, PricingModel, compute_arm_cost
 
 # send_fn signature mirrors core.api.send_chat:
@@ -148,6 +157,10 @@ def _pick_pricing(model: str, pricing: PricingModel | None) -> PricingModel:
     if pricing is not None:
         return pricing
     name = (model or "").lower()
+    if "gpt-6-luna" in name:
+        # Same tier source the chat primitive sends (core.api.build_chat_body).
+        tier = os.getenv(SERVICE_TIER_ENV, "").strip().lower()
+        return PRICING_DEFAULTS["gpt-6-luna-flex" if tier == "flex" else "gpt-6-luna"]
     if "claude" in name or "anthropic" in name:
         return PRICING_DEFAULTS["anthropic"]
     return PRICING_DEFAULTS["openai"]
