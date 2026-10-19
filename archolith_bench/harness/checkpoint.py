@@ -94,6 +94,14 @@ class MemoryCheckpoint:
                         scorer_input_tokens=int(res.get("scorer_input_tokens") or 0),
                         scorer_output_tokens=int(res.get("scorer_output_tokens") or 0),
                         scorer_raw_usage=dict(res.get("scorer_raw_usage") or {}),
+                        unofficial_correct=(
+                            bool(res["unofficial_correct"])
+                            if res.get("unofficial_correct") is not None
+                            else None
+                        ),
+                        unofficial_scorer_raw_usage=dict(
+                            res.get("unofficial_scorer_raw_usage") or {}
+                        ),
                     )
                 except (json.JSONDecodeError, KeyError, TypeError, ValueError):
                     # Tolerate a torn final line from a hard kill; skip it.

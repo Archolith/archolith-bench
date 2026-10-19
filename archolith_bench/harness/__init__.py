@@ -91,7 +91,7 @@ from .phase3_scenarios import (
     scenario_result_to_dict,
     suite_verdict,
 )
-from .scoring import LLMJudgeScorer
+from .scoring import LLMJudgeScorer, UnofficialJudgeScorer
 
 # Registry of available real-harness adapters, keyed by benchmark_id (the one roof).
 # In-process: run_ab. ExternalCliAdapter: run_external_ab. MemoryQAAdapter: run_memory_ab.
@@ -145,6 +145,7 @@ __all__ = [
     "HarnessBenchmarkAdapter",
     "HttpMenhirClient",
     "LLMJudgeScorer",
+    "UnofficialJudgeScorer",
     "LongBenchV2Adapter",
     "LongMemEvalAdapter",
     "LongMemEvalMemoryAdapter",

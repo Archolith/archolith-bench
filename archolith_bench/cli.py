@@ -306,6 +306,9 @@ def main(argv: list[str] | None = None) -> None:
     harness_p.add_argument("--scorer", choices=["containment", "llm-judge"], default="containment",
                            help="Memory benchmarks: 'containment' (fast, offline) or 'llm-judge' "
                                 "(LongMemEval protocol; comparable to published Mem0/Zep numbers).")
+    harness_p.add_argument("--no-unofficial-judge", action="store_true",
+                           help="llm-judge + LongMemEval: skip the extra unofficial (substance) judge "
+                                "that re-grades official-wrong items; reported separately otherwise.")
     harness_p.add_argument("--judge-model", default="gpt-6-luna",
                            help="llm-judge: grader model (default gpt-6-luna; use gpt-4o for paper-fidelity)")
     harness_p.add_argument("--judge-url", default=None,
@@ -1201,6 +1204,7 @@ def _run_harness(args: argparse.Namespace) -> None:
         LLMJudgeScorer,
         MemoryCheckpoint,
         StubMenhirClient,
+        UnofficialJudgeScorer,
         ab_result_to_dict,
         assert_not_production,
         checkpoint_path_for,
@@ -1287,6 +1291,7 @@ def _run_harness(args: argparse.Namespace) -> None:
             done = checkpoint.done_count()
             print(f"  [resume] checkpoint {ckpt_path} ({done} item-results already recorded)")
         score_fn = None
+        unofficial_score_fn = None
         if getattr(args, "scorer", "containment") == "llm-judge":
             if offline:
                 print("ERROR: --scorer llm-judge needs network; not valid with --offline-fixture", file=sys.stderr)
@@ -1295,12 +1300,23 @@ def _run_harness(args: argparse.Namespace) -> None:
             if not judge_key:
                 print("ERROR: --scorer llm-judge needs an API key (--judge-api-key or OPENAI_API_KEY)", file=sys.stderr)
                 sys.exit(1)
+            judge_base_url = args.judge_url or os.getenv("UPSTREAM_BASE_URL") or "https://api.openai.com/v1"
             score_fn = LLMJudgeScorer(
-                base_url=args.judge_url or os.getenv("UPSTREAM_BASE_URL") or "https://api.openai.com/v1",
+                base_url=judge_base_url,
                 api_key=judge_key,
                 model=args.judge_model,
             )
             print(f"  [scorer] llm-judge model={args.judge_model} (LongMemEval-comparable)")
+            if (
+                adapter.benchmark_id == "longmemeval-menhir"
+                and not getattr(args, "no_unofficial_judge", False)
+            ):
+                unofficial_score_fn = UnofficialJudgeScorer(
+                    base_url=judge_base_url,
+                    api_key=judge_key,
+                    model=args.judge_model,
+                )
+                print("  [scorer] unofficial substance judge on official-wrong items (reported separately)")
         ab = run_memory_ab(
             adapter,
             arms=mem_arms,
@@ -1325,6 +1341,7 @@ def _run_harness(args: argparse.Namespace) -> None:
             score_fn=score_fn,
             record_turn_evidence=not getattr(args, "no_record_turn_evidence", False),
             drill_down=getattr(args, "drill_down", False),
+            unofficial_score_fn=unofficial_score_fn,
         )
     elif is_external(adapter):
         results_fixtures = (
@@ -1355,6 +1372,8 @@ def _run_harness(args: argparse.Namespace) -> None:
     for arm, r in ab.arms.items():
         print(f"  {arm}: score={r.score:.3f} n={r.n} "
               f"in={r.input_tokens:,} out={r.output_tokens:,} cost=${r.cost_usd:.6f}")
+        if getattr(r, "unofficial_n", 0) > 0:
+            print(f"  {arm}: unofficial score={r.unofficial_score:.3f} (n={r.unofficial_n})")
     for arm, d in ab.deltas.items():
         print(f"  delta {arm}: score {d['score_delta']:+.3f}, "
               f"input reduction {d['input_token_reduction_pct']:+.1f}%, "
