@@ -230,9 +230,18 @@ def _format_authority_record(record: dict[str, Any], *, drill_down: bool = False
             value = f"{value}, plus {_format_count(uncertain)} more that may be repeats"
     fact_name = f"{attribute} ({scope})" if scope else attribute
     subject_prefix = f"{subject} — " if subject else ""
-    lines.append(f"current fact: {subject_prefix}{fact_name} = {value}")
-    if lower_bound:
-        lines.extend(_count_match_lines(record))
+    if kind == "history":
+        total = record.get("contributors_total")
+        if isinstance(total, int) and not isinstance(total, bool) and total > 0:
+            entries = total
+        else:
+            raw = record.get("contributors")
+            entries = sum(1 for c in raw if isinstance(c, dict)) if isinstance(raw, list) else 0
+        lines.append(f"history: {subject_prefix}{fact_name} ({entries} entries)")
+    else:
+        lines.append(f"current fact: {subject_prefix}{fact_name} = {value}")
+        if lower_bound:
+            lines.extend(_count_match_lines(record))
 
     valid_at = str(record.get("valid_at") or "").strip()
     if valid_at:
