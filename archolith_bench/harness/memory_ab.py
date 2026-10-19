@@ -470,6 +470,7 @@ def _run_memory_arm(
     record_turn_evidence: bool = True,
     drill_down: bool = False,
     tool_send_fn=send_with_tools,  # noqa: ANN001
+    unofficial_score_fn=None,  # noqa: ANN001
 ) -> ArmResult:
     results: list[TaskResult] = []
     turn_dicts: list[dict] = []
@@ -568,6 +569,18 @@ def _run_memory_arm(
             dict(getattr(score_fn, "last_usage", {}) or {}) if score_fn is not None else {}
         )
         scorer_inp, scorer_out = _usage_tokens(scorer_usage)
+        unofficial: bool | None = None
+        unofficial_usage: dict = {}
+        if unofficial_score_fn is not None and getattr(adapter, "benchmark_id", "") == "longmemeval-menhir":
+            if correct:
+                unofficial = True
+            else:
+                # Unofficial and optional: its failure must not block or re-run the official result.
+                try:
+                    unofficial = bool(unofficial_score_fn(item, text))
+                    unofficial_usage = dict(getattr(unofficial_score_fn, "last_usage", {}) or {})
+                except Exception as exc:  # noqa: BLE001
+                    print(f"  [unofficial judge] {task_id}: failed ({exc}); left unjudged")
         tr = TaskResult(
             task_id=task_id,
             response_text=text,
@@ -582,6 +595,8 @@ def _run_memory_arm(
             scorer_input_tokens=scorer_inp,
             scorer_output_tokens=scorer_out,
             scorer_raw_usage=scorer_usage,
+            unofficial_correct=unofficial,
+            unofficial_scorer_raw_usage=unofficial_usage,
         )
         results.append(tr)
         turn_dicts.append({"input_tokens": inp, "output_tokens": out})
@@ -591,6 +606,7 @@ def _run_memory_arm(
 
     score = mean(1.0 if r.correct else 0.0 for r in results) if results else 0.0
     arm_cost = compute_arm_cost(turn_dicts, pricing)
+    judged = [r for r in results if r.unofficial_correct is not None]
     return ArmResult(
         arm=arm,
         n=len(results),
@@ -599,6 +615,10 @@ def _run_memory_arm(
         output_tokens=sum(r.output_tokens for r in results),
         cost_usd=round(arm_cost.total_effective_cost_usd, 6),
         results=results,
+        unofficial_score=(
+            round(mean(1.0 if r.unofficial_correct else 0.0 for r in judged), 4) if judged else None
+        ),
+        unofficial_n=len(judged),
     )
 
 
@@ -628,6 +648,7 @@ def run_memory_ab(
     record_turn_evidence: bool = True,
     drill_down: bool = False,
     tool_send_fn=send_with_tools,  # noqa: ANN001
+    unofficial_score_fn=None,  # noqa: ANN001
 ) -> ABResult:
     """Run an ingest-then-recall memory benchmark across arms.
 
@@ -704,6 +725,7 @@ def run_memory_ab(
                         namespace_template=namespace_template,
                         checkpoint=checkpoint,
                         score_fn=score_fn,
+                        unofficial_score_fn=unofficial_score_fn,
                         record_turn_evidence=record_turn_evidence,
                         drill_down=drill_down,
                         tool_send_fn=tool_send_fn,
@@ -711,6 +733,8 @@ def run_memory_ab(
     finally:
         if score_fn is not None and hasattr(score_fn, "close"):
             score_fn.close()
+        if unofficial_score_fn is not None and hasattr(unofficial_score_fn, "close"):
+            unofficial_score_fn.close()
 
     # Deltas vs the no_memory floor (memory lift), reusing the shared helper by
     # aliasing no_memory as the baseline.

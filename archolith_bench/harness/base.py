@@ -65,6 +65,8 @@ class TaskResult:
     scorer_input_tokens: int = 0
     scorer_output_tokens: int = 0
     scorer_raw_usage: dict = field(default_factory=dict)
+    unofficial_correct: bool | None = None
+    unofficial_scorer_raw_usage: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -78,6 +80,8 @@ class ArmResult:
     output_tokens: int
     cost_usd: float
     results: list[TaskResult] = field(default_factory=list)
+    unofficial_score: float | None = None
+    unofficial_n: int = 0
 
 
 @dataclass
@@ -387,23 +391,27 @@ def run_external_ab(
 
 def ab_result_to_dict(ab: ABResult) -> dict:
     """Serialize an ABResult to a stable JSON-compatible dict."""
+    arms: dict[str, dict] = {}
+    for arm, r in ab.arms.items():
+        entry = {
+            "arm": r.arm,
+            "n": r.n,
+            "score": r.score,
+            "input_tokens": r.input_tokens,
+            "output_tokens": r.output_tokens,
+            "cost_usd": r.cost_usd,
+            "results": [asdict(t) for t in r.results],
+        }
+        if r.unofficial_n > 0:
+            entry["unofficial_score"] = r.unofficial_score
+            entry["unofficial_n"] = r.unofficial_n
+        arms[arm] = entry
     return {
         "benchmark_id": ab.benchmark_id,
         "name": ab.name,
         "model": ab.model,
         "subset": ab.subset,
-        "arms": {
-            arm: {
-                "arm": r.arm,
-                "n": r.n,
-                "score": r.score,
-                "input_tokens": r.input_tokens,
-                "output_tokens": r.output_tokens,
-                "cost_usd": r.cost_usd,
-                "results": [asdict(t) for t in r.results],
-            }
-            for arm, r in ab.arms.items()
-        },
+        "arms": arms,
         "deltas": ab.deltas,
     }
 
@@ -442,6 +450,13 @@ def write_harness_evidence(ab: ABResult, out_path: str | Path, output_format: st
                 f"| {arm} | {d['score_delta']:+.3f} | "
                 f"{d['input_token_reduction_pct']:+.2f}% | {d['cost_reduction_pct']:+.2f}% |\n"
             )
+    if any(r.unofficial_n > 0 for r in ab.arms.values()):
+        lines.append("\n## Unofficial judge (substance; not the LongMemEval score)\n\n")
+        lines.append("| Arm | N judged | Unofficial score |\n")
+        lines.append("|-----|----------|------------------|\n")
+        for arm, r in ab.arms.items():
+            if r.unofficial_n > 0:
+                lines.append(f"| {arm} | {r.unofficial_n} | {r.unofficial_score:.3f} |\n")
     with open(out_path, "w", encoding="utf-8") as f:
         f.writelines(lines)
     return out_path

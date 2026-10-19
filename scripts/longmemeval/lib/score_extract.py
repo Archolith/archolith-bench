@@ -67,6 +67,7 @@ def extract(run_directory: Path) -> dict[str, Any]:
     # checkpoint actually contains a repeat, but resume makes it possible, and silently
     # double-counting one would move the score.
     verdicts: dict[tuple[str, str], bool] = {}
+    unofficial_verdicts: dict[tuple[str, str], bool] = {}
     duplicates = 0
     malformed = 0
     tokens: dict[str, dict[str, int]] = {}
@@ -92,6 +93,11 @@ def extract(run_directory: Path) -> dict[str, Any]:
             if key in verdicts:
                 duplicates += 1
             verdicts[key] = bool(result["correct"])
+            unofficial_value = result.get("unofficial_correct")
+            if isinstance(unofficial_value, bool):
+                unofficial_verdicts[key] = unofficial_value
+            else:
+                unofficial_verdicts.pop(key, None)
             bucket = tokens.setdefault(arm, {"input_tokens": 0, "output_tokens": 0})
             for field in ("input_tokens", "output_tokens"):
                 value = result.get(field)
@@ -112,6 +118,15 @@ def extract(run_directory: Path) -> dict[str, Any]:
     for arm, entry in arms.items():
         entry["score"] = round(entry["correct"] / entry["n"], 6)
         entry.update(tokens.get(arm, {}))
+    unofficial_counts: dict[str, list[int]] = {}
+    for (arm, _task), value in unofficial_verdicts.items():
+        counts = unofficial_counts.setdefault(arm, [0, 0])
+        counts[0] += 1
+        counts[1] += int(value)
+    for arm, (u_n, u_correct) in unofficial_counts.items():
+        arms[arm]["unofficial_n"] = u_n
+        arms[arm]["unofficial_correct"] = u_correct
+        arms[arm]["unofficial_score"] = round(u_correct / u_n, 6)
 
     return {
         "run_id": run_directory.name,
@@ -134,10 +149,13 @@ def format_report(payload: dict[str, Any]) -> str:
     lines = [f"{payload['run_id']}  (from {', '.join(payload['source'])})"]
     width = max((len(a) for a in payload["arms"]), default=4)
     for arm, entry in payload["arms"].items():
-        lines.append(
+        line = (
             f"  {arm:<{width}}  n={entry['n']:<4} correct={entry['correct']:<4} "
             f"score={entry['score']:.3f}"
         )
+        if entry.get("unofficial_n"):
+            line += f"  unofficial={entry['unofficial_score']:.3f} (n={entry['unofficial_n']})"
+        lines.append(line)
     if payload["duplicate_entries_collapsed"]:
         lines.append(
             f"  note: {payload['duplicate_entries_collapsed']} duplicate (arm, task) "

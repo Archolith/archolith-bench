@@ -88,6 +88,13 @@ def summarize_harness_usage(
             add_usage(arm, "judge", scorer_usage)
         elif require_judge_usage:
             add_usage(arm, "judge", {})
+        unofficial_usage = (
+            result.get("unofficial_scorer_raw_usage")
+            if isinstance(result.get("unofficial_scorer_raw_usage"), dict)
+            else {}
+        )
+        if unofficial_usage:
+            add_usage(arm, "judge_unofficial", unofficial_usage)
 
     return {
         "available": True,

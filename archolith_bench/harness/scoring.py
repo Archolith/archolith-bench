@@ -93,3 +93,54 @@ class LLMJudgeScorer:
     def close(self) -> None:
         if self._own_client:
             self._client.close()
+
+
+_UNOFFICIAL_JUDGE_SYSTEM = (
+    "You are grading a question-answering response in substance. It is correct if its "
+    "committed answer matches the gold answer. A lower bound phrased as 'at least N' "
+    "counts as matching when N equals the gold number. Extra caveats, hedges, or "
+    "mentions of excluded items do not make it wrong when the stated answer matches the "
+    "gold. It is incorrect if it commits to a different number or answer, contradicts "
+    "the gold, or fails to answer. Reply with a single word: 'yes' if correct, 'no' if "
+    "incorrect."
+)
+
+
+def _unofficial_judge_messages(item: dict, response_text: str) -> list[dict]:
+    if _is_abstention(item):
+        return _judge_messages(item, response_text)
+    msgs = _judge_messages(item, response_text)
+    return [{"role": "system", "content": _UNOFFICIAL_JUDGE_SYSTEM}, msgs[1]]
+
+
+class UnofficialJudgeScorer:
+    """Substance-grading judge run only on official-wrong items; reported separately."""
+
+    def __init__(
+        self,
+        *,
+        base_url: str,
+        api_key: str,
+        model: str,
+        send_fn=send_chat,  # noqa: ANN001
+        client: httpx.Client | None = None,
+    ) -> None:
+        self.base_url = base_url
+        self.api_key = api_key
+        self.model = model
+        self.send_fn = send_fn
+        self._client = client or httpx.Client(timeout=60)
+        self._own_client = client is None
+        self.last_usage: dict = {}
+
+    def __call__(self, item: dict, response_text: str) -> bool:
+        messages = _unofficial_judge_messages(item, response_text)
+        text, _latency, usage = self.send_fn(
+            self._client, self.base_url, self.api_key, messages, self.model, strict=True
+        )
+        self.last_usage = dict(usage or {})
+        return _parse_yes(text)
+
+    def close(self) -> None:
+        if self._own_client:
+            self._client.close()
