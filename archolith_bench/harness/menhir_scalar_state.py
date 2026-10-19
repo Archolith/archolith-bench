@@ -267,12 +267,21 @@ def _find_assertion(rows: list[dict[str, Any]], case: ScalarStateCase) -> dict[s
     return None
 
 
+def _view_value(row: dict[str, Any]) -> Any:
+    """A View's typed value: ss_value, else ss_display, else `value`. `value` is view_value, a numeric
+    mirror that is 0.0 for text kinds (clock_time, weekday, status), so it cannot be compared there."""
+    for key in ("ss_value", "ss_display"):
+        if row.get(key) not in (None, ""):
+            return row[key]
+    return row.get("value")
+
+
 def _find_view(rows: list[dict[str, Any]], case: ScalarStateCase) -> dict[str, Any] | None:
     """First current View whose kind+value match the fixture."""
     for row in rows:
         if case.expect_kind and str(row.get("ss_kind") or "") != case.expect_kind:
             continue
-        if _value_matches(case.expect_value, row.get("value")):
+        if _value_matches(case.expect_value, _view_value(row)):
             return row
     return None
 
@@ -297,7 +306,7 @@ def _validate_case(
         assertion = _find_assertion(assertions, case)
         matched = view is not None
         actual = {
-            "view": {"kind": view.get("ss_kind"), "value": view.get("value")} if view else None,
+            "view": {"kind": view.get("ss_kind"), "value": _view_value(view)} if view else None,
             "assertion_tier": assertion.get("evidence_tier") if assertion else None,
         }
         notes = "" if matched else "no current scalar_state View matched this slot (stochastic abstain?)"

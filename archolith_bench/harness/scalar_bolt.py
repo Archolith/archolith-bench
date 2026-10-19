@@ -79,6 +79,8 @@ RETURN v.view_subject_uuid    AS subject_uuid,
        v.ss_kind              AS ss_kind,
        v.ss_unit              AS ss_unit,
        v.view_value           AS value,
+       v.ss_value             AS ss_value,
+       v.ss_display           AS ss_display,
        v.group_id             AS group_id,
        v.ss_view_key_current  AS view_key
 ORDER BY v.view_subject_uuid, v.ss_attribute
