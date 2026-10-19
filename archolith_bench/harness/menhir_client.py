@@ -1167,7 +1167,7 @@ class StubScalarStateClient:
     _RECOGNIZERS: list[tuple[str, str, Any, str | None, str, str]] = [
         ("37 rare coins", "count", 37.0, None, "coins", "coin_count"),
         ("180 centimeters", "measurement", 180.0, "cm", "height", "height_measurement"),
-        ("45 minutes", "duration", 45.0, "min", "commute", "commute_duration"),
+        ("45 minutes", "duration", 2700.0, "seconds", "commute", "commute_duration"),
         ("gym 3 times a week", "frequency", 3.0, "per_week", "gym", "gym_frequency"),
         ("7:30", "clock_time", "07:30", None, "wake up", "wake_time"),
         ("day off is wednesday", "weekday", "Wednesday", None, "day off", "day_off_weekday"),
