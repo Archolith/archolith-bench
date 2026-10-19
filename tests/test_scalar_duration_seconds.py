@@ -8,6 +8,8 @@ coverage script both scored a correct View as a miss at assertion_emitted (live 
 from __future__ import annotations
 
 import importlib.util
+import sys
+import types
 from pathlib import Path
 
 from archolith_bench.harness.menhir_scalar_state import _validate_case, default_scalar_state_cases
@@ -22,7 +24,11 @@ LIVE_ASSERTION = {"value_kind": "duration", "value": "2700", "attribute": "commu
                   "binding_pending": False, "subject_display": "user"}
 
 
-def _coverage_module():
+def _coverage_module(monkeypatch):
+    # The script imports the neo4j driver at module top; the offline suite does not install it,
+    # and coverage_for_namespace never touches the driver.
+    if importlib.util.find_spec("neo4j") is None:
+        monkeypatch.setitem(sys.modules, "neo4j", types.SimpleNamespace(GraphDatabase=None))
     path = Path(__file__).resolve().parents[1] / "scripts" / "scalar_state_coverage.py"
     spec = importlib.util.spec_from_file_location("scalar_state_coverage", path)
     module = importlib.util.module_from_spec(spec)
@@ -50,8 +56,8 @@ def test_harness_rejects_a_minutes_valued_view():
     assert not _validate_case(COMMUTE, [], [minutes], []).matched
 
 
-def test_coverage_reaches_every_stage_for_the_live_rows():
-    cov = _coverage_module()
+def test_coverage_reaches_every_stage_for_the_live_rows(monkeypatch):
+    cov = _coverage_module(monkeypatch)
     rows = cov.coverage_for_namespace(_Session([LIVE_ASSERTION], [LIVE_VIEW]), "ns", "default")
     commute = next(r for r in rows if r["case_id"] == "ss-duration-commute")
     assert all(commute[stage] for stage in cov.STAGES)
