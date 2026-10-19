@@ -98,9 +98,15 @@ class LLMJudgeScorer:
 _UNOFFICIAL_JUDGE_SYSTEM = (
     "You are grading a question-answering response in substance. It is correct if its "
     "committed answer matches the gold answer. A lower bound phrased as 'at least N' "
-    "counts as matching when N equals the gold number. Extra caveats, hedges, or "
-    "mentions of excluded items do not make it wrong when the stated answer matches the "
-    "gold. It is incorrect if it commits to a different number or answer, contradicts "
+    "counts as matching when N equals the gold number. An amount phrased as approximate "
+    "or as a lower bound ('about', 'roughly', 'over' N) counts as matching when N equals "
+    "the gold amount; for a count of items, 'more than N' or 'over N' does not match a "
+    "gold of N. When the gold names specific items, the items the response counts must "
+    "be the same items (paraphrase is fine); a matching number made up of different "
+    "items is incorrect, while a matching number with no item list still matches. Extra "
+    "caveats, hedges, or mentions of excluded items do not make it wrong when the stated "
+    "answer matches the gold. It is incorrect if it commits to a different number or "
+    "answer, contradicts "
     "the gold, or fails to answer. Reply with a single word: 'yes' if correct, 'no' if "
     "incorrect."
 )

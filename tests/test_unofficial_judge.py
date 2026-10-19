@@ -85,6 +85,16 @@ def test_unofficial_scorer_abstention_reuses_official_messages() -> None:
     assert seen[0][0][0]["content"] == _JUDGE_SYSTEM_ABSTENTION
 
 
+def test_unofficial_prompt_amount_and_item_rules() -> None:
+    p = _UNOFFICIAL_JUDGE_SYSTEM
+    assert "'about', 'roughly', 'over' N" in p
+    assert "'more than N' or 'over N' does not match a gold of N" in p
+    assert "a matching number made up of different items is incorrect" in p
+    assert "a matching number with no item list still matches" in p
+    # The official judge must not pick up the substance rules.
+    assert "roughly" not in _JUDGE_SYSTEM and "different items" not in _JUDGE_SYSTEM
+
+
 def test_official_scorer_unchanged_by_unofficial() -> None:
     assert LLMJudgeScorer.__call__ is not UnofficialJudgeScorer.__call__
     msgs = _judge_messages({"question": "q", "answer": "a"}, "r")
