@@ -104,7 +104,8 @@ if ! lme_container_running "${LME_NEO4J_NAME}"; then
     log "starting existing ${LME_NEO4J_NAME}..."; docker start "${LME_NEO4J_NAME}" >/dev/null
   else
     log "creating persistent Neo4j ${LME_NEO4J_NAME} (bolt ${LME_BOLT})..."
-    docker run -d --name "${LME_NEO4J_NAME}" -p ${LME_BOLT}:7687 -p ${LME_HTTP}:7474 \
+    # Loopback only: the docker host may be remote (reach it through an ssh -L tunnel).
+    docker run -d --name "${LME_NEO4J_NAME}" -p 127.0.0.1:${LME_BOLT}:7687 -p 127.0.0.1:${LME_HTTP}:7474 \
       -e NEO4J_AUTH=neo4j/${LME_NEO4J_PW} -e NEO4J_server_memory_heap_max__size=${LME_NEO4J_HEAP} \
       -v ${LME_NEO4J_VOL}:/data ${LME_NEO4J_IMAGE} >/dev/null
     [ "${VOLUME_PRE_EXISTED}" = "false" ] && GRAPH_FRESH="true"
