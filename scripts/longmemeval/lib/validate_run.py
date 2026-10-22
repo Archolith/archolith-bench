@@ -355,23 +355,40 @@ def validate(
 
     # ---- Source-time integrity (from provenance phases) ----
     phases = provenance.get("phases") or []
-    unfinished = [p for p in phases if not isinstance(p, dict)
-                  or p.get("status") != "completed"]
+    # An interrupted ingest-graph phase is resolved by a later completed ingest-graph phase
+    # (a resumed build); any other non-completed phase still fails.
+    unfinished = []
+    resolved = 0
+    for index, phase in enumerate(phases):
+        if isinstance(phase, dict) and phase.get("status") == "completed":
+            continue
+        if (isinstance(phase, dict) and phase.get("phase") == "ingest-graph"
+                and phase.get("status") == "interrupted"
+                and any(isinstance(later, dict) and later.get("phase") == "ingest-graph"
+                        and later.get("status") == "completed"
+                        for later in phases[index + 1:])):
+            resolved += 1
+            continue
+        unfinished.append(phase)
     checks.append(_check(
         "no_interrupted_phases",
         bool(phases) and not unfinished,
         f"{len(unfinished)} non-completed phase(s)" if unfinished
-        else f"all {len(phases)} phases completed" if phases
+        else (f"all {len(phases)} phases completed"
+              + (f" ({resolved} interrupted ingest-graph phase(s) resolved by a later completed one)"
+                 if resolved else "")) if phases
         else "no phases recorded",
     ))
 
-    return _report(checks)
+    return _report(checks, attempt_count=len(attempts) if isinstance(attempts, list) else None)
 
 
-def _report(checks: list[dict[str, Any]]) -> dict[str, Any]:
+def _report(checks: list[dict[str, Any]], attempt_count: int | None = None) -> dict[str, Any]:
     failures = [c for c in checks if c["status"] == "FAIL"]
     warnings = [c for c in checks if c["status"] == "WARN"]
     return {
+        "attempt_count": attempt_count,
+        "resumed": bool(attempt_count and attempt_count > 1),
         "validated_at": _now(),
         "verdict": "PASS" if not failures else "FAIL",
         "failures": len(failures),
