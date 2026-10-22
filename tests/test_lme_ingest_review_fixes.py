@@ -315,6 +315,40 @@ def test_projection_sweep_content_failure_records_retry_before_reset_then_requeu
     ]
 
 
+def test_pool_survives_projection_enqueue_race_and_finalizes(monkeypatch, tmp_path):
+    """o500 attempts 1-2 crashed here: the settle sweep reset a FAILED projection, Menhir
+    refused the enqueue because the row was already queued or claimed, and the client raised.
+    Now the row is read back, counted as requeued, and the namespace re-settles and finalizes."""
+    real_sweep = ingest._retry_failed_evidence_projections
+    failed_sets = iter([[("proj-1", False)]])
+    sweep_ops: list[str] = []
+
+    def racing_backend(admin, url, op, body=None):
+        sweep_ops.append(op)
+        return op != "enqueue_pending_episode"
+
+    def sweep(namespaces, admin, url, **kw):
+        monkeypatch.setattr(ingest, "_backend", racing_backend)
+        monkeypatch.setattr(
+            ingest, "_failed_evidence_projections", lambda ns: next(failed_sets, []),
+        )
+        return real_sweep(namespaces, admin, url, **kw)
+
+    processing = {"proj-1": {"processing_state": "ENRICHING"}}
+    state = ingest.IngestStateLog(tmp_path / "state.jsonl")
+
+    obs = _drive(
+        monkeypatch, tmp_path, [_run("a")],
+        processing=lambda uuid: processing.get(uuid, READY),
+        sweep=sweep, state=state,
+    )
+
+    assert obs.finalized == ["ns-a"]
+    # _drive stubs _episode_processing (the read-back), so the backend sees reset + enqueue only.
+    assert sweep_ops == ["force_reset_failed_episode", "enqueue_pending_episode"]
+    assert list(state.progress("ns-a").retried_projections) == ["proj-1"]
+
+
 # --------------------------------------------------------------------------------------------
 # 3. _failed_evidence_projections (F7)
 # --------------------------------------------------------------------------------------------
