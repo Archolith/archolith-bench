@@ -403,6 +403,7 @@ class StubMenhirClient:
         flagged: bool = False,
         bootstrap_scope: str | None = None,
         turn_evidence_uuid: str | None = None,
+        idempotency_key: str | None = None,
     ) -> None:
         """Append a formatted snippet to the group's list."""
         if not content:
@@ -558,8 +559,13 @@ class HttpMenhirClient:
         flagged: bool = False,
         bootstrap_scope: str | None = None,
         turn_evidence_uuid: str | None = None,
+        idempotency_key: str | None = None,
     ) -> dict[str, Any] | None:
         """Ingest a snippet as a menhir episode in the group's namespace silo.
+
+        ``idempotency_key`` (1-256 chars) makes a resubmit of the same request return the first
+        episode (``idempotent_replay`` true) instead of creating another; a different request
+        under the same key is an HTTP 409.
 
         ``source`` sets the episode provenance label menhir maps to an evidence kind
         (domain/truth/kinds.py). A user's own utterance is external testimony, so pass
@@ -615,6 +621,8 @@ class HttpMenhirClient:
             payload["bootstrap_scope"] = bootstrap_scope
         if turn_evidence_uuid is not None:
             payload["turn_evidence_uuid"] = turn_evidence_uuid
+        if idempotency_key is not None:
+            payload["idempotency_key"] = idempotency_key
         response = self._client.post(
             url,
             params={"wait": "true" if wait else "false"},

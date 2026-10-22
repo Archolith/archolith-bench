@@ -1,3 +1,13 @@
+## 2026-10-22 - Resume a killed LME graph ingest where it stopped
+
+- Each extractable segment is posted with a stable `idempotency_key` (`<turn_key>#s<segment>`), so a replay after a kill reuses the anchor Menhir already has (needs Menhir with #372). A 409 (same key, different request) stops the run without a retry.
+- `ingest.py` keeps an append-only, fsynced state log beside the manifest (`ingest-state-<manifest>.jsonl`): each namespace's turn-plan digest, retries made, explicit resets and finished namespaces. A resume refuses a namespace whose plan changed, never retries an episode or projection twice, and never resets a namespace unless `--reset-namespace` / `--reset-file` names it.
+- Namespaces run through a sliding pool; each one settles and writes its manifest row as soon as it finishes. Orphaned ENRICHING rows from a killed run are waited on until Menhir's lease frees them.
+- Graph state is read in one batched query over the Neo4j HTTP API (`LME_NEO4J_HTTP_URL`), falling back to `docker exec`. A Menhir outage ends the run after `--outage-timeout` (300 s) instead of waiting out the drain timeout.
+- An episode or projection that FAILED on the provider account (quota/auth) is not a content failure: it spends no retry and is never terminal. The run stops while Menhir still reports the condition and requeues the row once it clears (at most 3 times per run). `failed_requeued` counts retries that happened; the manifest adds `provider_requeued`.
+- One ingest client per manifest (OS lock), one segmentation mode per build, and no duplicate ingest keys in a plan. A failed graph read during the projection sweep holds the namespace back instead of reading as "no failures". The final drain re-checks every manifested namespace on each run.
+- `build_graph.sh` takes `LME_RESUME=1` (container, volume, provenance and manifest dir must exist and match) and refuses to start when something already serves the Menhir port. `validate_run.py` accepts an interrupted ingest phase followed by a completed one and reports `attempt_count`. `retry.py` only counts and retries episodes under `LME_NS_PREFIX`.
+
 ## 2026-10-17 - Keep Menhir verb-facet facts outside the limit in every memory mode
 
 - The value-augmented arms and agentic recall re-capped the context to `recall_limit`, so verb-facet facts displaced ranked memories there. `recall()` now returns the facet snippets as `extras`, and those merges keep them in place without counting them. Agentic recall keeps at most 3 in total.

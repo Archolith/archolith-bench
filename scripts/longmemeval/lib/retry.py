@@ -38,9 +38,18 @@ def _cypher(query: str, timeout: int = 300) -> list[list[str]]:
         return []
 
 
+def _ns_prefix() -> str:
+    # Spliced into Cypher text the same way ingest.py does it, so refuse quoting characters.
+    prefix = os.getenv("LME_NS_PREFIX", "lme-")
+    if "'" in prefix or "\\" in prefix:
+        raise SystemExit("LME_NS_PREFIX must not contain a quote or backslash")
+    return prefix
+
+
 def all_failed_uuids(limit: int = 25_000) -> list[str]:
     rows = _cypher(
-        f"MATCH (e:Episodic) WHERE e.processing_state='FAILED' "
+        f"MATCH (e:Episodic) WHERE e.namespace STARTS WITH '{_ns_prefix()}' "
+        f"AND e.processing_state='FAILED' "
         f"RETURN e.uuid AS uuid LIMIT {limit};"
     )
     return [r[0] for r in rows if r and r[0]]
@@ -48,7 +57,7 @@ def all_failed_uuids(limit: int = 25_000) -> list[str]:
 
 def global_counts() -> dict[str, int]:
     rows = _cypher(
-        "MATCH (e:Episodic) RETURN "
+        f"MATCH (e:Episodic) WHERE e.namespace STARTS WITH '{_ns_prefix()}' RETURN "
         "sum(CASE WHEN e.processing_state='READY'     THEN 1 ELSE 0 END) AS ready, "
         "sum(CASE WHEN e.processing_state='ENRICHING' THEN 1 ELSE 0 END) AS enriching, "
         "sum(CASE WHEN e.processing_state='FAILED'    THEN 1 ELSE 0 END) AS failed, "

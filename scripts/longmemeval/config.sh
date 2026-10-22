@@ -108,6 +108,10 @@ LME_MAX_LLM_CALLS_PER_JOB="${LME_MAX_LLM_CALLS_PER_JOB:-100}"
 # default; override explicitly when reproducing an older arm.
 LME_SEGMENTATION="${LME_SEGMENTATION:-adaptive}"
 LME_REQUIRE_FRESH="${LME_REQUIRE_FRESH:-0}"
+# Resume an interrupted build against its existing graph; replaces the fresh-build refusals.
+LME_RESUME="${LME_RESUME:-0}"
+# Optional file of namespaces (one per line) ingest may reset on resume.
+LME_RESET_FILE="${LME_RESET_FILE:-}"
 # Noncanonical: permit code-commit drift on resume. A canonical run refuses to resume when the
 # menhir or bench commit changes; set this to 1 for development iteration where you expect to
 # resume a partially-built graph after a code change. The provenance file and all output will be

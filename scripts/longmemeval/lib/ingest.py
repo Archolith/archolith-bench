@@ -2,47 +2,45 @@
 STABLE namespaces (lme-<question_id>), no per-item reset on success -- so recall-only A/B
 (main vs frontier) can run against the pre-ingested graph without re-ingesting.
 
-Resumability:
+Resume WITHOUT reset:
 - An incremental manifest (results/lme-ingest/manifest.json) records each FULLY-ingested AND
-  FULLY-ENRICHED item.
-- On restart, items already in the manifest are SKIPPED.
-- An item NOT in the manifest may have partial data from a prior crash, so its namespace is
-  force-reset before re-ingesting. The reset removes the graph partition, scalar state, and
-  namespace-keyed TurnEvidence -- guaranteeing no duplicate evidence or episodes.
-- Per-turn ingest has bounded retry/backoff; if it still fails the script exits non-zero and a
-  re-run resumes from the manifest.
+  FULLY-ENRICHED item; on restart those items are SKIPPED.
+- Every extractable segment is submitted with an idempotency key (``<turn_key>#s<segment>``),
+  so a re-run replays the same episode instead of creating a duplicate (P1). Evidence MERGEs on
+  turn_key. A resumed namespace is therefore continued, never wiped.
+- A state log next to the manifest (ingest-state-<manifest>.jsonl, see ingest_state.py) records
+  each namespace's turn-plan digest, every retry spent (durably, BEFORE the reset), resets and
+  completions. A resume refuses if a recorded digest no longer matches (P5), and refuses a
+  namespace that already holds Episodic rows but has no recorded plan.
+- Namespaces are reset ONLY when listed (--reset-namespace / --reset-file); each is first waited
+  on until stale enrichment settles, then reset (P4).
+- Per-turn ingest has bounded retry/backoff; HTTP 409 (key reused with different content) is
+  never retried. Menhir/Neo4j down beyond --outage-timeout exits non-zero; re-run to resume.
 
-Enrichment completeness (why a namespace-window DRAIN exists):
-- The HTTP ingest `wait=true` is best-effort with a 60s/episode cap, so slow episodes (which need
-  up to MENHIR_MAX_LLM_CALLS_PER_JOB extraction calls) leave a PENDING/ENRICHING backlog behind a
-  single background worker. Marking an item "done" the instant its last turn POST returns would
-  record a HALF-ENRICHED namespace -- recall would then run against an incomplete graph.
-- A bounded window keeps exactly one active episode per namespace. When one reaches a terminal
-  state, the driver submits that namespace's next chronological episode. Menhir can therefore
-  enrich distinct namespaces concurrently without ever claiming later work from the same namespace.
-- After submitting a window we DRAIN: poll until menhir's queue_depth==0 (authoritative
-  unprocessed-work count, from /api/stats) AND no episode in any window namespace is PENDING or
-  ENRICHING (the two non-terminal lifecycle states, read from Neo4j) -- stable across two polls --
-  before writing the manifest. This makes "manifest done" mean "fully enriched", and keeps resume
-  correct. (Gating on ENRICHING alone let the drain settle while a PENDING backlog the worker had
-  not yet claimed still existed, which then slipped an unenriched namespace into scalar
-  consolidation and aborted the run.)
-- Benchmark mode disables the scheduler, so FAILED episodes are never auto-retried. The window
-  scheduler immediately retries submitted episodes once before advancing that namespace. After
-  drain, a bounded sweep retries generated evidence-projection episodes once; any residual failure
-  is recorded in the final manifest and blocks scalar consolidation.
+Sliding namespace pool (--namespace-window = pool size):
+- Up to N namespaces run at once, each with exactly ONE active episode. The next segment of a
+  namespace is submitted only when the previous one is READY or terminally FAILED (P2), so
+  workers never reorder temporal updates. A finished namespace frees its slot for the next item.
+- Enrichment completeness: a namespace is settled when no episode is PENDING or ENRICHING for 2
+  consecutive polls (Neo4j). Only then is it swept once for failed evidence-projection episodes
+  and manifested, so "manifest done" means "fully enriched". A global drain runs once at the end.
+- Benchmark mode disables the scheduler, so FAILED episodes are never auto-retried: the pool
+  retries each submitted episode and each generated projection at most once; any residual
+  failure is recorded in the manifest and blocks scalar consolidation.
 """
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
 import subprocess
 import sys
 import time
-from collections.abc import Iterator
-from dataclasses import dataclass
+from collections import Counter
+from collections.abc import Callable, Iterator
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -64,6 +62,8 @@ DEFAULT_MANIFEST = os.getenv(
 
 
 import httpx  # noqa: E402
+from ingest_state import IngestStateLog  # noqa: E402
+from neo4j_http import Neo4jHttpReader, Neo4jUnavailable  # noqa: E402
 from validate_run import consolidation_errors  # noqa: E402
 from archolith_bench.harness.longmemeval import LongMemEvalMemoryAdapter  # noqa: E402
 from archolith_bench.harness.menhir_client import HttpMenhirClient  # noqa: E402
@@ -112,14 +112,38 @@ class IngestTurn:
     # :TurnEvidence MERGE keys on. Without it menhir falls back to hashing the TEXT, which
     # collapses two genuinely repeated identical turns onto one evidence node.
     turn_key: str = ""
+    # Position among the segments cut from one source turn; with turn_key it is the
+    # idempotency identity of the episode (P1).
+    segment_index: int = 0
 
 
 @dataclass
-class WindowItem:
+class NamespaceRun:
+    """Per-namespace pool state: the fixed turn plan and where submission has got to."""
+
     item: dict
     question_id: str
     namespace: str
-    turns: int = 0
+    plan: list[IngestTurn] = field(default_factory=list)
+    digest: str = ""
+    segmentation: str | None = None
+    cursor: int = 0
+    # (episode_uuid, already_retried) for the one in-flight episode, if any.
+    active: tuple[str, bool] | None = None
+    phase: str = "submitting"
+    settle_polls: int = 0
+    settle_first_at: float = 0.0
+    last_progress_at: float = 0.0
+    # turn_key -> :TurnEvidence uuid, so every segment of one source turn reuses one record.
+    evidence_cache: dict[str, str] = field(default_factory=dict)
+
+
+class ServerUnavailableError(RuntimeError):
+    """Menhir or Neo4j stayed unreachable past --outage-timeout."""
+
+
+class IdempotencyConflictError(RuntimeError):
+    """Menhir returned 409: the same ingest key was sent with different content."""
 
 
 def _split_sentences(text: str, min_length: int = _SPLIT_MIN_LENGTH) -> list[str]:
@@ -162,6 +186,7 @@ def _ingest_turn(
     evidence_text: str | None = None,
     turn_key: str | None = None,
     evidence_cache: dict[str, str] | None = None,
+    ingest_key: str | None = None,
 ) -> str:
     """Ingest one turn with bounded exponential backoff on transient errors.
 
@@ -251,6 +276,8 @@ def _ingest_turn(
     if not extract:
         return ""
 
+    # Only sent when supplied, so a resubmit of the same segment returns the first episode.
+    key_kwargs = {"idempotency_key": ingest_key} if ingest_key is not None else {}
     for attempt in range(tries):
         try:
             result = client.ingest(
@@ -265,11 +292,25 @@ def _ingest_turn(
                 source=("user" if is_user else None),
                 turn_evidence_uuid=turn_evidence_uuid,
                 wait=False,
+                **key_kwargs,
             )
             episode_uuid = str((result or {}).get("episode_id") or "")
             if not episode_uuid:
                 raise RuntimeError(f"menhir did not return an episode id for namespace {ns}")
             return episode_uuid
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 409:
+                raise IdempotencyConflictError(
+                    f"menhir returned 409 for namespace {ns} ingest key {ingest_key!r}: this key "
+                    "was first submitted with a different request (changed segment text, or a "
+                    "different evidence link); reset the namespace (--reset-namespace) to "
+                    "re-ingest it"
+                ) from exc
+            if attempt == tries - 1:
+                raise
+            wait = 2 ** (attempt + 1)
+            print(f"    ingest retry {attempt+1}/{tries} after {exc.__class__.__name__} -> sleep {wait}s", flush=True)
+            time.sleep(wait)
         except (httpx.HTTPError,) as exc:
             if attempt == tries - 1:
                 raise
@@ -278,9 +319,40 @@ def _ingest_turn(
             time.sleep(wait)
 
 
+_NEO4J_HTTP = Neo4jHttpReader.from_env()
+
+
+def _plain_cell(cell: object) -> str:
+    """Render a JSON cell the way cypher-shell's plain format does."""
+    if cell is None:
+        return "NULL"
+    if isinstance(cell, bool):
+        return "true" if cell else "false"
+    return str(cell)
+
+
+def _ns_state_counts_many(namespaces: list[str]) -> dict[str, dict[str, int]]:
+    """Batched ``_ns_state_counts``; -1 values mean unreadable."""
+    names = list(dict.fromkeys(namespaces))
+    if _NEO4J_HTTP is not None:
+        try:
+            return _NEO4J_HTTP.namespace_state_counts(names)
+        except Neo4jUnavailable:
+            pass
+    return {ns: _ns_state_counts(ns) for ns in names}
+
+
 def _cypher(query: str) -> list[list[str]]:
-    """Run a read-only cypher query against the lme Neo4j via docker exec; return data rows
-    (header dropped). Returns [] on any failure (docker missing / neo4j unreachable)."""
+    """Run a read-only cypher query against the lme Neo4j (HTTP when LME_NEO4J_HTTP_URL is set,
+    else docker exec); return data rows (header dropped). Returns [] on any failure."""
+    if _NEO4J_HTTP is not None:
+        try:
+            return [
+                [_plain_cell(cell) for cell in row]
+                for row in _NEO4J_HTTP.rows(query.strip().rstrip(";"))
+            ]
+        except Neo4jUnavailable:
+            pass
     try:
         proc = subprocess.run(
             ["docker", "exec", NEO4J_CONTAINER, "cypher-shell", "-u", "neo4j", "-p", NEO4J_PW,
@@ -534,6 +606,10 @@ def _provider_stop_reason(admin: httpx.Client, menhir_url: str) -> str | None:
         body = resp.json()
     except Exception:
         return None
+    return _stop_reason_from_body(body)
+
+
+def _stop_reason_from_body(body: object) -> str | None:
     for key in ("provider_quota_exhausted", "provider_auth_failure"):
         value = body.get(key) if isinstance(body, dict) else None
         if value:
@@ -541,13 +617,32 @@ def _provider_stop_reason(admin: httpx.Client, menhir_url: str) -> str | None:
     return None
 
 
+def _provider_stopped_error(stop_reason: str) -> ProviderStoppedError:
+    return ProviderStoppedError(
+        f"menhir reports {stop_reason}; stopping the ingest (fix the provider account, "
+        "then resume)"
+    )
+
+
 def _raise_if_provider_stopped(admin: httpx.Client, menhir_url: str) -> None:
     stop_reason = _provider_stop_reason(admin, menhir_url)
     if stop_reason:
-        raise ProviderStoppedError(
-            f"menhir reports {stop_reason}; stopping the ingest (fix the provider account, "
-            "then resume)"
-        )
+        raise _provider_stopped_error(stop_reason)
+
+
+def _check_menhir_health(admin: httpx.Client, menhir_url: str) -> bool:
+    """One GET /api/health. Raises ProviderStoppedError on a standing quota/auth failure;
+    returns True only for a 2xx JSON body (False feeds the outage clock)."""
+    try:
+        resp = admin.get(menhir_url.rstrip("/") + "/api/health")
+        resp.raise_for_status()
+        body = resp.json()
+    except Exception:
+        return False
+    stop_reason = _stop_reason_from_body(body)
+    if stop_reason:
+        raise _provider_stopped_error(stop_reason)
+    return isinstance(body, dict)
 
 
 def _backend(admin: httpx.Client, menhir_url: str, op: str, body: dict | None = None):
@@ -628,16 +723,6 @@ def _await_stale_episode_settlement(
         time.sleep(poll_s)
 
 
-def _reset_window_namespaces(
-    admin: httpx.Client,
-    menhir_url: str,
-    namespaces: list[str],
-) -> None:
-    """Force-reset every namespace in a window (graph partition + phase-3 evidence)."""
-    for namespace in namespaces:
-        _reset_namespace(admin, menhir_url, namespace)
-
-
 def _drain_many(
     namespaces: list[str],
     admin: httpx.Client,
@@ -714,31 +799,117 @@ def _drain(
     )[ns]
 
 
-def _failed_evidence_projection_uuids(namespace: str) -> list[str]:
-    """Return failed generated projection episodes in one namespace.
+class GraphUnreadable(RuntimeError):
+    """A graph read failed; the answer is unknown, not empty."""
 
-    Submitted transcript episodes are retried by ``_ingest_window`` while their chronological
+
+# Menhir records these in processing_error when the provider account, not the content, failed.
+_PROVIDER_FAILURE_MARKERS = (
+    "insufficient_quota", "provider_quota_exhausted", "provider_auth_failure", "invalid_api_key",
+)
+
+
+def _provider_caused(error: object) -> bool:
+    text = str(error or "").lower()
+    return any(marker in text for marker in _PROVIDER_FAILURE_MARKERS)
+
+
+def _failed_evidence_projections(namespace: str) -> list[tuple[str, bool]]:
+    """(uuid, provider_caused) of failed generated projection episodes in one namespace.
+
+    Submitted transcript episodes are retried by ``_ingest_pool`` while their chronological
     position is still active. Evidence projections are generated asynchronously by Menhir, so
     their UUIDs are invisible to that scheduler and require this post-drain enumeration.
+    Raises GraphUnreadable when the read fails (``_cypher`` returns [] for a failure and for
+    "none"), so a count that always returns one row is read first and must match the list.
     """
-    rows = _cypher(
+    where = (
         f"MATCH (e:Episodic {{namespace:'{namespace}'}}) "
-        "WHERE e.processing_state='FAILED' "
-        "AND coalesce(e.is_evidence_projection, false) "
-        "RETURN e.uuid AS uuid ORDER BY e.uuid;"
+        "WHERE e.processing_state='FAILED' AND coalesce(e.is_evidence_projection, false) "
     )
-    return [str(row[0]) for row in rows if row and str(row[0]).strip()]
+    count_rows = _cypher(where + "RETURN count(e) AS n;")
+    try:
+        expected = int(count_rows[0][0])
+    except (IndexError, TypeError, ValueError):
+        raise GraphUnreadable(f"could not count failed evidence projections in {namespace}")
+    if expected == 0:
+        return []
+    markers = ", ".join(f"'{marker}'" for marker in _PROVIDER_FAILURE_MARKERS)
+    rows = _cypher(
+        where
+        + "WITH e, toLower(coalesce(toString(e.processing_error), '')) AS err "
+        + f"RETURN e.uuid AS uuid, any(m IN [{markers}] WHERE err CONTAINS m) AS provider "
+        + "ORDER BY uuid;"
+    )
+    found = [(str(row[0]), str(row[1]).lower() == "true") for row in rows
+             if len(row) >= 2 and str(row[0]).strip()]
+    if len(found) != expected:
+        raise GraphUnreadable(f"could not list failed evidence projections in {namespace}")
+    return found
+
+
+def _failed_evidence_projection_uuids(namespace: str) -> list[str]:
+    return [uuid for uuid, _ in _failed_evidence_projections(namespace)]
+
+
+def _requeue_provider_failure(
+    admin: httpx.Client, menhir_url: str, episode_uuid: str,
+) -> bool:
+    """Requeue a FAILED row whose cause was the provider account (quota/auth), not its content.
+
+    Such a failure never spends the one-retry budget and never makes the row terminal: while
+    Menhir still reports the condition, ``_check_menhir_health`` raises ProviderStoppedError and
+    the run stops; once it has cleared (normally on a resume), the row is reset and requeued.
+    Returns False when Menhir is unreachable or the reset failed (try again next cycle).
+    """
+    if not _check_menhir_health(admin, menhir_url):
+        return False
+    try:
+        if not _backend(admin, menhir_url, "force_reset_failed_episode",
+                        {"episode_uuid": episode_uuid}):
+            return False
+    except Exception:
+        return False
+    try:
+        _backend(admin, menhir_url, "enqueue_pending_episode", {"episode_uuid": episode_uuid})
+    except Exception:
+        pass  # lease recovery still finds the PENDING row
+    return True
 
 
 def _retry_failed_evidence_projections(
     namespaces: list[str],
     admin: httpx.Client,
     menhir_url: str,
+    *,
+    skip: set[str] | None = None,
+    on_retry: Callable[[str, str], None] | None = None,
+    on_requeued: Callable[[str, str, str], None] | None = None,
 ) -> dict[str, int]:
-    """Reset and enqueue each failed generated projection exactly once."""
+    """Reset and enqueue each failed generated projection at most once.
+
+    ``skip`` holds uuids already retried (never retried again); ``on_retry(namespace, uuid)``
+    runs BEFORE that uuid's reset so the retry budget is durable; ``on_requeued(namespace,
+    uuid, kind)`` runs after a successful reset. Provider-caused failures (quota/auth) use
+    ``_requeue_provider_failure`` instead and spend no budget. Raises GraphUnreadable when the
+    failed set cannot be read.
+    """
     requeued = {namespace: 0 for namespace in dict.fromkeys(namespaces)}
     for namespace in requeued:
-        for episode_uuid in _failed_evidence_projection_uuids(namespace):
+        for episode_uuid, provider_caused in _failed_evidence_projections(namespace):
+            if provider_caused:
+                if _requeue_provider_failure(admin, menhir_url, episode_uuid):
+                    if on_requeued is not None:
+                        on_requeued(namespace, episode_uuid, "provider")
+                    requeued[namespace] += 1
+                    continue
+                raise GraphUnreadable(
+                    f"could not requeue provider-failed projection {episode_uuid} in {namespace}"
+                )
+            if skip and episode_uuid in skip:
+                continue
+            if on_retry is not None:
+                on_retry(namespace, episode_uuid)
             reset = _backend(
                 admin,
                 menhir_url,
@@ -761,54 +932,10 @@ def _retry_failed_evidence_projections(
                     "could not enqueue reset evidence projection "
                     f"{episode_uuid} in namespace {namespace}"
                 )
+            if on_requeued is not None:
+                on_requeued(namespace, episode_uuid, "projection")
             requeued[namespace] += 1
     return requeued
-
-
-def _retry_failed_evidence_projections_after_drain(
-    namespaces: list[str],
-    admin: httpx.Client,
-    menhir_url: str,
-    drained_by_namespace: dict[str, dict[str, int | bool]],
-    requeued_by_namespace: dict[str, int],
-    *,
-    timeout_s: float,
-) -> dict[str, dict[str, int | bool]]:
-    """Retry generated projection failures once and return the resulting settled snapshot."""
-    if not any(
-        int(drained.get("failed", 0)) > 0
-        for drained in drained_by_namespace.values()
-    ):
-        return drained_by_namespace
-
-    projection_requeues = _retry_failed_evidence_projections(
-        namespaces,
-        admin,
-        menhir_url,
-    )
-    if not any(projection_requeues.values()):
-        return drained_by_namespace
-
-    for namespace, count in projection_requeues.items():
-        requeued_by_namespace[namespace] += count
-    retried_snapshot = _drain_many(
-        namespaces,
-        admin,
-        menhir_url,
-        timeout_s=timeout_s,
-    )
-    timed_out = [
-        namespace
-        for namespace, drained in retried_snapshot.items()
-        if drained.get("timed_out")
-    ]
-    if timed_out:
-        raise RuntimeError(
-            "namespace-window projection retry drain timed out; "
-            "refusing to manifest incomplete namespaces: "
-            + ", ".join(timed_out)
-        )
-    return retried_snapshot
 
 
 def _episode_processing(
@@ -829,51 +956,130 @@ def _episode_processing(
     return result if isinstance(result, dict) else None
 
 
-def _ingest_window(
-    window: list[WindowItem],
-    turn_iterators: list[Iterator[IngestTurn]],
+def _read_reset_file(path: str) -> list[str]:
+    names: list[str] = []
+    for line in Path(path).read_text(encoding="utf-8").splitlines():
+        text = line.strip()
+        if text and not text.startswith("#"):
+            names.append(text)
+    return names
+
+
+def _startup_checks(
+    runs: list[NamespaceRun],
+    state: IngestStateLog,
+    args: argparse.Namespace,
+    admin: httpx.Client,
+) -> None:
+    """Refuse unsafe resumes, then reset ONLY the explicitly listed namespaces (P4/P5/P1).
+
+    Runs before any submit. Refusals raise RuntimeError and write nothing.
+    """
+    remaining = [run.namespace for run in runs]
+    listed = list(args.reset_namespace or [])
+    if args.reset_file:
+        listed.extend(_read_reset_file(args.reset_file))
+    listed = list(dict.fromkeys(listed))
+    not_remaining = [ns for ns in listed if ns not in remaining]
+    if not_remaining:
+        raise RuntimeError(
+            "reset refused: listed namespaces are not among the remaining (non-manifested) "
+            "namespaces: " + ", ".join(not_remaining)
+        )
+    listed_set = set(listed)
+
+    # One build, one segmentation mode: a resume under another mode would ingest the namespaces
+    # it has not started differently from those it has (including finished ones).
+    segmentation = getattr(args, "segmentation", None)
+    other_mode = sorted(
+        ns for ns in state.namespaces()
+        if ns not in listed_set
+        and state.progress(ns).segmentation not in (None, segmentation)
+    )
+    if segmentation is not None and other_mode:
+        modes = sorted({str(state.progress(ns).segmentation) for ns in other_mode})
+        raise RuntimeError(
+            f"resume refused: namespaces were ingested with segmentation {modes}, this run uses "
+            f"{segmentation!r}: " + ", ".join(other_mode[:10])
+        )
+
+    mismatched = []
+    for run in runs:
+        recorded = state.progress(run.namespace).plan_digest
+        if run.namespace not in listed_set and recorded is not None and recorded != run.digest:
+            mismatched.append(run.namespace)
+    if mismatched:
+        raise RuntimeError(
+            "resume refused: turn plan changed since the recorded plan (list with "
+            "--reset-namespace to start over): " + ", ".join(mismatched)
+        )
+
+    unrecorded = [
+        run.namespace
+        for run in runs
+        if run.namespace not in listed_set and state.progress(run.namespace).plan_digest is None
+    ]
+    if unrecorded:
+        counts = _ns_state_counts_many(unrecorded)
+        unreadable = [ns for ns in unrecorded if int(counts.get(ns, {}).get("total", -1)) < 0]
+        if unreadable:
+            raise RuntimeError(
+                "resume refused: could not read the Episodic row count (graph unreachable) for: "
+                + ", ".join(unreadable)
+            )
+        dirty = [ns for ns in unrecorded if int(counts[ns]["total"]) > 0]
+        if dirty:
+            raise RuntimeError(
+                "resume refused: namespace has graph data but no recorded plan; list it with "
+                "--reset-namespace: " + ", ".join(dirty)
+            )
+
+    for namespace in listed:
+        # Settle first: a reset deletes the PENDING/ENRICHING rows that prove a worker is alive.
+        _await_stale_episode_settlement([namespace], timeout_s=args.reset_settle_timeout)
+        _reset_namespace(admin, args.menhir_url, namespace)
+        state.record_reset(namespace)
+
+
+def _ingest_pool(
+    runs: list[NamespaceRun],
     client: HttpMenhirClient,
     admin: httpx.Client,
     menhir_url: str,
+    state: IngestStateLog,
     *,
-    timeout_s: float,
+    pool_size: int,
+    drain_timeout: float,
+    finalize,
+    outage_timeout: float = 300.0,
     poll_s: float = 1.0,
-) -> dict[str, int]:
-    """Keep one episode active per namespace while distinct namespaces run concurrently.
+    settle_gap_s: float = 2.0,
+    max_provider_requeues: int = 3,
+) -> list[str]:
+    """Sliding pool: up to ``pool_size`` namespaces in flight, one active episode in each.
 
-    A later episode is not submitted until the preceding episode in that namespace reaches READY
-    or FAILED. This is stronger than relying on the per-namespace extraction lock: multiple workers
-    can claim queued episodes before they reach that lock, so pre-filling a namespace could reorder
-    temporal updates.
+    P2: segment k+1 of a namespace is only submitted once segment k is READY or terminally
+    FAILED, so Menhir workers can never reorder temporal updates inside a namespace. Each
+    namespace then settles (PENDING and ENRICHING both zero on two readings at least
+    ``settle_gap_s`` apart), gets one bounded sweep of failed evidence projections, and
+    ``finalize(run, counts)`` writes its manifest row. Content-failure retries are recorded in
+    the state log BEFORE the reset, so the one-retry budget survives a crash; provider-caused
+    failures (quota/auth) spend no budget. Returns the namespaces finalized, in completion order.
     """
-    if len(window) != len(turn_iterators):
-        raise ValueError("window and turn iterator counts must match")
+    queue = list(runs)
+    running: list[NamespaceRun] = []
+    completed: list[str] = []
+    bad_since: float | None = None
 
-    active: dict[int, tuple[str, bool]] = {}
-    requeued = {state.namespace: 0 for state in window}
-    started_at = time.time()
-    # turn_key -> :TurnEvidence uuid. Every segment cut from one source turn reuses the first
-    # segment's record, so one source turn is one evidence node no matter how it was split.
-    # Keys are namespace-qualified, so sharing one map across the window is safe.
-    evidence_by_turn: dict[str, str] = {}
-
-    def submit_next(index: int) -> bool:
-        """Advance one namespace to its next *extractable* turn.
-
-        Evidence-only turns create no episode, so there is no lifecycle row to
-        wait on. They are recorded in order and skipped over here rather than
-        occupying the namespace's single active slot -- which would deadlock the
-        drain, since a missing episode never reaches READY.
-        """
-        state = window[index]
-        while True:
-            try:
-                turn = next(turn_iterators[index])
-            except StopIteration:
-                return False
+    def submit_next(run: NamespaceRun) -> None:
+        """Advance to the next *extractable* turn; evidence-only turns hold no slot."""
+        retried = state.progress(run.namespace).retried_episodes
+        while run.cursor < len(run.plan):
+            turn = run.plan[run.cursor]
+            run.cursor += 1
             episode_uuid = _ingest_turn(
                 client,
-                state.namespace,
+                run.namespace,
                 turn.role,
                 turn.content,
                 occurred_at=turn.occurred_at,
@@ -881,47 +1087,106 @@ def _ingest_window(
                 extract=turn.extract,
                 evidence_text=turn.evidence_text or turn.content,
                 turn_key=turn.turn_key or None,
-                evidence_cache=evidence_by_turn,
+                evidence_cache=run.evidence_cache,
+                ingest_key=_ingest_key(turn),
             )
-            state.turns += 1
+            run.last_progress_at = time.time()
             if episode_uuid:
-                active[index] = (episode_uuid, False)
-                return True
+                run.active = (episode_uuid, episode_uuid in retried)
+                return
+        run.active = None
+        run.phase = "settling"
+        run.settle_polls = 0
 
-    for index in range(len(window)):
-        submit_next(index)
-
-    while active:
-        # Checked before the FAILED-episode retry below: under exhausted quota that retry and
-        # every later turn would fail fast, one by one, for the rest of the window.
-        _raise_if_provider_stopped(admin, menhir_url)
-        if time.time() - started_at >= timeout_s:
-            pending = ", ".join(
-                f"{window[index].namespace}:{episode_uuid}"
-                for index, (episode_uuid, _) in active.items()
+    def note_bad() -> None:
+        """Start (or continue) the outage clock and enforce it now, not at the end of a cycle:
+        with hanging requests one cycle can outlast the whole limit."""
+        nonlocal bad_since
+        now = time.time()
+        if bad_since is None:
+            bad_since = now
+        if now - bad_since >= outage_timeout:
+            raise ServerUnavailableError(
+                f"menhir or neo4j unreachable for {outage_timeout:.0f}s; stopping "
+                "(re-run with the same arguments to resume)"
             )
-            raise RuntimeError(
-                "namespace-window episode scheduler timed out; refusing to submit later turns: "
-                + pending
-            )
 
+    provider_requeues: dict[str, int] = {}
+
+    def on_requeued(namespace: str, episode_uuid: str, kind: str) -> None:
+        if kind == "provider":
+            provider_requeues[episode_uuid] = provider_requeues.get(episode_uuid, 0) + 1
+            if provider_requeues[episode_uuid] > max_provider_requeues:
+                raise ProviderStoppedError(
+                    f"projection {episode_uuid} ({namespace}) failed on the provider account "
+                    f"{max_provider_requeues} times this run; stopping (fix the provider "
+                    "account, then resume)"
+                )
+        state.record_requeued(namespace, episode_uuid, kind)
+
+    while queue or running:
+        # Before any poll, retry or submit: exhausted quota fails everything fast otherwise.
+        healthy = _check_menhir_health(admin, menhir_url)
+        if not healthy:
+            note_bad()
         progressed = False
-        for index, (episode_uuid, already_retried) in list(active.items()):
+
+        while queue and len(running) < pool_size:
+            run = queue.pop(0)
+            if state.progress(run.namespace).plan_digest != run.digest:
+                state.record_plan(run.namespace, run.digest, len(run.plan), run.segmentation)
+            run.last_progress_at = time.time()
+            running.append(run)
+            submit_next(run)
+            progressed = True
+
+        reads = 0
+        unreadable = 0
+
+        def unreadable_read() -> None:
+            nonlocal unreadable
+            unreadable += 1
+            if not healthy or unreadable == reads:
+                note_bad()
+
+        for run in list(running):
+            if run.phase != "submitting" or run.active is None:
+                continue
+            episode_uuid, already_retried = run.active
             row = _episode_processing(admin, menhir_url, episode_uuid)
+            reads += 1
             if row is None:
+                unreadable_read()
                 continue
             processing_state = str(row.get("processing_state") or "").upper().rsplit(".", 1)[-1]
             if processing_state == "READY":
-                active.pop(index, None)
-                submit_next(index)
+                run.active = None
+                submit_next(run)
                 progressed = True
             elif processing_state == "FAILED":
+                if _provider_caused(row.get("processing_error")):
+                    # Not a content failure: spends no budget and is never terminal. Raises
+                    # ProviderStoppedError while Menhir still reports the condition.
+                    provider_requeues[episode_uuid] = provider_requeues.get(episode_uuid, 0) + 1
+                    if provider_requeues[episode_uuid] > max_provider_requeues:
+                        raise ProviderStoppedError(
+                            f"episode {episode_uuid} ({run.namespace}) failed on the provider "
+                            f"account {max_provider_requeues} times this run; stopping (fix the "
+                            "provider account, then resume)"
+                        )
+                    if _requeue_provider_failure(admin, menhir_url, episode_uuid):
+                        state.record_requeued(run.namespace, episode_uuid, "provider")
+                        run.last_progress_at = time.time()
+                        progressed = True
+                    else:
+                        unreadable_read()
+                    continue
                 if not already_retried:
+                    # Budget is spent durably BEFORE the reset, so a crash cannot grant a second.
+                    state.record_retry(run.namespace, episode_uuid, "episode")
                     try:
                         reset = _backend(
-                            admin,
-                            menhir_url,
-                            "force_reset_failed_episode",
+                            admin, menhir_url, "force_reset_failed_episode",
                             {"episode_uuid": episode_uuid},
                         )
                     except Exception:
@@ -929,29 +1194,92 @@ def _ingest_window(
                     if reset:
                         try:
                             _backend(
-                                admin,
-                                menhir_url,
-                                "enqueue_pending_episode",
+                                admin, menhir_url, "enqueue_pending_episode",
                                 {"episode_uuid": episode_uuid},
                             )
                         except Exception:
-                            # An idle worker's lease-recovery poll will still discover the PENDING
-                            # row. Keep monitoring the same episode instead of advancing out of order.
+                            # Lease recovery will still find the PENDING row; keep waiting on it.
                             pass
-                        active[index] = (episode_uuid, True)
-                        requeued[window[index].namespace] += 1
+                        state.record_requeued(run.namespace, episode_uuid, "episode")
+                        run.active = (episode_uuid, True)
+                        run.last_progress_at = time.time()
                         progressed = True
                         continue
-                # A terminal failure has no later retry that could reorder this namespace. Record
-                # it in the final state counts and continue with the next chronological episode.
-                active.pop(index, None)
-                submit_next(index)
+                    print(f"    reset of FAILED {episode_uuid} ({run.namespace}) failed; its one "
+                          "retry is spent and it stays FAILED", flush=True)
+                # Terminal: no further retry could reorder this namespace; counts record it.
+                run.active = None
+                submit_next(run)
                 progressed = True
 
-        if active and not progressed:
+        settling = [run for run in running if run.phase == "settling"]
+        settled: list[tuple[NamespaceRun, dict]] = []
+        if settling:
+            counts = _ns_state_counts_many([run.namespace for run in settling])
+            now = time.time()
+            for run in settling:
+                snapshot = counts.get(run.namespace) or {}
+                reads += 1
+                pending = int(snapshot.get("pending", -1))
+                enriching = int(snapshot.get("enriching", -1))
+                if pending < 0 or enriching < 0:
+                    run.settle_polls = 0
+                    unreadable_read()
+                    continue
+                if pending or enriching:
+                    run.settle_polls = 0
+                    continue
+                # Two zero readings at least settle_gap_s apart, not two back-to-back polls.
+                if run.settle_polls == 0:
+                    run.settle_first_at = now
+                run.settle_polls += 1
+                run.last_progress_at = now
+                if run.settle_polls >= 2 and now - run.settle_first_at >= settle_gap_s:
+                    settled.append((run, snapshot))
+
+        # Watchdog on this cycle's fresh readings, BEFORE any finalize: a long consolidation of
+        # one namespace must not count as "no progress" for the others.
+        now = time.time()
+        for run in running:
+            if now - run.last_progress_at >= drain_timeout:
+                where = run.active[0] if run.active else run.phase
+                raise RuntimeError(
+                    f"namespace {run.namespace} made no progress for {drain_timeout:.0f}s "
+                    f"({where}); refusing to continue"
+                )
+
+        for run, snapshot in settled:
+            try:
+                requeued = _retry_failed_evidence_projections(
+                    [run.namespace],
+                    admin,
+                    menhir_url,
+                    skip=set(state.progress(run.namespace).retried_projections),
+                    on_retry=lambda ns, uuid: state.record_retry(ns, uuid, "projection"),
+                    on_requeued=on_requeued,
+                )
+            except GraphUnreadable:
+                run.settle_polls = 0
+                reads += 1
+                unreadable_read()
+                continue
+            if requeued.get(run.namespace):
+                run.settle_polls = 0
+                run.last_progress_at = time.time()
+                progressed = True
+                continue
+            finalize(run, snapshot)
+            running.remove(run)
+            completed.append(run.namespace)
+            progressed = True
+
+        if healthy and not (reads and unreadable == reads):
+            bad_since = None
+
+        if (queue or running) and not progressed:
             time.sleep(poll_s)
 
-    return requeued
+    return completed
 
 
 def _positive_int(raw: str) -> int:
@@ -977,13 +1305,30 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="namespace prefix for ingested items (default: LME_NS_PREFIX or lme-)",
     )
     ap.add_argument("--drain-timeout", type=float, default=1800.0,
-                    help="max seconds to wait for a namespace window's enrichment to settle")
+                    help="max seconds one namespace may make no progress (and the final "
+                         "drain may run) before the run stops")
     ap.add_argument(
         "--namespace-window",
         type=_positive_int,
         default=os.getenv("LME_INGEST_CONCURRENCY", "1"),
-        help="number of item namespaces to enrich concurrently before draining (default: 1)",
+        help="sliding pool size: item namespaces ingested/enriched concurrently (default: 1)",
     )
+    ap.add_argument(
+        "--reset-namespace",
+        action="append",
+        default=[],
+        metavar="NS",
+        help="namespace to force-reset before ingesting (repeatable); nothing else is reset",
+    )
+    ap.add_argument(
+        "--reset-file",
+        default=None,
+        help="file with one namespace to reset per line (blank lines and # comments ignored)",
+    )
+    ap.add_argument("--reset-settle-timeout", type=float, default=1200.0,
+                    help="max seconds to wait for stale enrichment to settle before each reset")
+    ap.add_argument("--outage-timeout", type=float, default=300.0,
+                    help="stop with a non-zero exit after menhir/neo4j fail this many seconds")
     ap.add_argument(
         "--manifest-item-limit",
         type=_positive_int,
@@ -1102,7 +1447,7 @@ def _iter_item_turns(
             # two identical repeated turns distinct -- menhir's fallback key hashes the text
             # and would merge them onto one evidence node.
             turn_key = f"{namespace}|{session_id}|t{turn_index}"
-            for segmented_content in contents:
+            for segment_index, segmented_content in enumerate(contents):
                 yield IngestTurn(
                     role=role,
                     content=segmented_content,
@@ -1112,7 +1457,74 @@ def _iter_item_turns(
                     # Evidence is the whole turn, even when the episode is one segment of it.
                     evidence_text=content,
                     turn_key=turn_key,
+                    segment_index=segment_index,
                 )
+
+
+def _ingest_key(turn: IngestTurn) -> str:
+    """Idempotency key for one extractable segment: stable across attempts (P1), <= 256 chars."""
+    key = f"{turn.turn_key}#s{turn.segment_index}"
+    if len(key) > 256:
+        return "sha256:" + hashlib.sha256(key.encode("utf-8")).hexdigest()
+    return key
+
+
+def _turn_plan(
+    adapter: LongMemEvalMemoryAdapter,
+    item: dict,
+    namespace: str,
+    segmentation: str,
+) -> list[IngestTurn]:
+    plan = list(_iter_item_turns(adapter, item, namespace, segmentation))
+    # P1 needs one key per segment: a duplicate would replay one segment in place of another.
+    keys = Counter(_ingest_key(turn) for turn in plan if turn.extract)
+    duplicates = sorted(key for key, n in keys.items() if n > 1)
+    if duplicates:
+        raise RuntimeError(
+            f"turn plan for {namespace} repeats ingest keys (duplicate turns in the source?): "
+            + ", ".join(duplicates[:5])
+        )
+    return plan
+
+
+def _hold_run_lock(path: Path):
+    """Exclusive OS lock on *path* for this process's lifetime (released on exit or crash)."""
+    handle = open(path, "a+b")
+    try:
+        if os.name == "nt":
+            import msvcrt
+
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError as exc:
+        handle.close()
+        raise RuntimeError(
+            f"another ingest run holds {path}; refusing to run two clients on one manifest"
+        ) from exc
+    return handle
+
+
+def _turn_plan_digest(plan: list[IngestTurn], segmentation: str) -> str:
+    """Digest of everything that decides what gets submitted; a resume must match it (P5)."""
+    def _h(text: str) -> str:
+        return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+    payload = {
+        "v": 1,
+        "segmentation": segmentation,
+        "split_min_length": _SPLIT_MIN_LENGTH,
+        "turns": [
+            [t.turn_key, t.segment_index, t.extract, t.role, t.occurred_at, t.session_id,
+             _h(t.content), _h(t.evidence_text)]
+            for t in plan
+        ],
+    }
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return _h(canonical)
 
 
 def _write_manifest(path: Path, manifest: list[dict]) -> None:
@@ -1172,6 +1584,9 @@ def main(argv: list[str] | None = None) -> int:
 
     manifest_path = Path(args.manifest)
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    # Held for the whole run, before the manifest is read: two clients on one manifest would
+    # each spend the same retry budget and overwrite each other's rows.
+    run_lock = _hold_run_lock(IngestStateLog.path_for(manifest_path).with_suffix(".lock"))
     manifest: list[dict] = []
     done_ids: set[str] = set()
     if manifest_path.exists():
@@ -1212,161 +1627,128 @@ def main(argv: list[str] | None = None) -> int:
         )
     print(f"to ingest this run: {len(remaining)} items", flush=True)
 
-    completed_this_run = 0
-    for window_start in range(0, len(remaining), args.namespace_window):
-        raw_window = remaining[window_start:window_start + args.namespace_window]
-        window = [
-            WindowItem(
-                item=item,
-                question_id=str(item.get("question_id") or f"lme-{window_start + index}"),
-                namespace=_namespace(
-                    str(item.get("question_id") or f"lme-{window_start + index}"),
-                    args.namespace_prefix,
-                ),
+    runs = []
+    for index, item in enumerate(remaining):
+        question_id = str(item.get("question_id") or f"lme-{index}")
+        namespace = _namespace(question_id, args.namespace_prefix)
+        plan = _turn_plan(adapter, item, namespace, args.segmentation)
+        runs.append(NamespaceRun(
+            item=item,
+            question_id=question_id,
+            namespace=namespace,
+            plan=plan,
+            digest=_turn_plan_digest(plan, args.segmentation),
+            segmentation=args.segmentation,
+        ))
+    state = IngestStateLog(IngestStateLog.path_for(manifest_path))
+    _startup_checks(runs, state, args, admin)
+
+    completed_this_run: list[str] = []
+
+    def finalize(run: NamespaceRun, drained: dict[str, int]) -> None:
+        if consolidate_requested:
+            _require_no_failed_episodes({run.namespace: drained})
+        scalar_result: dict = {}
+        scalar_counts: dict[str, int] = {}
+        if consolidate_requested:
+            scalar_result = _consolidate_lanes(
+                admin,
+                args.menhir_url,
+                run.namespace,
+                k=args.consolidation_k,
+                call_budget=args.consolidation_call_budget,
+                scalar_state=args.consolidate_scalar,
+                counter_state=args.consolidate_counter,
+                event_history=args.consolidate_events,
             )
-            for index, item in enumerate(raw_window)
-        ]
-        window_started = time.time()
+        if args.consolidate_scalar:
+            scalar_counts = _scalar_counts(run.namespace)
+            if scalar_counts["turn_evidence"] <= 0:
+                raise RuntimeError(
+                    f"no TurnEvidence captured for scalar namespace {run.namespace}"
+                )
+        # Recorded for final acceptance, which refuses any violation or unreadable count.
+        integrity = _integrity_counts(run.namespace, _submitted_epoch_millis(run.item))
+        user_turns_submitted = _user_turns_submitted(run.plan)
+        progress = state.progress(run.namespace)
+        # Retries that happened (reset succeeded), not budget spent on a failed reset.
+        requeued = progress.requeued.get("episode", 0) + progress.requeued.get("projection", 0)
 
-        window_namespaces = [state.namespace for state in window]
-
-        # Menhir's stale-lease recovery may already be enriching a previous run's episodes into
-        # these namespaces. Wait for that to finish FIRST -- while the PENDING/ENRICHING rows
-        # that prove a worker is alive still exist. Resetting first would delete those rows and
-        # make settlement read zero against a worker that is still running, which is the race
-        # itself. This raises rather than proceeding if settlement cannot be confirmed.
-        _await_stale_episode_settlement(window_namespaces)
-
-        # Only now, with no writer left, reset. An interrupted window has no manifest rows, so
-        # every namespace is fully cleared before resubmitting -- including TurnEvidence, which
-        # is not group_id-keyed. One reset after confirmed settlement is enough; a second pass
-        # would only re-open the gap it is meant to close.
-        _reset_window_namespaces(admin, args.menhir_url, window_namespaces)
-
-        turn_iterators = [
-            _iter_item_turns(adapter, state.item, state.namespace, args.segmentation)
-            for state in window
-        ]
-        requeued_by_namespace = _ingest_window(
-            window,
-            turn_iterators,
-            client,
-            admin,
-            args.menhir_url,
-            timeout_s=args.drain_timeout,
+        manifest.append({
+            "question_id": run.question_id,
+            "namespace": run.namespace,
+            "fixture": str(Path(args.fixture).resolve()) if args.fixture else None,
+            "question": adapter.question(run.item),
+            "answer": str(run.item.get("answer", "")),
+            "question_type": run.item.get("question_type"),
+            "turns": len(run.plan),
+            "episodes": drained.get("total"),
+            "ready": drained.get("ready"),
+            "failed_remaining": drained.get("failed"),
+            "failed_requeued": requeued,
+            "provider_requeued": progress.requeued.get("provider", 0),
+            "enrichment_llm_tasks": drained.get("llm_tasks"),
+            "processing_attempts": drained.get("processing_attempts"),
+            "drain_timed_out": False,
+            "namespace_window": args.namespace_window,
+            "scalar_consolidated": bool(
+                args.consolidate_scalar
+                and int(scalar_result.get("scalar_namespaces_processed", 0)) == 1
+                and int(scalar_result.get("scalar_llm_calls", 0)) >= args.consolidation_k
+            ),
+            "consolidation_requested": requested_lanes,
+            "consolidation_k": args.consolidation_k,
+            "consolidation_result": scalar_result,
+            "consolidation_llm_calls": int(scalar_result.get("llm_calls", 0)),
+            "event_llm_calls": int(scalar_result.get("event_llm_calls", 0)),
+            "scalar_llm_calls": int(scalar_result.get("scalar_llm_calls", 0)),
+            "scalar_states_written": int(scalar_result.get("scalar_states_written", 0)),
+            **scalar_counts,
+            "user_turns_submitted": user_turns_submitted,
+            **integrity,
+        })
+        _write_manifest(manifest_path, manifest)
+        state.record_done(run.namespace, run.question_id)
+        completed_this_run.append(run.namespace)
+        elapsed = time.time() - t_all
+        rate = len(completed_this_run) / elapsed if elapsed else 0
+        eta = (len(remaining) - len(completed_this_run)) / rate if rate else 0
+        print(
+            f"[{len(done_ids)+len(completed_this_run)}/{len(items)}] {run.question_id} "
+            f"ns={run.namespace} turns={len(run.plan)} episodes={drained.get('total')} "
+            f"ready={drained.get('ready')} failed={drained.get('failed')} "
+            f"requeued={requeued} llm_tasks={drained.get('llm_tasks')} "
+            f"total={elapsed:.0f}s eta={eta/3600:.1f}h",
+            flush=True,
         )
 
-        drained_by_namespace = _drain_many(
-            window_namespaces,
-            admin,
-            args.menhir_url,
-            timeout_s=args.drain_timeout,
+    _ingest_pool(
+        runs,
+        client,
+        admin,
+        args.menhir_url,
+        state,
+        pool_size=args.namespace_window,
+        drain_timeout=args.drain_timeout,
+        outage_timeout=args.outage_timeout,
+        finalize=finalize,
+    )
+
+    # Final global drain over EVERY manifested namespace, not just this run's: a drain that timed
+    # out in an earlier run must be re-checked by a plain re-run, never skipped (per-namespace
+    # settling already gated each row; this confirms the global queue is empty too).
+    manifested = [str(row["namespace"]) for row in manifest]
+    if manifested:
+        final = _drain_many(
+            manifested, admin, args.menhir_url, timeout_s=args.drain_timeout
         )
-        timed_out = [
-            namespace
-            for namespace, drained in drained_by_namespace.items()
-            if drained.get("timed_out")
-        ]
+        timed_out = [ns for ns, drained in final.items() if drained.get("timed_out")]
         if timed_out:
             raise RuntimeError(
-                "namespace-window drain timed out; refusing to manifest incomplete namespaces: "
-                + ", ".join(timed_out)
+                "final drain timed out after the namespace pool finished: " + ", ".join(timed_out)
             )
 
-        # Menhir creates evidence-projection episodes asynchronously. Their UUIDs never pass
-        # through _ingest_window's submitted-episode scheduler, so enumerate and retry only
-        # those generated children here. Submitted parent episodes keep their existing one-retry
-        # limit and cannot accidentally receive a second attempt from this sweep.
-        drained_by_namespace = _retry_failed_evidence_projections_after_drain(
-            window_namespaces,
-            admin,
-            args.menhir_url,
-            drained_by_namespace,
-            requeued_by_namespace,
-            timeout_s=args.drain_timeout,
-        )
-        if consolidate_requested:
-            _require_no_failed_episodes(drained_by_namespace)
-
-        # Scalar consolidation remains sequential: it is a small fraction of build time and
-        # parallel calls would add provider-rate and graph-write risk without material speedup.
-        for state in window:
-            drained = drained_by_namespace[state.namespace]
-            requeued = requeued_by_namespace[state.namespace]
-            scalar_result: dict = {}
-            scalar_counts: dict[str, int] = {}
-            if consolidate_requested:
-                scalar_result = _consolidate_lanes(
-                    admin,
-                    args.menhir_url,
-                    state.namespace,
-                    k=args.consolidation_k,
-                    call_budget=args.consolidation_call_budget,
-                    scalar_state=args.consolidate_scalar,
-                    counter_state=args.consolidate_counter,
-                    event_history=args.consolidate_events,
-                )
-            if args.consolidate_scalar:
-                scalar_counts = _scalar_counts(state.namespace)
-                if scalar_counts["turn_evidence"] <= 0:
-                    raise RuntimeError(
-                        f"no TurnEvidence captured for scalar namespace {state.namespace}"
-                    )
-            # Recorded for final acceptance, which refuses any violation or unreadable count.
-            integrity = _integrity_counts(
-                state.namespace, _submitted_epoch_millis(state.item)
-            )
-            user_turns_submitted = _user_turns_submitted(
-                _iter_item_turns(adapter, state.item, state.namespace, args.segmentation)
-            )
-
-            manifest.append({
-                "question_id": state.question_id,
-                "namespace": state.namespace,
-                "fixture": str(Path(args.fixture).resolve()) if args.fixture else None,
-                "question": adapter.question(state.item),
-                "answer": str(state.item.get("answer", "")),
-                "question_type": state.item.get("question_type"),
-                "turns": state.turns,
-                "episodes": drained.get("total"),
-                "ready": drained.get("ready"),
-                "failed_remaining": drained.get("failed"),
-                "failed_requeued": requeued,
-                "enrichment_llm_tasks": drained.get("llm_tasks"),
-                "processing_attempts": drained.get("processing_attempts"),
-                "drain_timed_out": drained.get("timed_out", False),
-                "namespace_window": args.namespace_window,
-                "scalar_consolidated": bool(
-                    args.consolidate_scalar
-                    and int(scalar_result.get("scalar_namespaces_processed", 0)) == 1
-                    and int(scalar_result.get("scalar_llm_calls", 0)) >= args.consolidation_k
-                ),
-                "consolidation_requested": requested_lanes,
-                "consolidation_k": args.consolidation_k,
-                "consolidation_result": scalar_result,
-                "consolidation_llm_calls": int(scalar_result.get("llm_calls", 0)),
-                "event_llm_calls": int(scalar_result.get("event_llm_calls", 0)),
-                "scalar_llm_calls": int(scalar_result.get("scalar_llm_calls", 0)),
-                "scalar_states_written": int(scalar_result.get("scalar_states_written", 0)),
-                **scalar_counts,
-                "user_turns_submitted": user_turns_submitted,
-                **integrity,
-            })
-            _write_manifest(manifest_path, manifest)
-            completed_this_run += 1
-            elapsed = time.time() - t_all
-            rate = completed_this_run / elapsed if elapsed else 0
-            eta = (len(remaining) - completed_this_run) / rate if rate else 0
-            print(
-                f"[{len(done_ids)+completed_this_run}/{len(items)}] {state.question_id} "
-                f"ns={state.namespace} turns={state.turns} episodes={drained.get('total')} "
-                f"ready={drained.get('ready')} failed={drained.get('failed')} "
-                f"requeued={requeued} llm_tasks={drained.get('llm_tasks')} "
-                f"window={time.time()-window_started:.0f}s "
-                f"total={elapsed:.0f}s eta={eta/3600:.1f}h",
-                flush=True,
-            )
-
+    run_lock.close()
     outcome = "CHECKPOINT" if len(target_items) < len(items) else "DONE"
     print(
         f"\n{outcome}: manifest has {len(manifest)}/{len(items)} items -> {args.manifest}",

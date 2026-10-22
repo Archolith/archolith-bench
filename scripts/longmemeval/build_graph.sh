@@ -33,6 +33,7 @@ done
 case "${LME_INGEST_CONCURRENCY}" in
   ''|*[!0-9]*|0) die "LME_INGEST_CONCURRENCY must be a positive integer" ;;
 esac
+case "${LME_RESUME}" in 0|1) ;; *) die "LME_RESUME must be 0 or 1" ;; esac
 LME_INGEST_STOP_AFTER_ITEMS="${LME_INGEST_STOP_AFTER_ITEMS:-0}"
 case "${LME_INGEST_STOP_AFTER_ITEMS}" in
   *[!0-9]*) die "LME_INGEST_STOP_AFTER_ITEMS must be a non-negative integer" ;;
@@ -86,7 +87,26 @@ docker volume inspect "${LME_NEO4J_VOL}" >/dev/null 2>&1 && VOLUME_PRE_EXISTED="
 
 CONTAINER_PRE_EXISTED="false"
 lme_container_exists "${LME_NEO4J_NAME}" && CONTAINER_PRE_EXISTED="true"
-if [ "${LME_REQUIRE_FRESH}" = "1" ]; then
+if [ "${LME_RESUME}" = "1" ]; then
+  # Resume reuses the graph an earlier attempt built; it must be the same one.
+  RESUME_PROVENANCE="${LME_RESULTS_DIR}/graph-provenance-${LME_NEO4J_NAME}.json"
+  [ -f "${RESUME_PROVENANCE}" ] || die "resume refused: provenance file not found: ${RESUME_PROVENANCE}"
+  [ "${CONTAINER_PRE_EXISTED}" = "true" ] || die "resume refused: container does not exist: ${LME_NEO4J_NAME}"
+  [ "${VOLUME_PRE_EXISTED}" = "true" ] || die "resume refused: volume does not exist: ${LME_NEO4J_VOL}"
+  [ -d "$(dirname "${LME_MANIFEST_PATH}")" ] ||
+    die "resume refused: manifest directory not found: $(dirname "${LME_MANIFEST_PATH}")"
+  RESUME_IDENTITY="$("${BENCH_PY}" -I - "${RESUME_PROVENANCE}" <<'PY'
+import json, sys
+identity = json.load(open(sys.argv[1], encoding="utf-8")).get("identity") or {}
+print(identity.get("container", ""), identity.get("volume", ""))
+PY
+  )" || die "resume refused: cannot read identity from ${RESUME_PROVENANCE}"
+  read -r RESUME_ID_CONTAINER RESUME_ID_VOLUME <<< "${RESUME_IDENTITY}"
+  [ "${RESUME_ID_CONTAINER:-}" = "${LME_NEO4J_NAME}" ] ||
+    die "resume refused: provenance container '${RESUME_ID_CONTAINER:-}' != ${LME_NEO4J_NAME}"
+  [ "${RESUME_ID_VOLUME:-}" = "${LME_NEO4J_VOL}" ] ||
+    die "resume refused: provenance volume '${RESUME_ID_VOLUME:-}' != ${LME_NEO4J_VOL}"
+elif [ "${LME_REQUIRE_FRESH}" = "1" ]; then
   [ "${VOLUME_PRE_EXISTED}" = "false" ] || die "fresh build refused: volume already exists: ${LME_NEO4J_VOL}"
   [ "${CONTAINER_PRE_EXISTED}" = "false" ] || die "fresh build refused: container already exists: ${LME_NEO4J_NAME}"
   [ ! -e "${LME_MANIFEST_PATH}" ] || die "fresh build refused: manifest already exists: ${LME_MANIFEST_PATH}"
@@ -140,6 +160,7 @@ cat > "${GRAPH_ATTEMPT_RECORD}" <<EOF
   "volume_pre_existed": ${VOLUME_PRE_EXISTED},
   "graph_fresh": ${GRAPH_FRESH},
   "require_fresh": ${LME_REQUIRE_FRESH},
+  "resumed": ${LME_RESUME},
   "dataset": "${LME_DATASET}",
   "variant": "${LONGMEMEVAL_VARIANT}",
   "fixture_sha256": "${LME_FIXTURE_SHA256:-}",
@@ -234,6 +255,7 @@ fi
   --setting "graph_fresh=${GRAPH_FRESH}" \
   --setting "volume_pre_existed=${VOLUME_PRE_EXISTED}" \
   --setting "require_fresh=${LME_REQUIRE_FRESH}" \
+  --setting "resumed=${LME_RESUME}" \
   --setting "segmentation=${LME_SEGMENTATION}" \
   --setting "strict_failure_policy=zero-failed-episodes-per-namespace" \
   --setting "ingest_target_items=${INGEST_TARGET}" \
@@ -352,6 +374,7 @@ export MENHIR_BENCH_ACTIVE_RUN_ID="$(basename "$LME_RESULTS_DIR")"
 export OTEL_SDK_DISABLED=true LANGFUSE_TRACING_ENABLED=false LANGFUSE_PUBLIC_KEY="" LANGFUSE_SECRET_KEY="" LANGFUSE_HOST=""
 export MENHIR_OPERATOR_KEY="" MENHIR_AGENT_KEY="" MENHIR_READONLY_KEY="" MENHIR_API_KEY=""
 export NEO4J_URI="bolt://localhost:${LME_BOLT}" NEO4J_USER="neo4j" NEO4J_PASSWORD="${LME_NEO4J_PW}" NEO4J_DATABASE="neo4j"
+export LME_NEO4J_HTTP_URL="http://localhost:${LME_HTTP}"
 case "${LME_EXTRACT_PROVIDER}" in
   openai)
     export GRAPHITI_LLM_PROVIDER="openai" MEMORY_GRAPHITI_PROVIDER="openai"
@@ -374,10 +397,15 @@ esac
 export GRAPHITI_EMBED_PROVIDER="openai" MEMORY_GRAPHITI_EMBED_PROVIDER="openai"
 export OPENAI_API_KEY="${OPENAI_KEY}" OPENAI_CHAT_MODEL="${LME_EXTRACT_MODEL}" OPENAI_EMBED_MODEL="${LME_EMBED_MODEL}"
 
+# A Menhir already on the port (e.g. a killed attempt's serve that survived) would answer the
+# health check while ours fails to bind, and ingest would drive the old writer.
+curl -sf "${MENHIR_URL}/api/health" >/dev/null 2>&1 &&
+  die "something already serves ${MENHIR_URL}; stop it before building (an earlier attempt's menhir?)"
 log "starting ingest menhir on ${MENHIR_URL}..."
 ( cd "${MENHIR_FRONTIER}" && "${MENHIR_FRONTIER_BIN}" serve --port "${MENHIR_PORT}" ) & MENHIR_PID=$!
 for _ in $(seq 1 90); do curl -sf "${MENHIR_URL}/api/health" >/dev/null 2>&1 && break; sleep 2; done
 curl -sf "${MENHIR_URL}/api/health" >/dev/null 2>&1 || die "menhir not healthy"
+kill -0 "${MENHIR_PID}" 2>/dev/null || die "our menhir exited, yet ${MENHIR_URL} answers; refusing"
 log "menhir healthy. ingesting ${LIMIT} items..."
 
 INGEST_ARGS=(
@@ -389,6 +417,9 @@ INGEST_ARGS=(
 )
 if [ -n "${LME_FIXTURE_PATH:-}" ]; then
   INGEST_ARGS+=(--fixture "${LME_FIXTURE_PATH}")
+fi
+if [ -n "${LME_RESET_FILE:-}" ]; then
+  INGEST_ARGS+=(--reset-file "${LME_RESET_FILE}")
 fi
 if [ "${LME_INGEST_STOP_AFTER_ITEMS}" -gt 0 ]; then
   INGEST_ARGS+=(--manifest-item-limit "${LME_INGEST_STOP_AFTER_ITEMS}")
