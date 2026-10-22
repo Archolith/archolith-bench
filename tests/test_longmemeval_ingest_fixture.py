@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import sys
+import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -465,16 +466,12 @@ def test_reset_namespace_force_deletes_graph_and_purges_turn_evidence(
 def test_ingest_window_refills_only_after_that_namespace_is_terminal(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    window = [
-        ingest.WindowItem(item={}, question_id="a", namespace="ns-a"),
-        ingest.WindowItem(item={}, question_id="b", namespace="ns-b"),
-    ]
-    turns = [
-        iter([
+    runs = [
+        _pool_run("a", [
             ingest.IngestTurn("user", "a1", None, "ns-a-s0"),
             ingest.IngestTurn("user", "a2", None, "ns-a-s0"),
         ]),
-        iter([
+        _pool_run("b", [
             ingest.IngestTurn("user", "b1", None, "ns-b-s0"),
             ingest.IngestTurn("user", "b2", None, "ns-b-s0"),
         ]),
@@ -497,26 +494,46 @@ def test_ingest_window_refills_only_after_that_namespace_is_terminal(
     monkeypatch.setattr(ingest, "_ingest_turn", fake_ingest_turn)
     monkeypatch.setattr(ingest, "_episode_processing", fake_processing)
 
-    requeued = ingest._ingest_window(
-        window,
-        turns,
-        object(),
-        object(),
-        "http://menhir",
-        timeout_s=1,
-        poll_s=0,
-    )
+    state, finalized = _drive_pool(monkeypatch, runs, object(), pool_size=2)
 
     # b2 may refill while a1 is still pending, but a2 cannot be submitted until a1 is READY.
     assert submitted == ["a1", "b1", "b2", "a2"]
-    assert requeued == {"ns-a": 0, "ns-b": 0}
+    assert state.progress("ns-a").retried_episodes == set()
+    assert state.progress("ns-b").retried_episodes == set()
+    assert sorted(finalized) == ["ns-a", "ns-b"]
+
+
+def test_ingest_pool_slot_refills_from_the_queue_when_a_namespace_finishes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runs = [
+        _pool_run(name, [ingest.IngestTurn("user", f"{name}1", None, f"ns-{name}-s0")])
+        for name in ("a", "b", "c")
+    ]
+    submitted: list[str] = []
+
+    def fake_ingest_turn(client, namespace, role, content, **kwargs):
+        submitted.append(content)
+        return f"episode-{content}"
+
+    monkeypatch.setattr(ingest, "_ingest_turn", fake_ingest_turn)
+    monkeypatch.setattr(
+        ingest, "_episode_processing", lambda admin, url, uuid: {"processing_state": "READY"}
+    )
+
+    state, finalized = _drive_pool(monkeypatch, runs, object(), pool_size=2)
+
+    assert submitted == ["a1", "b1", "c1"]
+    assert sorted(finalized) == ["ns-a", "ns-b", "ns-c"]
+    # Plans are recorded once each, before the first submit of that namespace.
+    assert state.progress("ns-c").plan_digest == "digest-c"
+    assert state.progress("ns-c").segments == 1
 
 
 def test_ingest_window_retries_failure_before_advancing_namespace(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    window = [ingest.WindowItem(item={}, question_id="a", namespace="ns-a")]
-    turns = [iter([
+    runs = [_pool_run("a", [
         ingest.IngestTurn("user", "a1", None, "ns-a-s0"),
         ingest.IngestTurn("user", "a2", None, "ns-a-s0"),
     ])]
@@ -534,7 +551,12 @@ def test_ingest_window_retries_failure_before_advancing_namespace(
     def fake_processing(admin, url, episode_uuid):
         return {"processing_state": next(lifecycle[episode_uuid])}
 
+    state = ingest.IngestStateLog(Path(tempfile.mkdtemp()) / "state.jsonl")
+
     def fake_backend(admin, url, operation, body):
+        if operation == "force_reset_failed_episode":
+            # The retry budget is spent durably BEFORE the reset.
+            assert state.progress("ns-a").retried_episodes == {"episode-1"}
         operations.append(operation)
         return True
 
@@ -542,19 +564,44 @@ def test_ingest_window_retries_failure_before_advancing_namespace(
     monkeypatch.setattr(ingest, "_episode_processing", fake_processing)
     monkeypatch.setattr(ingest, "_backend", fake_backend)
 
-    requeued = ingest._ingest_window(
-        window,
-        turns,
-        object(),
-        object(),
-        "http://menhir",
-        timeout_s=1,
-        poll_s=0,
-    )
+    _drive_pool(monkeypatch, runs, object(), state=state)
 
     assert submitted == ["a1", "a2"]
     assert operations == ["force_reset_failed_episode", "enqueue_pending_episode"]
-    assert requeued == {"ns-a": 1}
+    assert state.progress("ns-a").retried_episodes == {"episode-1"}
+
+
+def test_ingest_pool_never_retries_a_recorded_episode_again(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runs = [_pool_run("a", [
+        ingest.IngestTurn("user", "a1", None, "ns-a-s0"),
+        ingest.IngestTurn("user", "a2", None, "ns-a-s0"),
+    ])]
+    state = ingest.IngestStateLog(Path(tempfile.mkdtemp()) / "state.jsonl")
+    state.record_plan("ns-a", "digest-a", 2)
+    state.record_retry("ns-a", "episode-1", "episode")
+    submitted: list[str] = []
+    lifecycle = {"episode-1": iter(["FAILED"]), "episode-2": iter(["READY"])}
+
+    def fake_ingest_turn(client, namespace, role, content, **kwargs):
+        submitted.append(content)
+        return f"episode-{len(submitted)}"
+
+    monkeypatch.setattr(ingest, "_ingest_turn", fake_ingest_turn)
+    monkeypatch.setattr(
+        ingest, "_episode_processing",
+        lambda admin, url, uuid: {"processing_state": next(lifecycle[uuid])},
+    )
+    monkeypatch.setattr(
+        ingest, "_backend",
+        lambda *args: pytest.fail("a recorded episode must not be reset again"),
+    )
+
+    _drive_pool(monkeypatch, runs, object(), state=state)
+
+    # Terminal FAILED: the namespace moves on to the next segment.
+    assert submitted == ["a1", "a2"]
 
 
 def test_retry_failed_evidence_projections_enumerates_generated_children(
@@ -565,8 +612,10 @@ def test_retry_failed_evidence_projections_enumerates_generated_children(
 
     def fake_cypher(query: str):
         queries.append(query)
+        if "count(e)" in query:
+            return [["2"]] if "namespace:'ns-a'" in query else [["0"]]
         if "namespace:'ns-a'" in query:
-            return [["projection-a"], ["projection-b"]]
+            return [["projection-a", "false"], ["projection-b", "false"]]
         return []
 
     def fake_backend(admin, url, operation, body):
@@ -598,8 +647,8 @@ def test_retry_failed_evidence_projection_fails_closed_when_enqueue_rejected(
 ) -> None:
     monkeypatch.setattr(
         ingest,
-        "_failed_evidence_projection_uuids",
-        lambda namespace: ["projection-a"],
+        "_failed_evidence_projections",
+        lambda namespace: [("projection-a", False)],
     )
     responses = iter([True, False])
     monkeypatch.setattr(
@@ -616,44 +665,132 @@ def test_retry_failed_evidence_projection_fails_closed_when_enqueue_rejected(
         )
 
 
-def test_failed_evidence_projection_retry_redrains_and_updates_manifest_count(
+def test_failed_evidence_projection_retry_records_before_reset_and_skips_recorded(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    initial = {
-        "ns-a": {"failed": 1, "timed_out": False},
-        "ns-b": {"failed": 0, "timed_out": False},
-    }
-    settled = {
-        "ns-a": {"failed": 0, "timed_out": False},
-        "ns-b": {"failed": 0, "timed_out": False},
-    }
-    requeued = {"ns-a": 0, "ns-b": 0}
-    drain_calls: list[list[str]] = []
-
+    """Per-namespace sweep: a recorded projection is never retried again; others are recorded
+    BEFORE their reset (this replaces the old post-drain re-drain test; the pool re-settles)."""
+    operations: list[tuple] = []
     monkeypatch.setattr(
-        ingest,
-        "_retry_failed_evidence_projections",
-        lambda namespaces, admin, url: {"ns-a": 1, "ns-b": 0},
+        ingest, "_failed_evidence_projections",
+        lambda namespace: [("projection-a", False), ("projection-b", False)],
     )
 
-    def fake_drain(namespaces, admin, url, **kwargs):
-        drain_calls.append(namespaces)
-        return settled
+    def fake_backend(admin, url, operation, body):
+        operations.append((operation, body["episode_uuid"]))
+        return True
 
-    monkeypatch.setattr(ingest, "_drain_many", fake_drain)
+    monkeypatch.setattr(ingest, "_backend", fake_backend)
 
-    result = ingest._retry_failed_evidence_projections_after_drain(
-        ["ns-a", "ns-b"],
+    requeued = ingest._retry_failed_evidence_projections(
+        ["ns-a"],
         object(),
         "http://menhir",
-        initial,
-        requeued,
-        timeout_s=60.0,
+        skip={"projection-a"},
+        on_retry=lambda namespace, uuid: operations.append(("retry", uuid)),
     )
 
-    assert result is settled
-    assert requeued == {"ns-a": 1, "ns-b": 0}
-    assert drain_calls == [["ns-a", "ns-b"]]
+    assert requeued == {"ns-a": 1}
+    assert operations == [
+        ("retry", "projection-b"),
+        ("force_reset_failed_episode", "projection-b"),
+        ("enqueue_pending_episode", "projection-b"),
+    ]
+
+
+def test_ingest_key_is_stable_per_segment_and_bounded() -> None:
+    first = ingest.IngestTurn("user", "x", None, "s", turn_key="ns|s|t0", segment_index=0)
+    second = ingest.IngestTurn("user", "x", None, "s", turn_key="ns|s|t0", segment_index=1)
+    long_turn = ingest.IngestTurn("user", "x", None, "s", turn_key="k" * 300, segment_index=2)
+
+    assert ingest._ingest_key(first) == "ns|s|t0#s0"
+    assert ingest._ingest_key(second) == "ns|s|t0#s1"
+    hashed = ingest._ingest_key(long_turn)
+    assert hashed.startswith("sha256:") and len(hashed) <= 256
+    assert hashed == ingest._ingest_key(long_turn)
+
+
+def test_turn_plan_digest_changes_with_plan_content() -> None:
+    base = [ingest.IngestTurn("user", "hello", None, "s", turn_key="k", evidence_text="hello")]
+    edited = [ingest.IngestTurn("user", "hullo", None, "s", turn_key="k", evidence_text="hello")]
+
+    assert ingest._turn_plan_digest(base, "none") == ingest._turn_plan_digest(list(base), "none")
+    assert ingest._turn_plan_digest(base, "none") != ingest._turn_plan_digest(edited, "none")
+    assert ingest._turn_plan_digest(base, "none") != ingest._turn_plan_digest(base, "sentence")
+
+
+def test_ingest_turn_409_raises_conflict_without_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sleeps: list[float] = []
+    monkeypatch.setattr(ingest.time, "sleep", lambda seconds: sleeps.append(seconds))
+    request = ingest.httpx.Request("POST", "http://menhir/api/memory")
+    calls: list[int] = []
+
+    class ConflictClient:
+        def ingest(self, namespace, role, content, **kwargs):
+            calls.append(1)
+            raise ingest.httpx.HTTPStatusError(
+                "conflict", request=request, response=ingest.httpx.Response(409, request=request)
+            )
+
+    with pytest.raises(ingest.IdempotencyConflictError, match="ns-a.*k#s0"):
+        ingest._ingest_turn(ConflictClient(), "ns-a", "assistant", "hi", ingest_key="k#s0")
+
+    assert calls == [1] and sleeps == []
+
+
+def _startup_args(**overrides):
+    values = dict(
+        reset_namespace=[], reset_file=None, reset_settle_timeout=5.0,
+        menhir_url="http://menhir",
+    )
+    values.update(overrides)
+    return SimpleNamespace(**values)
+
+
+def test_startup_checks_refuse_unsafe_resumes_and_reset_only_listed(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    runs = [_pool_run("a", []), _pool_run("b", [])]
+    state = ingest.IngestStateLog(tmp_path / "state.jsonl")
+    events: list[str] = []
+    totals = {"ns-a": 0, "ns-b": 0}
+    monkeypatch.setattr(
+        ingest, "_ns_state_counts_many",
+        lambda namespaces: {ns: {"total": totals[ns]} for ns in namespaces},
+    )
+    monkeypatch.setattr(
+        ingest, "_await_stale_episode_settlement",
+        lambda namespaces, **kwargs: events.append(f"settle:{namespaces[0]}"),
+    )
+    monkeypatch.setattr(
+        ingest, "_reset_namespace", lambda admin, url, ns: events.append(f"reset:{ns}")
+    )
+
+    # Listed but not among the remaining namespaces.
+    with pytest.raises(RuntimeError, match="ns-zzz"):
+        ingest._startup_checks(runs, state, _startup_args(reset_namespace=["ns-zzz"]), object())
+    # Unrecorded namespace that already holds data.
+    totals["ns-b"] = 3
+    with pytest.raises(RuntimeError, match="no recorded plan.*ns-b"):
+        ingest._startup_checks(runs, state, _startup_args(), object())
+    # Unreadable count fails closed.
+    totals["ns-b"] = -1
+    with pytest.raises(RuntimeError, match="could not read.*ns-b"):
+        ingest._startup_checks(runs, state, _startup_args(), object())
+    # Recorded digest differs from the computed one.
+    totals["ns-b"] = 0
+    state.record_plan("ns-a", "stale-digest", 4)
+    with pytest.raises(RuntimeError, match="turn plan changed.*ns-a"):
+        ingest._startup_checks(runs, state, _startup_args(), object())
+    assert events == []
+
+    # Listing it resets that namespace only: settle first, then reset, then the log forgets it.
+    ingest._startup_checks(runs, state, _startup_args(reset_namespace=["ns-a"]), object())
+    assert events == ["settle:ns-a", "reset:ns-a"]
+    assert state.progress("ns-a").plan_digest is None
 
 
 def test_manifest_checkpoint_is_atomic(tmp_path: Path) -> None:
@@ -864,16 +1001,44 @@ class _RecordingClient:
         return {"episode_id": f"episode-{len(self.episodes)}"}
 
 
-def _run_window(client, turns: list) -> None:
-    ingest._ingest_window(
-        [ingest.WindowItem(item={}, question_id="a", namespace="ns-a")],
-        [iter(turns)],
+def _pool_run(qid: str, plan: list) -> "ingest.NamespaceRun":
+    return ingest.NamespaceRun(
+        item={}, question_id=qid, namespace=f"ns-{qid}", plan=list(plan), digest=f"digest-{qid}"
+    )
+
+
+def _drive_pool(monkeypatch, runs: list, client, *, pool_size: int | None = None, state=None):
+    """Run the pool scheduler to completion with settling stubbed to 'nothing in flight'."""
+    monkeypatch.setattr(
+        ingest, "_ns_state_counts_many",
+        lambda namespaces: {
+            ns: {"pending": 0, "ready": 1, "enriching": 0, "failed": 0, "llm_tasks": 0,
+                 "processing_attempts": 0, "total": 1}
+            for ns in namespaces
+        },
+    )
+    monkeypatch.setattr(
+        ingest, "_retry_failed_evidence_projections",
+        lambda namespaces, admin, url, **kwargs: {ns: 0 for ns in namespaces},
+    )
+    state = state or ingest.IngestStateLog(Path(tempfile.mkdtemp()) / "state.jsonl")
+    finalized: list[str] = []
+    ingest._ingest_pool(
+        runs,
         client,
         object(),
         "http://menhir",
-        timeout_s=1,
+        state,
+        pool_size=pool_size or len(runs),
+        drain_timeout=60,
+        finalize=lambda run, counts: finalized.append(run.namespace),
         poll_s=0,
     )
+    return state, finalized
+
+
+def _run_window(monkeypatch, client, turns: list) -> None:
+    _drive_pool(monkeypatch, [_pool_run("a", turns)], client)
 
 
 def test_repeated_identical_turns_stay_distinct_evidence(
@@ -894,7 +1059,7 @@ def test_repeated_identical_turns_stay_distinct_evidence(
     turns = list(ingest._iter_item_turns(_FakeSessionAdapter(), item, "ns-a", "none"))
 
     assert turns[0].turn_key != turns[1].turn_key
-    _run_window(client, turns)
+    _run_window(monkeypatch, client, turns)
 
     assert len(client.evidence) == 2
     assert len({record["turn_id"] for record in client.evidence}) == 2
@@ -917,7 +1082,7 @@ def test_one_evidence_record_per_source_turn_across_segments(
 
     assert len(turns) > 1, "this turn must actually split for the test to mean anything"
     assert len({turn.turn_key for turn in turns}) == 1
-    _run_window(client, turns)
+    _run_window(monkeypatch, client, turns)
 
     # One evidence node, holding the user's ACTUAL words -- not a fragment.
     assert len(client.evidence) == 1
@@ -937,7 +1102,7 @@ def test_context_only_turn_is_one_evidence_and_no_episode(
     item = {"sessions": [[{"role": "assistant", "content": "That's a great question!"}]]}
     turns = list(ingest._iter_item_turns(_FakeSessionAdapter(), item, "ns-a", "adaptive"))
 
-    _run_window(client, turns)
+    _run_window(monkeypatch, client, turns)
 
     assert len(client.evidence) == 1
     assert client.evidence[0]["declarant"] == "assistant"
@@ -967,8 +1132,7 @@ def test_window_scheduler_does_not_wait_on_evidence_only_turns(
 
     If it did, the scheduler would poll forever for a lifecycle row that does not exist.
     """
-    window = [ingest.WindowItem(item={}, question_id="a", namespace="ns-a")]
-    turns = [iter([
+    runs = [_pool_run("a", [
         ingest.IngestTurn("user", "a1", None, "ns-a-s0", extract=False),
         ingest.IngestTurn("assistant", "a2", None, "ns-a-s0", extract=False),
         ingest.IngestTurn("user", "a3", None, "ns-a-s0", extract=True),
@@ -985,14 +1149,12 @@ def test_window_scheduler_does_not_wait_on_evidence_only_turns(
         ingest, "_episode_processing", lambda admin, url, uuid: {"processing_state": "READY"}
     )
 
-    requeued = ingest._ingest_window(
-        window, turns, object(), object(), "http://menhir", timeout_s=1, poll_s=0
-    )
+    state, _ = _drive_pool(monkeypatch, runs, object())
 
     assert submitted == [("a1", False), ("a2", False), ("a3", True)]
-    assert requeued == {"ns-a": 0}
-    # Every source turn is counted, extracted or not.
-    assert window[0].turns == 3
+    assert state.progress("ns-a").retried_episodes == set()
+    # Every source turn was walked, extracted or not.
+    assert runs[0].cursor == 3
 
 
 # ---------------------------------------------------------------------------
@@ -1041,7 +1203,7 @@ def test_settlement_fails_closed_when_state_is_unreadable(
         ingest._await_stale_episode_settlement(["ns-a"], poll_s=0, timeout_s=0)
 
 
-def test_main_submits_a_namespace_window_round_robin_and_manifests_after_drain(
+def test_main_submits_through_a_namespace_pool_without_reset_and_manifests_after_settling(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1138,6 +1300,26 @@ def test_main_submits_a_namespace_window_round_robin_and_manifests_after_drain(
         ingest, "_integrity_counts",
         lambda namespace, submitted: {"cross_namespace_links": 0, "user_turns_admitted": 9},
     )
+    monkeypatch.setattr(ingest, "_check_menhir_health", lambda admin, url: True)
+    monkeypatch.setattr(
+        ingest, "_retry_failed_evidence_projections",
+        lambda namespaces, admin, url, **kwargs: {ns: 0 for ns in namespaces},
+    )
+    count_calls: list[list[str]] = []
+
+    def fake_counts_many(namespaces):
+        count_calls.append(list(namespaces))
+        # The first read is the startup unknown-data check: nothing in the graph yet.
+        total = 0 if len(count_calls) == 1 else 2
+        return {
+            namespace: {
+                "pending": 0, "ready": 2, "enriching": 0, "failed": 0,
+                "llm_tasks": 10, "processing_attempts": 2, "total": total,
+            }
+            for namespace in namespaces
+        }
+
+    monkeypatch.setattr(ingest, "_ns_state_counts_many", fake_counts_many)
 
     manifest_path = tmp_path / "manifest.json"
     result = ingest.main(
@@ -1156,11 +1338,8 @@ def test_main_submits_a_namespace_window_round_robin_and_manifests_after_drain(
     )
 
     assert result == 0
-    assert reset == ["lme-a", "lme-b"]
-    # Settlement is confirmed BEFORE the reset. Resetting first would delete the
-    # PENDING/ENRICHING rows that prove a stale worker is alive, so the wait would read zero
-    # against a worker still writing into the namespace.
-    assert ordering == ["settle:lme-a,lme-b", "reset:lme-a", "reset:lme-b"]
+    # Nothing was listed for reset, so nothing is reset or waited on (resume without reset).
+    assert reset == [] and ordering == []
     assert submitted == [
         ("lme-a", "a1"),
         ("lme-b", "b1"),
@@ -1168,14 +1347,20 @@ def test_main_submits_a_namespace_window_round_robin_and_manifests_after_drain(
         ("lme-b", "b2"),
         ("lme-a", "a3"),
     ]
-    assert drain_calls == [["lme-a", "lme-b"]]
+    # The final global drain runs once over what finished this run (completion order).
+    assert len(drain_calls) == 1 and sorted(drain_calls[0]) == ["lme-a", "lme-b"]
     manifest = ingest.json.loads(manifest_path.read_text(encoding="utf-8"))
-    assert [row["question_id"] for row in manifest] == ["a", "b"]
+    assert sorted(row["question_id"] for row in manifest) == ["a", "b"]
     assert all(row["namespace_window"] == 2 for row in manifest)
     assert all(row["enrichment_llm_tasks"] == 10 for row in manifest)
+    assert all(row["drain_timed_out"] is False for row in manifest)
+    assert {row["question_id"]: row["turns"] for row in manifest} == {"a": 3, "b": 2}
     # Graph integrity counts ride along for final acceptance, next to the bench's own expectation.
-    assert [row["user_turns_submitted"] for row in manifest] == [2, 1]
+    assert {row["question_id"]: row["user_turns_submitted"] for row in manifest} == {"a": 2, "b": 1}
     assert all(row["cross_namespace_links"] == 0 for row in manifest)
+    state_log = ingest.IngestStateLog(ingest.IngestStateLog.path_for(manifest_path))
+    assert state_log.progress("lme-a").done and state_log.progress("lme-b").done
+    assert state_log.progress("lme-a").segments == 3
 
 
 def test_suburbs_fixture_contract_preserves_failure_shape() -> None:

@@ -109,6 +109,7 @@ def test_clean_health_lets_the_drain_settle(monkeypatch: pytest.MonkeyPatch) -> 
 
 def test_quota_exhausted_stops_the_window_before_retrying_or_submitting(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     submitted: list[str] = []
 
@@ -122,22 +123,22 @@ def test_quota_exhausted_stops_the_window_before_retrying_or_submitting(
         "_episode_processing",
         lambda admin, url, episode_uuid: pytest.fail("episode polled after the provider stop"),
     )
-    window = [ingest.WindowItem(item={}, question_id="q1", namespace="ns-a")]
-    turns = iter(
-        [
-            SimpleNamespace(
-                role="user", content=text, occurred_at=None, session_id="s0",
-                extract=True, evidence_text="", turn_key="",
-            )
-            for text in ("first", "second")
-        ]
+    plan = [
+        ingest.IngestTurn("user", text, None, "s0", turn_key=f"ns-a|s0|t{index}")
+        for index, text in enumerate(("first", "second"))
+    ]
+    run = ingest.NamespaceRun(
+        item={}, question_id="q1", namespace="ns-a", plan=plan, digest="d"
     )
+    state = ingest.IngestStateLog(tmp_path / "state.jsonl")
 
     with pytest.raises(ingest.ProviderStoppedError):
-        ingest._ingest_window(
-            window, [turns], object(), _quota_exhausted(), "http://menhir",
-            timeout_s=60, poll_s=0,
+        ingest._ingest_pool(
+            [run], object(), _quota_exhausted(), "http://menhir", state,
+            pool_size=1, drain_timeout=60, finalize=lambda run, counts: None, poll_s=0,
         )
 
-    # Only the first turn went in; the stop came before any later submission.
-    assert submitted == ["first"]
+    # The pool checks health first each cycle, so the stop lands before any submission,
+    # poll or retry (the old window submitted its first turn before its first check).
+    assert submitted == []
+    assert state.progress("ns-a").plan_digest is None
