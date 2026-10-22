@@ -892,7 +892,7 @@ def _retry_failed_evidence_projections(
     runs BEFORE that uuid's reset so the retry budget is durable; ``on_requeued(namespace,
     uuid, kind)`` runs after a successful reset. Provider-caused failures (quota/auth) use
     ``_requeue_provider_failure`` instead and spend no budget. Raises GraphUnreadable when the
-    failed set cannot be read.
+    failed set cannot be read, or when an enqueue is refused and the reset row cannot be read.
     """
     requeued = {namespace: 0 for namespace in dict.fromkeys(namespaces)}
     for namespace in requeued:
@@ -927,9 +927,12 @@ def _retry_failed_evidence_projections(
                 "enqueue_pending_episode",
                 {"episode_uuid": episode_uuid},
             )
-            if not enqueued:
-                raise RuntimeError(
-                    "could not enqueue reset evidence projection "
+            # False also means "already queued or claimed": Menhir's lease sweep or a worker can
+            # take the reset row first. A readable row is in flight (PENDING rows are swept);
+            # only an unconfirmed one fails closed, and the pool retries GraphUnreadable.
+            if not enqueued and _episode_processing(admin, menhir_url, episode_uuid) is None:
+                raise GraphUnreadable(
+                    "could not enqueue or read reset evidence projection "
                     f"{episode_uuid} in namespace {namespace}"
                 )
             if on_requeued is not None:

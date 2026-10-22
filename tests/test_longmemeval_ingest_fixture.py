@@ -645,24 +645,67 @@ def test_retry_failed_evidence_projections_enumerates_generated_children(
 def test_retry_failed_evidence_projection_fails_closed_when_enqueue_rejected(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """A refused enqueue whose reset row cannot be read fails closed (GraphUnreadable)."""
     monkeypatch.setattr(
         ingest,
         "_failed_evidence_projections",
         lambda namespace: [("projection-a", False)],
     )
-    responses = iter([True, False])
+    # reset -> True, enqueue -> False, fetch_episode_processing -> unreadable
+    responses = iter([True, False, None])
     monkeypatch.setattr(
         ingest,
         "_backend",
         lambda admin, url, operation, body: next(responses),
     )
 
-    with pytest.raises(RuntimeError, match="projection-a.*ns-a"):
+    with pytest.raises(ingest.GraphUnreadable, match="projection-a.*ns-a"):
         ingest._retry_failed_evidence_projections(
             ["ns-a"],
             object(),
             "http://menhir",
         )
+
+
+@pytest.mark.parametrize("state", ["PENDING", "ENRICHING", "READY", "FAILED"])
+def test_retry_failed_evidence_projection_refused_enqueue_of_readable_row_is_in_flight(
+    monkeypatch: pytest.MonkeyPatch, state: str,
+) -> None:
+    """o500 counterexample: Menhir refuses the enqueue because the reset row is already queued
+    (PENDING) or a worker claimed it (ENRICHING), or the retry already finished. It is requeued,
+    not a crash of the whole ingest."""
+    monkeypatch.setattr(
+        ingest,
+        "_failed_evidence_projections",
+        lambda namespace: [("projection-a", False)],
+    )
+    operations: list[str] = []
+
+    def fake_backend(admin, url, operation, body):
+        operations.append(operation)
+        if operation == "force_reset_failed_episode":
+            return True
+        if operation == "enqueue_pending_episode":
+            return False
+        if operation == "fetch_episode_processing":
+            return {"episode_uuid": body["episode_uuid"], "processing_state": state}
+        raise AssertionError(operation)
+
+    monkeypatch.setattr(ingest, "_backend", fake_backend)
+    requeued_events: list[tuple] = []
+
+    requeued = ingest._retry_failed_evidence_projections(
+        ["ns-a"],
+        object(),
+        "http://menhir",
+        on_requeued=lambda ns, uuid, kind: requeued_events.append((ns, uuid, kind)),
+    )
+
+    assert requeued == {"ns-a": 1}
+    assert requeued_events == [("ns-a", "projection-a", "projection")]
+    assert operations == [
+        "force_reset_failed_episode", "enqueue_pending_episode", "fetch_episode_processing",
+    ]
 
 
 def test_failed_evidence_projection_retry_records_before_reset_and_skips_recorded(
