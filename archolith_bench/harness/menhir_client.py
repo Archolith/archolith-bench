@@ -403,6 +403,7 @@ class StubMenhirClient:
         flagged: bool = False,
         bootstrap_scope: str | None = None,
         turn_evidence_uuid: str | None = None,
+        idempotency_key: str | None = None,
     ) -> None:
         """Append a formatted snippet to the group's list."""
         if not content:
