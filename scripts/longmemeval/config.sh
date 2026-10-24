@@ -101,11 +101,18 @@ LME_ANCHORED_TIME_ATTACH_MODEL="${LME_ANCHORED_TIME_ATTACH_MODEL:-${LME_ANCHORED
 # Per-episode LLM call budget. 100 is Menhir's default (above its measured p99 of 84). A refusal
 # marks the episode FAILED, and the optional flags add calls per episode.
 LME_MAX_LLM_CALLS_PER_JOB="${LME_MAX_LLM_CALLS_PER_JOB:-100}"
+# Memory writer: runs only with LME_SEGMENTATION=adaptive-writer; rates ("IN,OUT" $/1M) and the
+# USD cap must be set explicitly (no price is assumed).
+LME_WRITER_MODEL="${LME_WRITER_MODEL:-gpt-6-luna}"
+LME_WRITER_GRANULARITY="${LME_WRITER_GRANULARITY:-turn}"
+LME_WRITER_MAX_USD="${LME_WRITER_MAX_USD:-}"
+LME_WRITER_RATES="${LME_WRITER_RATES:-}"
 
 # ---- Ingest policy ----
 # Legacy sentence splitting inflated knowledge-update items by roughly 8x and was
 # abandoned in the full validation campaign. Adaptive is the frozen, evidenced
-# default; override explicitly when reproducing an older arm.
+# default; override explicitly when reproducing an older arm. Values: adaptive (default),
+# adaptive-writer (LLM memory writer; see LME_WRITER_* above), plus the legacy arms.
 LME_SEGMENTATION="${LME_SEGMENTATION:-adaptive}"
 LME_REQUIRE_FRESH="${LME_REQUIRE_FRESH:-0}"
 # Resume an interrupted build against its existing graph; replaces the fresh-build refusals.
