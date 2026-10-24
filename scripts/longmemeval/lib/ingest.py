@@ -33,6 +33,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import re
 import subprocess
@@ -989,38 +990,18 @@ def _startup_checks(
     state: IngestStateLog,
     args: argparse.Namespace,
     admin: httpx.Client,
+    *,
+    mode: str | None = None,
 ) -> None:
     """Refuse unsafe resumes, then reset ONLY the explicitly listed namespaces (P4/P5/P1).
 
-    Runs before any submit. Refusals raise RuntimeError and write nothing.
+    Runs before any submit. Refusals raise RuntimeError and write nothing. ``mode`` is the
+    recorded run mode (``_run_mode``); None means ``args.segmentation``.
     """
     remaining = [run.namespace for run in runs]
-    listed = list(args.reset_namespace or [])
-    if args.reset_file:
-        listed.extend(_read_reset_file(args.reset_file))
-    listed = list(dict.fromkeys(listed))
-    not_remaining = [ns for ns in listed if ns not in remaining]
-    if not_remaining:
-        raise RuntimeError(
-            "reset refused: listed namespaces are not among the remaining (non-manifested) "
-            "namespaces: " + ", ".join(not_remaining)
-        )
+    listed = _checked_reset_list(remaining, args)
     listed_set = set(listed)
-
-    # One build, one segmentation mode: a resume under another mode would ingest the namespaces
-    # it has not started differently from those it has (including finished ones).
-    segmentation = getattr(args, "segmentation", None)
-    other_mode = sorted(
-        ns for ns in state.namespaces()
-        if ns not in listed_set
-        and state.progress(ns).segmentation not in (None, segmentation)
-    )
-    if segmentation is not None and other_mode:
-        modes = sorted({str(state.progress(ns).segmentation) for ns in other_mode})
-        raise RuntimeError(
-            f"resume refused: namespaces were ingested with segmentation {modes}, this run uses "
-            f"{segmentation!r}: " + ", ".join(other_mode[:10])
-        )
+    _refuse_other_mode(state, listed_set, getattr(args, "segmentation", None) if mode is None else mode)
 
     mismatched = []
     for run in runs:
@@ -1033,10 +1014,58 @@ def _startup_checks(
             "--reset-namespace to start over): " + ", ".join(mismatched)
         )
 
+    _refuse_unrecorded_dirty(remaining, state, listed_set)
+
+    for namespace in listed:
+        # Settle first: a reset deletes the PENDING/ENRICHING rows that prove a worker is alive.
+        _await_stale_episode_settlement([namespace], timeout_s=args.reset_settle_timeout)
+        _reset_namespace(admin, args.menhir_url, namespace)
+        state.record_reset(namespace)
+
+
+def _checked_reset_list(remaining: list[str], args: argparse.Namespace) -> list[str]:
+    listed = list(args.reset_namespace or [])
+    if args.reset_file:
+        listed.extend(_read_reset_file(args.reset_file))
+    listed = list(dict.fromkeys(listed))
+    not_remaining = [ns for ns in listed if ns not in remaining]
+    if not_remaining:
+        raise RuntimeError(
+            "reset refused: listed namespaces are not among the remaining (non-manifested) "
+            "namespaces: " + ", ".join(not_remaining)
+        )
+    return listed
+
+
+def _refuse_other_mode(state: IngestStateLog, listed_set: set[str], mode: str | None) -> None:
+    # One build, one segmentation mode: a resume under another mode would ingest the namespaces
+    # it has not started differently from those it has (including finished ones).
+    other_mode = sorted(
+        ns for ns in state.namespaces()
+        if ns not in listed_set
+        and state.progress(ns).segmentation not in (None, mode)
+    )
+    if mode is not None and other_mode:
+        modes = sorted({str(state.progress(ns).segmentation) for ns in other_mode})
+        raise RuntimeError(
+            f"resume refused: namespaces were ingested with segmentation {modes}, this run uses "
+            f"{mode!r}: " + ", ".join(other_mode[:10])
+        )
+
+
+def _refuse_before_planning(
+    remaining: list[str], state: IngestStateLog, args: argparse.Namespace, mode: str | None
+) -> None:
+    """The startup refusals that do not need the turn plan, run before a paid writer prepass."""
+    listed_set = set(_checked_reset_list(remaining, args))
+    _refuse_other_mode(state, listed_set, mode)
+    _refuse_unrecorded_dirty(remaining, state, listed_set)
+
+
+def _refuse_unrecorded_dirty(remaining: list[str], state: IngestStateLog, listed_set: set[str]) -> None:
     unrecorded = [
-        run.namespace
-        for run in runs
-        if run.namespace not in listed_set and state.progress(run.namespace).plan_digest is None
+        ns for ns in remaining
+        if ns not in listed_set and state.progress(ns).plan_digest is None
     ]
     if unrecorded:
         counts = _ns_state_counts_many(unrecorded)
@@ -1052,12 +1081,6 @@ def _startup_checks(
                 "resume refused: namespace has graph data but no recorded plan; list it with "
                 "--reset-namespace: " + ", ".join(dirty)
             )
-
-    for namespace in listed:
-        # Settle first: a reset deletes the PENDING/ENRICHING rows that prove a worker is alive.
-        _await_stale_episode_settlement([namespace], timeout_s=args.reset_settle_timeout)
-        _reset_namespace(admin, args.menhir_url, namespace)
-        state.record_reset(namespace)
 
 
 def _ingest_pool(
@@ -1388,15 +1411,42 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ap.add_argument("--writer-model", default=os.getenv("LME_WRITER_MODEL") or "gpt-6-luna",
                     help="adaptive-writer: OpenAI Flex model for the memory writer")
     ap.add_argument("--writer-checkpoint", default=None,
-                    help="adaptive-writer: writer JSONL checkpoint (default: writer-<granularity>.jsonl "
-                         "next to the manifest and ingest state log)")
-    ap.add_argument("--writer-max-usd", type=float, default=os.getenv("LME_WRITER_MAX_USD"),
+                    help="adaptive-writer: writer JSONL checkpoint (default: "
+                         "writer-<manifest stem>-<granularity>.jsonl next to the manifest)")
+    # Strings, validated only in writer mode: config.sh exports these empty under `set -a`, and a
+    # typed default would make argparse reject every build in every mode.
+    ap.add_argument("--writer-max-usd", default=os.getenv("LME_WRITER_MAX_USD") or None,
                     help="adaptive-writer: required spend cap in USD (or LME_WRITER_MAX_USD)")
-    ap.add_argument("--writer-rates", default=os.getenv("LME_WRITER_RATES"),
+    ap.add_argument("--writer-rates", default=os.getenv("LME_WRITER_RATES") or None,
                     help="adaptive-writer: required 'IN,OUT' USD per 1M tokens (or LME_WRITER_RATES)")
     ap.add_argument("--writer-workers", type=_positive_int, default=16,
                     help="adaptive-writer: concurrent writer requests")
-    return ap.parse_args(argv)
+    args = ap.parse_args(argv)
+    # argparse does not check an env-supplied default against `choices`.
+    if args.segmentation == "adaptive-writer" and args.writer_granularity not in memory_writer.GRANULARITIES:
+        ap.error(f"--writer-granularity must be one of {memory_writer.GRANULARITIES}")
+    return args
+
+
+def _finite_float(value: object) -> float | None:
+    try:
+        number = float(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _run_mode(args: argparse.Namespace) -> str | None:
+    """The mode a namespace's plan is recorded under; a resume must match it for every namespace.
+
+    Writer mode includes granularity, model and prompt sha, so a build continued under another
+    writer configuration is refused, not mixed into one graph.
+    """
+    segmentation = getattr(args, "segmentation", None)
+    if segmentation != "adaptive-writer":
+        return segmentation
+    granularity = args.writer_granularity
+    return f"adaptive-writer:{granularity}:{args.writer_model}:{memory_writer.prompt_sha(granularity)[:16]}"
 
 
 def _run_writer_prepass(
@@ -1411,36 +1461,46 @@ def _run_writer_prepass(
     key/budget/rates (nothing was sent), 1 for a writer or Flex failure (nothing was ingested).
     """
     api_key = os.getenv("OPENAI_API_KEY", "").strip()
-    max_usd = args.writer_max_usd
+    max_usd = _finite_float(args.writer_max_usd) if args.writer_max_usd is not None else None
     rates: tuple[float, float] | None = None
-    try:
-        parts = str(args.writer_rates or "").split(",")
-        if len(parts) == 2:
-            rates = (float(parts[0]), float(parts[1]))
-    except ValueError:
-        rates = None
+    parts = str(args.writer_rates or "").split(",")
+    if len(parts) == 2:
+        rate_in, rate_out = (_finite_float(part) for part in parts)
+        # Zero, negative or non-finite rates would keep the computed cost under any cap.
+        if rate_in is not None and rate_out is not None and rate_in > 0 and rate_out > 0:
+            rates = (rate_in, rate_out)
     problems = []
     if not api_key:
         problems.append("OPENAI_API_KEY is not set")
-    if not max_usd or max_usd <= 0:
-        problems.append("--writer-max-usd (or LME_WRITER_MAX_USD) must be > 0")
+    if max_usd is None or max_usd <= 0:
+        problems.append("--writer-max-usd (or LME_WRITER_MAX_USD) must be a finite number > 0")
     if rates is None:
-        problems.append("--writer-rates (or LME_WRITER_RATES) must be 'IN,OUT' USD per 1M tokens")
+        problems.append("--writer-rates (or LME_WRITER_RATES) must be 'IN,OUT' USD per 1M tokens, both > 0")
     if problems:
         print("adaptive-writer: " + "; ".join(problems), file=sys.stderr)
         return None, 2
 
-    from archolith_bench.core.openai_flex import FlexError, run_flex
-
-    checkpoint = (
-        Path(args.writer_checkpoint)
-        if args.writer_checkpoint
-        else manifest_path.parent / f"writer-{args.writer_granularity}.jsonl"
-    )
     sessions: list[memory_writer.WriterSession] = []
     for index, item in enumerate(remaining):
         namespace = _namespace(str(item.get("question_id") or f"lme-{index}"), args.namespace_prefix)
         sessions.extend(_writer_sessions(adapter, item, namespace))
+    # Items are keyed by (namespace, session id, turn): a repeated session id would merge two
+    # sessions' items and only fail the plan's duplicate-key check after the writer has spent.
+    repeated = sorted(f"{ns}|{sid}" for (ns, sid), n in
+                      Counter((s.namespace, s.session_id) for s in sessions).items() if n > 1)
+    if repeated:
+        print("adaptive-writer: repeated session ids: " + ", ".join(repeated[:10]), file=sys.stderr)
+        return None, 2
+
+    from archolith_bench.core.openai_flex import FlexError, run_flex
+
+    # One checkpoint per manifest, so the manifest's run lock also serialises the checkpoint;
+    # builds sharing a results directory never rewrite each other's paid rows.
+    checkpoint = (
+        Path(args.writer_checkpoint)
+        if args.writer_checkpoint
+        else manifest_path.parent / f"writer-{manifest_path.stem}-{args.writer_granularity}.jsonl"
+    )
     try:
         items, report = memory_writer.write_memories(
             sessions,
@@ -1811,9 +1871,17 @@ def main(argv: list[str] | None = None) -> int:
         )
     print(f"to ingest this run: {len(remaining)} items", flush=True)
 
+    state = IngestStateLog(IngestStateLog.path_for(manifest_path))
+    run_mode = _run_mode(args)
     writer_items: dict | None = None
     writer_digest_kwargs: dict = {}
     if args.segmentation == "adaptive-writer":
+        # Refuse what does not depend on the plan before the writer spends anything.
+        _refuse_before_planning(
+            [_namespace(str(it.get("question_id") or f"lme-{i}"), args.namespace_prefix)
+             for i, it in enumerate(remaining)],
+            state, args, run_mode,
+        )
         writer_items, writer_exit = _run_writer_prepass(args, adapter, remaining, manifest_path)
         if writer_items is None:
             return writer_exit
@@ -1833,10 +1901,9 @@ def main(argv: list[str] | None = None) -> int:
             namespace=namespace,
             plan=plan,
             digest=_turn_plan_digest(plan, args.segmentation, **writer_digest_kwargs),
-            segmentation=args.segmentation,
+            segmentation=run_mode,
         ))
-    state = IngestStateLog(IngestStateLog.path_for(manifest_path))
-    _startup_checks(runs, state, args, admin)
+    _startup_checks(runs, state, args, admin, mode=run_mode)
 
     completed_this_run: list[str] = []
 

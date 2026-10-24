@@ -85,6 +85,37 @@ def _run(sessions, fake, tmp_path, granularity="turn", model="m1"):
                              checkpoint=tmp_path / "w.jsonl", run_flex=fake, flex_kwargs={})
 
 
+@pytest.mark.parametrize(
+    ("granularity", "items"),
+    [
+        ("turn", ["just a string", {"text": "   "}]),
+        ("session", [{"turn": 0, "text": "cites the user turn"}, {"turn": "t1", "text": "x"},
+                     {"text": "no turn"}, {"turn": 1.0, "text": "float turn"}]),
+    ],
+)
+def test_reply_with_only_unusable_items_fails_and_is_not_replayed(tmp_path, granularity, items):
+    """Items written but none usable is a broken reply, never "nothing to record"."""
+    session = _session([T(0, "user", "q"), T(1, "assistant", "Try Dune.")])
+    fake = FakeFlex(lambda cid: _ok(cid, json.dumps({"items": items})))
+
+    with pytest.raises(mw.WriterError, match="malformed or mis-cited"):
+        _run([session], fake, tmp_path, granularity=granularity)
+
+    assert _ckpt_ids(tmp_path / "w.jsonl") == []  # a rerun asks again
+    rerun = FakeFlex(lambda cid: _ok(cid, json.dumps({"items": []})))
+    items_out, report = _run([session], rerun, tmp_path, granularity=granularity)
+    assert len(rerun.calls[0]) == 1 and items_out == {} and report.items == 0  # empty is valid
+
+
+def test_reply_with_some_usable_items_keeps_them_and_counts_the_rest(tmp_path):
+    session = _session([T(0, "user", "q"), T(1, "assistant", "Try Dune.")])
+    fake = FakeFlex(lambda cid: _ok(cid, json.dumps({"items": [{"text": "kept"}, "junk"]})))
+
+    items, report = _run([session], fake, tmp_path)
+
+    assert [i.text for i in items[("ns1", "s1", 1)]] == ["kept"] and report.dropped == 1
+
+
 @pytest.mark.parametrize("granularity", mw.GRANULARITIES)
 def test_changed_session_text_never_replays_checkpoint_row(tmp_path, granularity):
     """Same namespace/session id, different text: the old row must not be replayed."""

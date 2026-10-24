@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
@@ -245,7 +246,10 @@ def _drop_failed_rows(checkpoint: Path, also_ids: frozenset[str] | set[str] = fr
         else:
             removed += 1
     if removed:
-        checkpoint.write_text("".join(f"{line}\n" for line in kept), encoding="utf-8")
+        # Atomic: a crash mid-rewrite must not truncate the paid rows.
+        tmp = checkpoint.with_name(checkpoint.name + ".tmp")
+        tmp.write_text("".join(f"{line}\n" for line in kept), encoding="utf-8")
+        os.replace(tmp, checkpoint)
     return removed
 
 
@@ -292,6 +296,9 @@ def write_memories(
         try:
             parsed, dropped = parse_items(result.content, granularity=granularity,
                                           assistant_indices=assistant_indices, default_turn=default_turn)
+            if not parsed and dropped:
+                # Items were written but none is usable: a broken reply, not "nothing to record".
+                raise WriterError(f"all {dropped} items malformed or mis-cited")
         except WriterError as exc:
             _drop_failed_rows(checkpoint, also_ids={cid})  # a rerun asks again, never replays it
             raise WriterError(f"{cid}: {exc}; rerun to retry it") from exc

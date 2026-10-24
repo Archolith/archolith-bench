@@ -391,8 +391,14 @@ class _Flex:
         return results, {}
 
 
-def _drive_main(monkeypatch, tmp_path, flex: _Flex, extra: list[str], *, api_key: str | None = "sk-test"):
+def _drive_main(monkeypatch, tmp_path, flex: _Flex, extra: list[str], *, api_key: str | None = "sk-test",
+                dirty: bool = False, item: dict | None = None):
     client = _Client("te-main")
+    adapter_cls = _Adapter
+    if item is not None:
+        class adapter_cls(_Adapter):  # type: ignore[no-redef]
+            def load_items(self, **kwargs):
+                return [item]
     sequence: list[str] = []
 
     def record_turn_evidence(namespace, text, **kwargs):
@@ -409,7 +415,7 @@ def _drive_main(monkeypatch, tmp_path, flex: _Flex, extra: list[str], *, api_key
     import archolith_bench.core.openai_flex as openai_flex
 
     monkeypatch.setattr(openai_flex, "run_flex", flex)
-    monkeypatch.setattr(ingest, "LongMemEvalMemoryAdapter", _Adapter)
+    monkeypatch.setattr(ingest, "LongMemEvalMemoryAdapter", adapter_cls)
     monkeypatch.setattr(ingest, "HttpMenhirClient", lambda url: client)
     monkeypatch.setattr(ingest.httpx, "Client", lambda **kwargs: object())
     monkeypatch.setattr(ingest.time, "sleep", lambda seconds: None)
@@ -432,11 +438,9 @@ def _drive_main(monkeypatch, tmp_path, flex: _Flex, extra: list[str], *, api_key
         ingest, "_retry_failed_evidence_projections",
         lambda namespaces, admin, url, **kwargs: {ns: 0 for ns in namespaces},
     )
-    counts: list[int] = []
-
     def counts_many(namespaces):
-        counts.append(1)
-        total = 0 if len(counts) == 1 else 1
+        # Like the graph: empty until something was ingested (or pre-seeded dirty).
+        total = 1 if (dirty or client.episodes) else 0
         return {
             n: {"pending": 0, "ready": 1, "enriching": 0, "failed": 0, "llm_tasks": 1,
                 "processing_attempts": 1, "total": total}
@@ -466,6 +470,11 @@ _GOOD = ["--writer-max-usd", "5", "--writer-rates", "1,2"]
         (["--writer-max-usd", "5", "--writer-rates", "abc"], "sk-test"),  # malformed rates
         (["--writer-max-usd", "5", "--writer-rates", "1,2,3"], "sk-test"),  # wrong arity
         (["--writer-max-usd", "5"], "sk-test"),  # no rates
+        (["--writer-max-usd", "nan", "--writer-rates", "1,2"], "sk-test"),  # NaN disables the cap
+        (["--writer-max-usd", "inf", "--writer-rates", "1,2"], "sk-test"),
+        (["--writer-max-usd", "5", "--writer-rates=-1,-1"], "sk-test"),  # negative cost
+        (["--writer-max-usd", "5", "--writer-rates", "0,2"], "sk-test"),  # free input
+        (["--writer-max-usd", "5", "--writer-rates", "nan,1"], "sk-test"),
     ],
 )
 def test_main_writer_refuses_without_key_budget_or_rates(monkeypatch, tmp_path, extra, api_key) -> None:
@@ -476,6 +485,78 @@ def test_main_writer_refuses_without_key_budget_or_rates(monkeypatch, tmp_path, 
     assert result == 2
     assert flex.calls == []
     assert client.episodes == [] and client.evidence == []
+
+
+@pytest.mark.parametrize("value", ["", "5usd"])
+@pytest.mark.parametrize("segmentation", ["adaptive", "none", "sentence"])
+def test_writer_env_never_breaks_argument_parsing_of_other_modes(monkeypatch, value, segmentation) -> None:
+    """config.sh exports the writer vars (empty) under `set -a`; every mode must still parse."""
+    for name in ("LME_WRITER_MAX_USD", "LME_WRITER_RATES", "LME_WRITER_GRANULARITY"):
+        monkeypatch.setenv(name, value)
+
+    args = ingest._parse_args(["--segmentation", segmentation])
+
+    assert args.segmentation == segmentation
+
+
+def test_env_granularity_outside_choices_is_refused_in_writer_mode(monkeypatch) -> None:
+    monkeypatch.setenv("LME_WRITER_GRANULARITY", "Session")
+
+    with pytest.raises(SystemExit) as exc:
+        ingest._parse_args(["--segmentation", "adaptive-writer"])
+
+    assert exc.value.code == 2
+
+
+@pytest.mark.parametrize(
+    "recorded",
+    [
+        "adaptive",  # plain adaptive build continued as a writer build
+        "adaptive-writer:turn:other-model:0123456789abcdef",  # another writer model
+        "adaptive-writer:session:m:0123456789abcdef",  # another granularity
+    ],
+)
+def test_writer_config_change_is_refused_before_the_writer_spends(monkeypatch, tmp_path, recorded) -> None:
+    # Another namespace of this build finished under a different mode or writer configuration.
+    state = ingest.IngestStateLog(ingest.IngestStateLog.path_for(tmp_path / "manifest.json"))
+    state.record_plan("lme-finished", "digest", 3, recorded)
+    flex = _Flex()
+
+    with pytest.raises(RuntimeError, match="resume refused: namespaces were ingested with segmentation"):
+        _drive_main(monkeypatch, tmp_path, flex, _GOOD)
+
+    assert flex.calls == []
+
+
+def test_same_writer_config_resumes(monkeypatch, tmp_path) -> None:
+    args = ingest._parse_args(["--segmentation", "adaptive-writer", *_GOOD])
+    state = ingest.IngestStateLog(ingest.IngestStateLog.path_for(tmp_path / "manifest.json"))
+    state.record_plan("lme-finished", "digest", 3, ingest._run_mode(args))
+    flex = _Flex()
+
+    result, _client = _drive_main(monkeypatch, tmp_path, flex, _GOOD)
+
+    assert result == 0 and len(flex.calls) == 1
+
+
+def test_dirty_unrecorded_namespace_is_refused_before_the_writer_spends(monkeypatch, tmp_path) -> None:
+    flex = _Flex()
+
+    with pytest.raises(RuntimeError, match="graph data but no recorded plan"):
+        _drive_main(monkeypatch, tmp_path, flex, _GOOD, dirty=True)
+
+    assert flex.calls == []
+
+
+def test_repeated_session_ids_are_refused_before_the_writer_spends(monkeypatch, tmp_path) -> None:
+    item = _item()
+    item["haystack_session_ids"] = ["sA", "sA"]
+    flex = _Flex()
+
+    result, client = _drive_main(monkeypatch, tmp_path, flex, _GOOD, item=item)
+
+    assert result == 2
+    assert flex.calls == [] and client.episodes == []
 
 
 def test_main_writer_flex_failure_stops_before_any_ingest(monkeypatch, tmp_path) -> None:
@@ -502,6 +583,8 @@ def test_main_writer_happy_path_ingests_agent_items_grounded_on_assistant_eviden
     # One turn-granularity request per assistant turn (3 in the fixture).
     assert len(requests) == 3
     assert kwargs["max_usd"] == 5.0 and kwargs["rates"] == (1.0, 2.0)
+    # One checkpoint per manifest (the manifest's run lock covers it), not one per directory.
+    assert kwargs["checkpoint"] == tmp_path / "writer-manifest-turn.jsonl"
 
     agent_eps = [e for e in client.episodes if e.get("memory_role") == "agent"]
     assert len(agent_eps) == 3

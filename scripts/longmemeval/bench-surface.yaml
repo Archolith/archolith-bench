@@ -58,6 +58,8 @@ stages:
         glob: "scripts/longmemeval/lib/expected.py"
       - repo: bench
         glob: "scripts/longmemeval/lib/memory_writer.py"
+      - repo: bench
+        glob: "archolith_bench/core/openai_flex.py"
       - repo: menhir
         glob: "src/menhir/services/ingest*.py"
       - repo: menhir
@@ -151,6 +153,10 @@ stages:
         glob: "scripts/longmemeval/analysis/answer_ab.py"
       - repo: bench
         glob: "scripts/longmemeval/analysis/brief_ab.py"
+      - repo: bench
+        glob: "archolith_bench/harness/longmemeval.py"
+      - repo: bench
+        glob: "archolith_bench/harness/menhir_client.py"
 
   harness:
     description: >
