@@ -1,3 +1,10 @@
+## 2026-10-24 - Agent memory writer for assistant turns (`LME_SEGMENTATION=adaptive-writer`, #168 P3)
+
+- New segmentation mode `adaptive-writer`: user turns go through `adaptive` unchanged; assistant turns are recorded as TurnEvidence only, and an LLM writer (`scripts/longmemeval/lib/memory_writer.py`, OpenAI Flex) turns each one into 0..20 standalone, dated, third-person items about what the assistant said. Each item is ingested as `role=agent`, `source=agent-writer`, grounded on its assistant turn's evidence, so it stays agent-tier and cannot supersede a user statement in Menhir.
+- `LME_WRITER_GRANULARITY=turn|session` (one request per assistant turn, or per session with cited turns), `LME_WRITER_MODEL` (default `gpt-6-luna`). `LME_WRITER_MAX_USD` and `LME_WRITER_RATES` ("IN,OUT" USD per 1M) are required; ingest refuses to start without them or `OPENAI_API_KEY`.
+- The writer runs as a prepass with a JSONL checkpoint (`writer-<granularity>.jsonl` beside the manifest); request ids carry model, prompt sha and a digest of the session text, so a resume replays the same items and a changed input is asked again. A failed or unparseable reply stops the build before any ingest and is retried on the next run, never read as "no items". Writer items enter the turn-plan digest; other modes' digests are unchanged.
+- Recall renders Menhir's `provenance.said_by` as `(agent-recorded)`, `(user + agent)` or `(provenance unknown)`, and the answer prompt explains the labels. The graph attempt record and run provenance add `writer_model`, `writer_granularity` and `writer_prompt_sha` in writer mode.
+
 ## 2026-10-22 - Resume a killed LME graph ingest where it stopped
 
 - Each extractable segment is posted with a stable `idempotency_key` (`<turn_key>#s<segment>`), so a replay after a kill reuses the anchor Menhir already has (needs Menhir with #372). A 409 (same key, different request) stops the run without a retry.

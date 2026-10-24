@@ -141,6 +141,24 @@ def _format_source_time_evidence(item: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+_PROVENANCE_LABELS = {
+    "agent": "agent-recorded",
+    "mixed": "user + agent",
+    "unknown": "provenance unknown",
+}
+
+
+def _provenance_label(item: dict[str, Any]) -> str | None:
+    """Label for a non-user recall item's ``provenance.said_by``; None when absent or malformed."""
+    provenance = item.get("provenance")
+    if not isinstance(provenance, dict):
+        return None
+    said_by = provenance.get("said_by")
+    if not isinstance(said_by, str):
+        return None
+    return _PROVENANCE_LABELS.get(said_by)
+
+
 def _recall_item_text(item: dict[str, Any]) -> str:
     """Return the best human-readable text from one Menhir recall result."""
     name = item.get("name") if isinstance(item.get("name"), str) else ""
@@ -156,6 +174,12 @@ def _recall_item_text(item: dict[str, Any]) -> str:
         text = f"{name.strip()}: {body.strip()}"
     else:
         text = body.strip() or name.strip()
+    label = _provenance_label(item)
+    if text and label:
+        if name.strip() and text.startswith(name.strip()):
+            text = f"{name.strip()} ({label}){text[len(name.strip()):]}"
+        else:
+            text = f"({label}) {text}"
     source_time = _format_source_time_evidence(item)
     if text and source_time:
         return f"{text}\n{source_time}"
@@ -404,6 +428,7 @@ class StubMenhirClient:
         bootstrap_scope: str | None = None,
         turn_evidence_uuid: str | None = None,
         idempotency_key: str | None = None,
+        memory_role: str | None = None,
     ) -> None:
         """Append a formatted snippet to the group's list."""
         if not content:
@@ -560,8 +585,12 @@ class HttpMenhirClient:
         bootstrap_scope: str | None = None,
         turn_evidence_uuid: str | None = None,
         idempotency_key: str | None = None,
+        memory_role: str | None = None,
     ) -> dict[str, Any] | None:
         """Ingest a snippet as a menhir episode in the group's namespace silo.
+
+        ``memory_role`` (keyword-only) is sent as the payload ``role`` field (e.g. ``"agent"``);
+        it is independent of the positional ``role``, which only drives the "{role}: " prefix.
 
         ``idempotency_key`` (1-256 chars) makes a resubmit of the same request return the first
         episode (``idempotent_replay`` true) instead of creating another; a different request
@@ -623,6 +652,8 @@ class HttpMenhirClient:
             payload["turn_evidence_uuid"] = turn_evidence_uuid
         if idempotency_key is not None:
             payload["idempotency_key"] = idempotency_key
+        if memory_role is not None:
+            payload["role"] = memory_role
         response = self._client.post(
             url,
             params={"wait": "true" if wait else "false"},

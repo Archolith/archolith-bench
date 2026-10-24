@@ -68,6 +68,7 @@ from validate_run import consolidation_errors  # noqa: E402
 from archolith_bench.harness.longmemeval import LongMemEvalMemoryAdapter  # noqa: E402
 from archolith_bench.harness.menhir_client import HttpMenhirClient  # noqa: E402
 
+import memory_writer  # noqa: E402
 from claim_segmenter import (  # noqa: E402
     ClaimSegment,
     SegmentationMode,
@@ -115,6 +116,11 @@ class IngestTurn:
     # Position among the segments cut from one source turn; with turn_key it is the
     # idempotency identity of the episode (P1).
     segment_index: int = 0
+    # Non-empty overrides the ingest ``source`` (memory-writer items are "agent-writer").
+    source: str = ""
+    # >= 0 marks a memory-writer item: its position among the items written for one assistant
+    # turn. ``turn_key`` is then the assistant turn's, and the evidence is that turn's.
+    writer_index: int = -1
 
 
 @dataclass
@@ -187,6 +193,8 @@ def _ingest_turn(
     turn_key: str | None = None,
     evidence_cache: dict[str, str] | None = None,
     ingest_key: str | None = None,
+    source: str = "",
+    writer_index: int = -1,
 ) -> str:
     """Ingest one turn with bounded exponential backoff on transient errors.
 
@@ -227,8 +235,13 @@ def _ingest_turn(
     normalized_role = role.strip().lower() or "user"
     is_user = normalized_role == "user"
     turn_evidence_uuid: str | None = None
+    # A memory-writer item (agent-tier) is grounded on the ASSISTANT turn it was written from.
+    is_writer = writer_index >= 0
+    if is_writer and not evidence_text:
+        raise ValueError("a memory-writer turn needs the assistant turn's evidence_text")
     # The evidence body is the ORIGINAL turn, never the segment being ingested.
     evidence_body = content if evidence_text is None else evidence_text
+    evidence_role = "assistant" if is_writer else normalized_role
 
     # A sibling segment of the same source turn already recorded the evidence.
     if evidence_cache is not None and turn_key:
@@ -236,15 +249,16 @@ def _ingest_turn(
 
     # Ground the user-tier claim by recording turn evidence first. Evidence-only
     # turns are captured for every role, since they have no episode to ground and
-    # the record is the only trace the source turn leaves.
-    if turn_evidence_uuid is None and (is_user or not extract):
+    # the record is the only trace the source turn leaves. A writer item re-records its
+    # assistant turn's evidence when the cache is empty (a resume); Menhir MERGEs on turn_key.
+    if turn_evidence_uuid is None and (is_user or not extract or is_writer):
         for attempt in range(tries):
             try:
                 ev = client.record_turn_evidence(
                     ns,
                     evidence_body,
-                    role=normalized_role,
-                    declarant=normalized_role,
+                    role=evidence_role,
+                    declarant=evidence_role,
                     session_id=session_id,
                     occurred_at=occurred_at,
                     turn_key=turn_key,
@@ -266,7 +280,7 @@ def _ingest_turn(
                 print(f"    turn-evidence retry {attempt+1}/{tries} after {exc.__class__.__name__} -> sleep {wait}s", flush=True)
                 time.sleep(wait)
 
-    if REQUIRE_TURN_EVIDENCE and (is_user or not extract) and not turn_evidence_uuid:
+    if REQUIRE_TURN_EVIDENCE and (is_user or not extract or is_writer) and not turn_evidence_uuid:
         raise RuntimeError(
             "turn-evidence capture returned no turn_id; refusing to continue without "
             f"grounding for namespace {ns}"
@@ -278,6 +292,8 @@ def _ingest_turn(
 
     # Only sent when supplied, so a resubmit of the same segment returns the first episode.
     key_kwargs = {"idempotency_key": ingest_key} if ingest_key is not None else {}
+    if is_writer:
+        key_kwargs["memory_role"] = memory_writer.WRITER_ROLE
     for attempt in range(tries):
         try:
             result = client.ingest(
@@ -289,7 +305,7 @@ def _ingest_turn(
                 # A user's own utterance is external testimony -> "user" is a Guard-5 anchor kind,
                 # so facts the user stated survive the EvidenceAnchorWarden. Assistant/system turns
                 # stay unanchored (default "remote-api" -> agent_inference).
-                source=("user" if is_user else None),
+                source=(source or ("user" if is_user else None)),
                 turn_evidence_uuid=turn_evidence_uuid,
                 wait=False,
                 **key_kwargs,
@@ -1080,6 +1096,11 @@ def _ingest_pool(
         while run.cursor < len(run.plan):
             turn = run.plan[run.cursor]
             run.cursor += 1
+            writer_kwargs = (
+                {"source": turn.source, "writer_index": turn.writer_index}
+                if turn.writer_index >= 0
+                else {}
+            )
             episode_uuid = _ingest_turn(
                 client,
                 run.namespace,
@@ -1092,6 +1113,7 @@ def _ingest_pool(
                 turn_key=turn.turn_key or None,
                 evidence_cache=run.evidence_cache,
                 ingest_key=_ingest_key(turn),
+                **writer_kwargs,
             )
             run.last_progress_at = time.time()
             if episode_uuid:
@@ -1348,17 +1370,101 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ap.add_argument("--consolidation-call-budget", type=int, default=50)
     ap.add_argument(
         "--segmentation",
-        choices=["none", "sentence", "user-sentence", "adaptive"],
+        choices=["none", "sentence", "user-sentence", "adaptive", "adaptive-writer"],
         default=os.getenv("LME_SEGMENTATION", "sentence"),
         help=(
             "Turn segmentation strategy: "
             "'none' = no splitting (arm A), "
             "'sentence' = blind sentence split (arm B, default/legacy), "
             "'user-sentence' = split only user turns (arm C), "
-            "'adaptive' = claim-aware segmentation (arm D)"
+            "'adaptive' = claim-aware segmentation (arm D), "
+            "'adaptive-writer' = adaptive for user turns; assistant turns are evidence only and an "
+            "LLM memory writer produces agent-tier memories from them (#168)"
         ),
     )
+    ap.add_argument("--writer-granularity", choices=list(memory_writer.GRANULARITIES),
+                    default=os.getenv("LME_WRITER_GRANULARITY") or "turn",
+                    help="adaptive-writer: one writer request per assistant turn or per session")
+    ap.add_argument("--writer-model", default=os.getenv("LME_WRITER_MODEL") or "gpt-6-luna",
+                    help="adaptive-writer: OpenAI Flex model for the memory writer")
+    ap.add_argument("--writer-checkpoint", default=None,
+                    help="adaptive-writer: writer JSONL checkpoint (default: writer-<granularity>.jsonl "
+                         "next to the manifest and ingest state log)")
+    ap.add_argument("--writer-max-usd", type=float, default=os.getenv("LME_WRITER_MAX_USD"),
+                    help="adaptive-writer: required spend cap in USD (or LME_WRITER_MAX_USD)")
+    ap.add_argument("--writer-rates", default=os.getenv("LME_WRITER_RATES"),
+                    help="adaptive-writer: required 'IN,OUT' USD per 1M tokens (or LME_WRITER_RATES)")
+    ap.add_argument("--writer-workers", type=_positive_int, default=16,
+                    help="adaptive-writer: concurrent writer requests")
     return ap.parse_args(argv)
+
+
+def _run_writer_prepass(
+    args: argparse.Namespace,
+    adapter: LongMemEvalMemoryAdapter,
+    remaining: list[dict],
+    manifest_path: Path,
+) -> tuple[dict | None, int]:
+    """Run (or replay) the memory writer for the not-yet-ingested items.
+
+    Returns ``(items, 0)``, or ``(None, exit_code)`` after printing the error: 2 for a missing
+    key/budget/rates (nothing was sent), 1 for a writer or Flex failure (nothing was ingested).
+    """
+    api_key = os.getenv("OPENAI_API_KEY", "").strip()
+    max_usd = args.writer_max_usd
+    rates: tuple[float, float] | None = None
+    try:
+        parts = str(args.writer_rates or "").split(",")
+        if len(parts) == 2:
+            rates = (float(parts[0]), float(parts[1]))
+    except ValueError:
+        rates = None
+    problems = []
+    if not api_key:
+        problems.append("OPENAI_API_KEY is not set")
+    if not max_usd or max_usd <= 0:
+        problems.append("--writer-max-usd (or LME_WRITER_MAX_USD) must be > 0")
+    if rates is None:
+        problems.append("--writer-rates (or LME_WRITER_RATES) must be 'IN,OUT' USD per 1M tokens")
+    if problems:
+        print("adaptive-writer: " + "; ".join(problems), file=sys.stderr)
+        return None, 2
+
+    from archolith_bench.core.openai_flex import FlexError, run_flex
+
+    checkpoint = (
+        Path(args.writer_checkpoint)
+        if args.writer_checkpoint
+        else manifest_path.parent / f"writer-{args.writer_granularity}.jsonl"
+    )
+    sessions: list[memory_writer.WriterSession] = []
+    for index, item in enumerate(remaining):
+        namespace = _namespace(str(item.get("question_id") or f"lme-{index}"), args.namespace_prefix)
+        sessions.extend(_writer_sessions(adapter, item, namespace))
+    try:
+        items, report = memory_writer.write_memories(
+            sessions,
+            granularity=args.writer_granularity,
+            model=args.writer_model,
+            checkpoint=checkpoint,
+            run_flex=run_flex,
+            flex_kwargs={
+                "api_key": api_key,
+                "max_usd": max_usd,
+                "rates": rates,
+                "workers": args.writer_workers,
+            },
+        )
+    except (memory_writer.WriterError, FlexError) as exc:
+        print(f"adaptive-writer failed: {exc}", file=sys.stderr)
+        return None, 1
+    print(
+        f"adaptive-writer: requests={report.requests} items={report.items} dropped={report.dropped} "
+        f"prompt_tokens={report.prompt_tokens} completion_tokens={report.completion_tokens} "
+        f"cost_usd={report.cost_usd:.4f}",
+        file=sys.stderr,
+    )
+    return items, 0
 
 def _load_items(
     adapter: LongMemEvalMemoryAdapter,
@@ -1379,12 +1485,16 @@ def _namespace(question_id: str, prefix: str) -> str:
     return f"{clean_prefix}{question_id}"
 
 
-def _iter_item_turns(
+def _iter_sessions(
     adapter: LongMemEvalMemoryAdapter,
     item: dict,
     namespace: str,
-    segmentation: str,
-) -> Iterator[IngestTurn]:
+) -> Iterator[tuple[str, str | None, str | None, list[tuple[int, str, str]]]]:
+    """``(session_id, session_date, occurred_at, [(raw turn index, role, content)])`` per session.
+
+    Empty-content turns are skipped; indices are over the raw session. Shared by the turn plan and
+    the memory-writer prepass so both key a turn identically.
+    """
     haystack_dates = item.get("haystack_dates") or []
     haystack_session_ids = item.get("haystack_session_ids") or []
     for session_index, session in enumerate(adapter.sessions(item)):
@@ -1394,7 +1504,6 @@ def _iter_item_turns(
             if session_index < len(haystack_session_ids)
             else None
         )
-        occurred_at = _parse_lme_date(session_date)
         # Namespace-qualify the session id. LongMemEval reuses raw session ids across temporal
         # variants; sharing them lets Graphiti deduplicate the second namespace against the first.
         session_id = (
@@ -1402,11 +1511,40 @@ def _iter_item_turns(
             if raw_session_id
             else f"{namespace}-s{session_index}"
         )
-        for turn_index, turn in enumerate(session):
-            content = turn.get("content", "")
-            if not content:
-                continue
-            role = turn.get("role", "user")
+        turns = [
+            (turn_index, turn.get("role", "user"), turn.get("content", ""))
+            for turn_index, turn in enumerate(session)
+            if turn.get("content", "")
+        ]
+        yield session_id, session_date, _parse_lme_date(session_date), turns
+
+
+def _writer_sessions(
+    adapter: LongMemEvalMemoryAdapter,
+    item: dict,
+    namespace: str,
+) -> list[memory_writer.WriterSession]:
+    return [
+        memory_writer.WriterSession(
+            namespace=namespace,
+            session_id=session_id,
+            date=session_date or "",
+            turns=tuple(memory_writer.SessionTurn(index=i, role=r, content=c) for i, r, c in turns),
+        )
+        for session_id, session_date, _occurred_at, turns in _iter_sessions(adapter, item, namespace)
+    ]
+
+
+def _iter_item_turns(
+    adapter: LongMemEvalMemoryAdapter,
+    item: dict,
+    namespace: str,
+    segmentation: str,
+    writer_items: dict | None = None,
+) -> Iterator[IngestTurn]:
+    writer_mode = segmentation == "adaptive-writer"
+    for session_id, _session_date, occurred_at, session_turns in _iter_sessions(adapter, item, namespace):
+        for turn_index, role, content in session_turns:
             contents: list[str]
             # CONTEXT_ONLY turns take the evidence-only path below instead of
             # being merged into a neighbour. Merging would concatenate two source
@@ -1425,9 +1563,14 @@ def _iter_item_turns(
                     if role.strip().lower() == "user"
                     else [content]
                 )
-            elif segmentation == "adaptive":
+            elif segmentation in ("adaptive", "adaptive-writer"):
                 mode = decide_segmentation(role, content)
-                if mode == SegmentationMode.SKIP:
+                if writer_mode and role.strip().lower() == "assistant":
+                    # The writer replaces assistant extraction: the turn is evidence only, and the
+                    # writer's items (below) are the agent-tier memories grounded on it.
+                    contents = [content]
+                    extract = False
+                elif mode == SegmentationMode.SKIP:
                     contents = []
                 elif mode == SegmentationMode.CONTEXT_ONLY:
                     # Captured as evidence, never extracted. Purely interrogative
@@ -1462,11 +1605,30 @@ def _iter_item_turns(
                     turn_key=turn_key,
                     segment_index=segment_index,
                 )
+            if writer_mode and role.strip().lower() == "assistant":
+                for writer_index, writer_item in enumerate(
+                    (writer_items or {}).get((namespace, session_id, turn_index), [])
+                ):
+                    yield IngestTurn(
+                        role="agent",
+                        content=writer_item.text,
+                        occurred_at=occurred_at,
+                        session_id=session_id,
+                        extract=True,
+                        evidence_text=content,
+                        turn_key=turn_key,
+                        segment_index=0,
+                        source=memory_writer.WRITER_SOURCE,
+                        writer_index=writer_index,
+                    )
 
 
 def _ingest_key(turn: IngestTurn) -> str:
     """Idempotency key for one extractable segment: stable across attempts (P1), <= 256 chars."""
-    key = f"{turn.turn_key}#s{turn.segment_index}"
+    if turn.writer_index >= 0:
+        key = f"{turn.turn_key}#w{turn.writer_index}"
+    else:
+        key = f"{turn.turn_key}#s{turn.segment_index}"
     if len(key) > 256:
         return "sha256:" + hashlib.sha256(key.encode("utf-8")).hexdigest()
     return key
@@ -1477,8 +1639,12 @@ def _turn_plan(
     item: dict,
     namespace: str,
     segmentation: str,
+    writer_items: dict | None = None,
 ) -> list[IngestTurn]:
-    plan = list(_iter_item_turns(adapter, item, namespace, segmentation))
+    if writer_items is None:
+        plan = list(_iter_item_turns(adapter, item, namespace, segmentation))
+    else:
+        plan = list(_iter_item_turns(adapter, item, namespace, segmentation, writer_items))
     # P1 needs one key per segment: a duplicate would replay one segment in place of another.
     keys = Counter(_ingest_key(turn) for turn in plan if turn.extract)
     duplicates = sorted(key for key, n in keys.items() if n > 1)
@@ -1511,21 +1677,36 @@ def _hold_run_lock(path: Path):
     return handle
 
 
-def _turn_plan_digest(plan: list[IngestTurn], segmentation: str) -> str:
+def _turn_plan_digest(
+    plan: list[IngestTurn],
+    segmentation: str,
+    *,
+    writer_model: str | None = None,
+    writer_granularity: str | None = None,
+) -> str:
     """Digest of everything that decides what gets submitted; a resume must match it (P5)."""
     def _h(text: str) -> str:
         return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+    def _turn_payload(t: IngestTurn) -> list:
+        row = [t.turn_key, t.segment_index, t.extract, t.role, t.occurred_at, t.session_id,
+               _h(t.content), _h(t.evidence_text)]
+        if t.writer_index >= 0:
+            row += [t.source, t.writer_index]
+        return row
 
     payload = {
         "v": 1,
         "segmentation": segmentation,
         "split_min_length": _SPLIT_MIN_LENGTH,
-        "turns": [
-            [t.turn_key, t.segment_index, t.extract, t.role, t.occurred_at, t.session_id,
-             _h(t.content), _h(t.evidence_text)]
-            for t in plan
-        ],
+        "turns": [_turn_payload(t) for t in plan],
     }
+    if segmentation == "adaptive-writer":
+        payload["writer"] = {
+            "model": writer_model,
+            "granularity": writer_granularity,
+            "prompt_sha": memory_writer.prompt_sha(writer_granularity or "turn"),
+        }
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
     return _h(canonical)
 
@@ -1630,17 +1811,28 @@ def main(argv: list[str] | None = None) -> int:
         )
     print(f"to ingest this run: {len(remaining)} items", flush=True)
 
+    writer_items: dict | None = None
+    writer_digest_kwargs: dict = {}
+    if args.segmentation == "adaptive-writer":
+        writer_items, writer_exit = _run_writer_prepass(args, adapter, remaining, manifest_path)
+        if writer_items is None:
+            return writer_exit
+        writer_digest_kwargs = {
+            "writer_model": args.writer_model,
+            "writer_granularity": args.writer_granularity,
+        }
+
     runs = []
     for index, item in enumerate(remaining):
         question_id = str(item.get("question_id") or f"lme-{index}")
         namespace = _namespace(question_id, args.namespace_prefix)
-        plan = _turn_plan(adapter, item, namespace, args.segmentation)
+        plan = _turn_plan(adapter, item, namespace, args.segmentation, writer_items=writer_items)
         runs.append(NamespaceRun(
             item=item,
             question_id=question_id,
             namespace=namespace,
             plan=plan,
-            digest=_turn_plan_digest(plan, args.segmentation),
+            digest=_turn_plan_digest(plan, args.segmentation, **writer_digest_kwargs),
             segmentation=args.segmentation,
         ))
     state = IngestStateLog(IngestStateLog.path_for(manifest_path))

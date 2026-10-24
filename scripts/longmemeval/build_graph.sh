@@ -153,6 +153,21 @@ GRAPH_ATTEMPT_RECORD="${LME_RESULTS_DIR}/.graph-attempt-${LME_NEO4J_NAME}.json"
 # states. Empty on failure, which `run_provenance.py` reads as "absent" rather than as a digest
 # of "" -- fingerprinting stays non-fatal, consistent with the attach call further down.
 GRAPH_SURFACE_DIGEST="$("${BENCH_PY}" "$(dirname "${BASH_SOURCE[0]}")/lib/bench_surface.py" fingerprint --digest-only 2>/dev/null || true)"
+WRITER_PROMPT_SHA=""
+WRITER_MODEL_RECORD=""
+WRITER_GRANULARITY_RECORD=""
+WRITER_SETTING_ARGS=()
+if [ "${LME_SEGMENTATION}" = "adaptive-writer" ]; then
+  WRITER_MODEL_RECORD="${LME_WRITER_MODEL}"
+  WRITER_GRANULARITY_RECORD="${LME_WRITER_GRANULARITY}"
+  WRITER_PROMPT_SHA="$("${BENCH_PY}" "$(dirname "${BASH_SOURCE[0]}")/lib/memory_writer.py" prompt-sha "${LME_WRITER_GRANULARITY}")" ||
+    die "could not compute writer prompt sha"
+  WRITER_SETTING_ARGS=(
+    --setting "writer_model=${WRITER_MODEL_RECORD}"
+    --setting "writer_granularity=${WRITER_GRANULARITY_RECORD}"
+    --setting "writer_prompt_sha=${WRITER_PROMPT_SHA}"
+  )
+fi
 cat > "${GRAPH_ATTEMPT_RECORD}" <<EOF
 {
   "container": "${LME_NEO4J_NAME}",
@@ -199,7 +214,10 @@ cat > "${GRAPH_ATTEMPT_RECORD}" <<EOF
   "bench_commit": "$(git -C "${BENCH_DIR}" rev-parse HEAD 2>/dev/null || echo unknown)",
   "surface_digest": "${GRAPH_SURFACE_DIGEST}",
   "started_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-  "build_started_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  "build_started_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+  "writer_model": "${WRITER_MODEL_RECORD}",
+  "writer_granularity": "${WRITER_GRANULARITY_RECORD}",
+  "writer_prompt_sha": "${WRITER_PROMPT_SHA}"
 }
 EOF
 PROVENANCE_BEGIN_ARGS=("begin" "${GRAPH_PROVENANCE_PATH}" "${GRAPH_ATTEMPT_RECORD}")
@@ -281,7 +299,8 @@ fi
   --setting "anchored_time_model=${LME_ANCHORED_TIME_MODEL}" \
   --setting "anchored_time_attach_model=${LME_ANCHORED_TIME_ATTACH_MODEL}" \
   --setting "openai_service_tier=${LME_OPENAI_SERVICE_TIER}" \
-  --setting "max_llm_calls_per_job=${LME_MAX_LLM_CALLS_PER_JOB}"
+  --setting "max_llm_calls_per_job=${LME_MAX_LLM_CALLS_PER_JOB}" \
+  ${WRITER_SETTING_ARGS[@]+"${WRITER_SETTING_ARGS[@]}"}
 log "graph provenance recorded: ${GRAPH_PROVENANCE_PATH} (graph_fresh=${GRAPH_FRESH})"
 
 # ---- untracked-file preflight ----
@@ -417,6 +436,12 @@ INGEST_ARGS=(
 )
 if [ -n "${LME_FIXTURE_PATH:-}" ]; then
   INGEST_ARGS+=(--fixture "${LME_FIXTURE_PATH}")
+fi
+# config.sh does not export the writer vars, so pass them explicitly (writer mode only).
+if [ "${LME_SEGMENTATION}" = "adaptive-writer" ]; then
+  INGEST_ARGS+=(--writer-granularity "${LME_WRITER_GRANULARITY}" --writer-model "${LME_WRITER_MODEL}")
+  if [ -n "${LME_WRITER_MAX_USD}" ]; then INGEST_ARGS+=(--writer-max-usd "${LME_WRITER_MAX_USD}"); fi
+  if [ -n "${LME_WRITER_RATES}" ]; then INGEST_ARGS+=(--writer-rates "${LME_WRITER_RATES}"); fi
 fi
 if [ -n "${LME_RESET_FILE:-}" ]; then
   INGEST_ARGS+=(--reset-file "${LME_RESET_FILE}")
