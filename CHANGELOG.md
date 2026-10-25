@@ -1,3 +1,9 @@
+## 2026-10-25 - Optionally render Menhir source memories (`--source-memories`)
+
+- `--source-memories` renders the recall response's `source_memories` (raw episodes, oldest first) as one block after the memories and counted verdicts, outside `--recall-limit`, in Menhir's own `build_context` format without the pool tag. Off by default; off leaves the context and `prompt_fingerprint` unchanged, on adds `sm` to the checkpoint tag. A blocking event advisory still suppresses it; agentic recall keeps one block.
+- Why: Menhir sends these by default and its agent context shows them, but the bench dropped them. On o500 stable multi-session failures the rendered context held 68% of the evidence numbers (92% with source memories); temporal 57% (93%).
+- `tests/test_menhir_client_source_memories.py`.
+
 ## 2026-10-25 - Menhir recall facts render their statement time
 
 - `archolith_bench/harness/menhir_client.py`: a fact line becomes `- <happened> | said <time> | <fact>` when Menhir sends `said_at` (Menhir `MENHIR_FRONTIER_FACT_SAID_TIME`, off by default); unchanged otherwise, so the answer prompt is the same for arms without it.
@@ -56,11 +62,3 @@
 
 - `lme.sh validate` refuses to run without `--expected N` (positive integer), and `validate_run.py --require-fresh-clean` refuses without `--expected-items`. Before this, `manifest_cardinality` passed any non-empty manifest, so a short canonical run could be accepted.
 - `validate(require_fresh_clean=True)` without an expected count reports `manifest_cardinality` as FAIL for library callers.
-
-## 2026-10-04 - Validate requested LongMemEval processing lanes
-
-- Explicitly configure, validate, forward, and freeze Graphiti canonical-self binding mode across build resumes.
-- Pass opt-in counter and event selections through the build server and Phase-3 request.
-- Refuse disabled, failed, unfinished, or unmeasured requested lanes before manifesting and at final acceptance.
-- Record lane receipts and separate total, scalar, and event call counts; refuse incompatible resumes.
-- Add offline API-response and shell-wiring regressions, and document the companion Menhir response fields.

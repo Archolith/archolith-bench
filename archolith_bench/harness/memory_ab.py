@@ -187,6 +187,7 @@ def _agentic_recall(client: "MenhirClient", group_id: str, subqueries: list[str]
     counted = 0
     facets_kept = 0
     verdicts_kept = 0
+    sources_kept = False
     for sq in subqueries:
         # Only counted-mode clients take the limit; the except below would hide a TypeError.
         kw = ({"counted_verdict_limit": max(0, COUNTED_AUTHORITY_MAX - verdicts_kept)}
@@ -197,10 +198,16 @@ def _agentic_recall(client: "MenhirClient", group_id: str, subqueries: list[str]
             snippets = []
         extras = set(getattr(snippets, "extras", ()))
         counted_verdicts = set(getattr(snippets, "counted", ()))
+        sources = set(getattr(snippets, "sources", ()))
         for snip in snippets:
             if snip in seen:
                 continue
-            if snip in counted_verdicts:
+            if snip in sources:
+                # One source-memory block per context, outside the limit, as single-query recall.
+                if sources_kept:
+                    continue
+                sources_kept = True
+            elif snip in counted_verdicts:
                 # Counted verdicts (counted_authority_only) have their own cap, outside the limit.
                 if verdicts_kept >= COUNTED_AUTHORITY_MAX:
                     continue
