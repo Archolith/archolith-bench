@@ -49,6 +49,17 @@ def test_harness_recall_limit_defaults_to_20(monkeypatch) -> None:
     assert inspect.signature(run_memory_ab).parameters["recall_limit"].default == 20
 
 
+def test_harness_source_memories_default_on_with_opt_out(monkeypatch) -> None:
+    from archolith_bench import cli
+
+    seen = {}
+    monkeypatch.setattr(cli, "_run_harness", lambda args: seen.update(vars(args)))
+    cli.main(["harness", "longmemeval-menhir"])
+    assert seen["source_memories"] is True
+    cli.main(["harness", "longmemeval-menhir", "--no-source-memories"])
+    assert seen["source_memories"] is False
+
+
 def test_checkpoint_is_keyed_by_the_answer_prompt(tmp_path) -> None:
     fp = LongMemEvalMemoryAdapter.prompt_fingerprint
     assert len(fp) == 10

@@ -1,3 +1,9 @@
+## 2026-10-25 - Render Menhir source memories by default
+
+- `--source-memories` is now on by default; `--no-source-memories` restores the old context. Every harness run, including `run_stratified_slice`, gets the source block, and the checkpoint tag gains `sm`: scores from here on are not like-for-like with earlier baselines.
+- o500 recall-only A/B (#39, Menhir 37e309a3, #37 prompt, limit 20, #38 said time, one run per arm, paired): 0.738 without, 0.804 with Menhir's default 10 source memories (+6.6 points, 95% CI +3.6 to +9.6, 46 wins, 13 losses), 0.808 with 20 (within noise of 10). Multi-session gained most (+16); 31 items wrong in at least 6 of the 7 earlier runs now pass. Answer input tokens +24%.
+- `tests/test_longmemeval_answer_prompt.py`: `test_harness_source_memories_default_on_with_opt_out`.
+
 ## 2026-10-25 - Optionally render Menhir source memories (`--source-memories`)
 
 - `--source-memories` renders the recall response's `source_memories` (raw episodes, oldest first) as one block after the memories and counted verdicts, outside `--recall-limit`, in Menhir's own `build_context` format without the pool tag. Off by default; off leaves the context and `prompt_fingerprint` unchanged, on adds `sm` to the checkpoint tag. A blocking event advisory still suppresses it; agentic recall keeps one block.
@@ -57,8 +63,3 @@
 
 - After each item, ingest records read-only graph integrity counts in the manifest: submitted vs admitted user turns, admitted turns that were never projected, unfounded assertions, Graphiti episodes whose `valid_at` is not a submitted session date, READY queue episodes not paired to their Graphiti time, and cross-namespace links.
 - `validate_run.py` adds `provenance_chain` and `source_time_integrity` checks, and `namespace_isolation` also fails on cross-namespace links. A missing or unreadable count fails as unknown.
-
-## 2026-10-05 - Require an expected item count for canonical acceptance
-
-- `lme.sh validate` refuses to run without `--expected N` (positive integer), and `validate_run.py --require-fresh-clean` refuses without `--expected-items`. Before this, `manifest_cardinality` passed any non-empty manifest, so a short canonical run could be accepted.
-- `validate(require_fresh_clean=True)` without an expected count reports `manifest_cardinality` as FAIL for library callers.
