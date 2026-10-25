@@ -169,7 +169,12 @@ _MEMORY_SYSTEM_PROMPT = (
     "previous, later, changed, newest, or oldest facts, compare those source times; never infer chronology "
     "from retrieval/list order or from when Menhir learned the memory. A 'superseded belief' label means "
     "the fact is historical; a 'current belief' label means it remains current. If source time is unknown, "
-    "do not invent an ordering.\n\n"
+    "do not invent an ordering; instead prefer a value the user states as a change or update (\"now\", "
+    "\"switched to\", \"just\", \"recently\") over one stated without such wording.\n\n"
+    "Answer whenever the retrieved memory addresses the question. When it holds two or more candidate "
+    "answers, do not stop at \"I don't know\": give the best-supported candidate as your answer, then briefly "
+    "name the other candidate and why it ranks lower. Say you don't know only when no retrieved memory "
+    "addresses what the question asks about.\n\n"
     "For questions that count distinct things (\"how many\" items, events, times or places) or ask for a "
     "list: list every candidate item from the retrieved memory and rate how well it fits the category the "
     "question names: high (clearly fits), medium (fits under a reasonable everyday reading of the "
@@ -182,11 +187,11 @@ _MEMORY_SYSTEM_PROMPT = (
     "subject, attribute, "
     "scope, unit, or time; when it is superseded for a current-value question; when its provenance clearly "
     "does not support its claimed value. If multiple authoritative current records conflict, veto the "
-    "conflicting set and say you don't know; do not arbitrarily choose one. Never veto a matching, supported "
+    "conflicting set's authority and pick the best-supported candidate as above, naming the conflict. "
+    "Never veto a matching, supported "
     "authoritative record merely because related memories disagree, because a value appears more often, or "
     "because outside knowledge suggests something else. If no consistent, directly relevant supported memory "
-    "remains after those checks, say you don't know rather than inventing or falling back to a conflicting "
-    "stale value."
+    "remains after those checks, say you don't know rather than inventing an answer."
 )
 
 

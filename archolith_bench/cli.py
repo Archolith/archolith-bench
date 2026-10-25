@@ -297,9 +297,9 @@ def main(argv: list[str] | None = None) -> None:
                            help="menhir-scalar-state: fixture set -- 'default' (first-person, 9 kinds + "
                                 "advisory/control) or 'third-party' (named 'Alice' subject, Lever 3 "
                                 "binder-isolation experiment)")
-    harness_p.add_argument("--recall-limit", type=int, default=10,
+    harness_p.add_argument("--recall-limit", type=int, default=20,
                            help="Memory benchmarks: how many memory snippets to recall per question "
-                                "(default 10; raise for multi-fact temporal-reasoning questions)")
+                                "(default 20; was 10 before the o500 best-candidate prompt A/B)")
     harness_p.add_argument("--resume", action="store_true",
                            help="Memory benchmarks: checkpoint each item and skip already-completed "
                                 "items on rerun (survives crashes/rate-limit aborts). Rerun the same command.")

@@ -64,7 +64,7 @@ def run_stratified_slice(
     questions_per_type: int = DEFAULT_QUESTIONS_PER_TYPE,
     slice_types: tuple[str, ...] = DEFAULT_SLICE_TYPES,
     scorer: str = "llm-judge",
-    recall_limit: int = 10,
+    recall_limit: int = 20,
     extra_args: list[str] | None = None,
     dry_run: bool = False,
 ) -> StratifiedResult:

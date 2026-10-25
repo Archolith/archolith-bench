@@ -212,14 +212,14 @@ def test_longmemeval_answer_prompt_explains_authority_precedence():
     assert "canonical current value" in messages[0]["content"]
     assert "Safe veto policy" in messages[0]["content"]
     assert "subject, attribute, scope, unit, or time" in messages[0]["content"]
-    assert "veto the conflicting set and say you don't know" in messages[0]["content"]
+    assert "veto the conflicting set's authority and pick the best-supported candidate" in messages[0]["content"]
     assert "Never veto a matching, supported authoritative record" in messages[0]["content"]
     assert "compare those source times" in messages[0]["content"]
     assert "never infer chronology from retrieval/list order" in messages[0]["content"]
     assert "'superseded belief' label means the fact is historical" in messages[0]["content"]
     assert "If source time is unknown, do not invent an ordering" in messages[0]["content"]
     assert "outside knowledge suggests something else" in messages[0]["content"]
-    assert "falling back to a conflicting stale value" in messages[0]["content"]
+    assert "say you don't know rather than inventing an answer" in messages[0]["content"]
     assert messages[1]["content"].index("= 120") < messages[1]["content"].index("125 stars")
 
 

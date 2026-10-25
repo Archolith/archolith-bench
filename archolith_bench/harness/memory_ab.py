@@ -635,8 +635,8 @@ def run_memory_ab(
     api_key: str = API_KEY,
     model: str = MODEL,
     # MSC sweep knob: override the recall top-k via env so accuracy-vs-context can be
-    # measured without a CLI change. Default 10 preserves prior behavior when unset.
-    recall_limit: int = int(os.getenv("LME_RECALL_LIMIT", "10")),
+    # measured without a CLI change. Default 20, matching the CLI.
+    recall_limit: int = int(os.getenv("LME_RECALL_LIMIT", "20")),
     pricing: PricingModel | None = None,
     reset_memory: bool = True,
     reset_confirmed: bool = False,
