@@ -28,6 +28,7 @@ import string
 from pathlib import Path
 
 from .base import Task
+from .scoring import is_lme_abstention
 
 _SYSTEM_PROMPT = (
     "You are a helpful assistant with long-term memory of the user's prior conversations. "
@@ -101,13 +102,17 @@ def _load_lme_items(subset: str | None, fixture_path: str | Path | None) -> list
     return items
 
 
-def _score_answer(answer: str, question_type: str | None, response_text: str) -> bool:
-    """Normalized-containment scorer with abstention handling (shared by both modes)."""
+def _score_answer(answer: str, question_type: str | None, response_text: str,
+                  *, abstention: bool = False) -> bool:
+    """Normalized-containment scorer with abstention handling (shared by both modes).
+
+    ``abstention``: the item is unanswerable (LongMemEval ``_abs`` question id); its gold is an
+    explanation, not an answer to contain."""
     gold = _normalize(answer)
     resp = _normalize(response_text)
     if not resp:
         return False
-    if question_type == "abstention" or gold in {"", "no answer", "unknown"}:
+    if abstention or question_type == "abstention" or gold in {"", "no answer", "unknown"}:
         return any(p in resp for p in ("dont know", "not sure", "no information", "cannot", "unable"))
     if not gold or _has_negated_gold(gold, resp):
         return False
@@ -149,7 +154,8 @@ class LongMemEvalAdapter:
         return tasks
 
     def score(self, task: Task, response_text: str) -> bool:
-        return _score_answer(task.answer, task.meta.get("question_type"), response_text)
+        return _score_answer(task.answer, task.meta.get("question_type"), response_text,
+                             abstention="_abs" in task.task_id)
 
 
 _MEMORY_SYSTEM_PROMPT = (
@@ -241,4 +247,5 @@ class LongMemEvalMemoryAdapter:
         ]
 
     def score(self, item: dict, response_text: str) -> bool:
-        return _score_answer(str(item.get("answer", "")), item.get("question_type"), response_text)
+        return _score_answer(str(item.get("answer", "")), item.get("question_type"), response_text,
+                             abstention=is_lme_abstention(item))

@@ -1,3 +1,10 @@
+## 2026-10-25 - Grade LongMemEval with its official judge prompts; `_abs` ids are abstentions
+
+- `--scorer llm-judge` now sends LongMemEval items LongMemEval's own judge prompts, verbatim from `get_anscheck_prompt()` in `src/evaluation/evaluate_qa.py` (commit d6dc8b50a2d9): one per question type (temporal forgives off-by-one counts, knowledge-update accepts the old value next to the updated one, preference grades against the rubric), sent as a single user message. Items without a LongMemEval question type keep the generic prompts. The judge model is unchanged.
+- Unanswerable items are found by their `_abs` question id, as LongMemEval does. Before, `_is_abstention()` only matched `question_type == "abstention"` or an empty gold, so all 30 `_abs` items in o500 were graded as "does the answer match this explanation?". The containment scorer gets the same fix.
+- Scores from here on are not like-for-like with earlier baselines. Judge runs get their own checkpoint tag (`oj`), so a resume never mixes grades. `archolith_bench/harness/scoring.py` is added to the `score` stage of `bench-surface.yaml`.
+- `tests/test_lme_official_judge.py`.
+
 ## 2026-10-25 - Render Menhir source memories by default
 
 - `--source-memories` is now on by default; `--no-source-memories` restores the old context. Every harness run, including `run_stratified_slice`, gets the source block, and the checkpoint tag gains `sm`: scores from here on are not like-for-like with earlier baselines.
@@ -58,8 +65,3 @@
 - `harness --recall-only --drill-down`: when Menhir collapses a scalar View to its total, the recall shows Menhir's own `built from N items; drill down: get_scalar_view_items(view_uuid=...)` line, and the answer model gets that tool plus a prompt note to use it as needed. Calls are served from `GET /api/scalar-views/{view_uuid}/items`, only for views shown in that item's recall and only in its namespace.
 - Items whose recall shows no collapsed View are answered exactly as before. Without `--drill-down` nothing changes.
 - New `send_chat_with_tools` shares `send_chat`'s retry policy (Flex waits, no retry on `insufficient_quota`); its last round forbids tools so the model has to answer. Tool calls are recorded in each result's `raw_usage`.
-
-## 2026-10-05 - Check provenance, source time and cross-namespace links at acceptance
-
-- After each item, ingest records read-only graph integrity counts in the manifest: submitted vs admitted user turns, admitted turns that were never projected, unfounded assertions, Graphiti episodes whose `valid_at` is not a submitted session date, READY queue episodes not paired to their Graphiti time, and cross-namespace links.
-- `validate_run.py` adds `provenance_chain` and `source_time_integrity` checks, and `namespace_isolation` also fails on cross-namespace links. A missing or unreadable count fails as unknown.
