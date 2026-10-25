@@ -334,11 +334,12 @@ def main(argv: list[str] | None = None) -> None:
                                 "'counted', advisory) no longer mark the other memories "
                                 "non-authoritative; they render after the memories, outside "
                                 "--recall-limit (at most 3). Other verdicts are unchanged.")
-    harness_p.add_argument("--source-memories", action="store_true",
+    harness_p.add_argument("--source-memories", action=argparse.BooleanOptionalAction, default=True,
                            help="Memory benchmarks: render Menhir's source memories (raw episodes, "
                                 "oldest first, as its build_context does) as one block after the "
-                                "memories, outside --recall-limit. Menhir sends them when "
-                                "MENHIR_FRONTIER_SOURCE_MEMORIES is on (its default).")
+                                "memories, outside --recall-limit (default on; was off before the "
+                                "o500 A/B). Menhir sends them when MENHIR_FRONTIER_SOURCE_MEMORIES "
+                                "is on (its default). --no-source-memories restores the old context.")
     harness_p.add_argument("--namespace-template", default="lme-{question_id}",
                            help="Recall-only: namespace per item, formatted with {question_id} "
                                 "(default: lme-{question_id}, matching _ingest_lme.py).")
