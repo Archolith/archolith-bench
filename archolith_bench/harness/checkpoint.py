@@ -49,11 +49,12 @@ def checkpoint_path_for(
 
 def checkpoint_prompt_tag(
     adapter: object, *, drill_down: bool = False, counted_authority_only: bool = False,
+    source_memories: bool = False,
 ) -> str | None:
-    """The ``prompt_tag`` for a run: the adapter's prompt fingerprint, marked for drill-down and
-    for counted-authority-only rendering.
+    """The ``prompt_tag`` for a run: the adapter's prompt fingerprint, marked for drill-down,
+    counted-authority-only and source-memory rendering.
 
-    Both change how answers are produced but not the arm names, so without the mark a resume
+    Each changes how answers are produced but not the arm names, so without the mark a resume
     would mix them with plain answers in one checkpoint.
     """
     tag = getattr(adapter, "prompt_fingerprint", None)
@@ -61,6 +62,8 @@ def checkpoint_prompt_tag(
         tag = f"{tag or ''}dd"
     if counted_authority_only:
         tag = f"{tag or ''}ca"
+    if source_memories:
+        tag = f"{tag or ''}sm"
     return tag
 
 

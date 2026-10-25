@@ -32,17 +32,36 @@ COUNTED_AUTHORITY_MAX = 3
 
 
 class RecallSnippets(list):
-    """Rendered recall snippets. ``extras`` are the verb-facet snippets and counted verdicts among
-    them: they sit outside ``limit``, so a caller that re-caps the context must not count them.
-    ``counted`` is the counted-verdict subset, capped separately from the facets."""
+    """Rendered recall snippets. ``extras`` are the verb-facet snippets, counted verdicts and the
+    source-memory block among them: they sit outside ``limit``, so a caller that re-caps the
+    context must not count them. ``counted`` is the counted-verdict subset, capped separately from
+    the facets; ``sources`` is the source-memory block (at most one)."""
 
     def __init__(
         self, snippets: Iterable[str] = (), extras: Iterable[str] = (),
-        counted: Iterable[str] = (),
+        counted: Iterable[str] = (), sources: Iterable[str] = (),
     ) -> None:
         super().__init__(snippets)
         self.extras: tuple[str, ...] = tuple(extras)
         self.counted: tuple[str, ...] = tuple(counted)
+        self.sources: tuple[str, ...] = tuple(sources)
+
+
+def format_source_memories(raw: Any) -> str:
+    """Menhir's source-memory section (raw episodes, oldest first) as its build_context renders
+    it, without the internal pool tag. Empty when there is nothing to show."""
+    if not isinstance(raw, list):
+        return ""
+    lines = []
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        content = str(entry.get("content") or "").strip()
+        if content:
+            lines.append(f"  - {entry.get('reference_time') or 'unknown time'} | {content}")
+    if not lines:
+        return ""
+    return "\n".join(["Source memories (raw episodes, oldest first):", *lines])
 
 
 def is_counted_advisory(record: dict[str, Any]) -> bool:
@@ -484,6 +503,7 @@ class HttpMenhirClient:
         timeout: float = 180.0,
         drill_down: bool = False,
         counted_authority_only: bool = False,
+        source_memories: bool = False,
     ) -> None:
         """
         Initialize HTTP client against a real menhir instance.
@@ -504,10 +524,14 @@ class HttpMenhirClient:
                 memories non-authoritative; they render after the memories, outside ``limit``,
                 at most COUNTED_AUTHORITY_MAX (also sent to Menhir so evidence for unshown
                 counted verdicts stays in recall). Other verdicts are unchanged.
+            source_memories: Render the response's ``source_memories`` (raw episodes, as Menhir's
+                own build_context does) as one block after the memories, outside ``limit``.
+                Not on a blocking event advisory, which suppresses the memories too.
         """
         self._base_url = base_url
         self._drill_down = drill_down
         self._counted_authority_only = counted_authority_only
+        self._source_memories = source_memories
         self._ingest_path = ingest_path
         self._recall_path = recall_path
         self._client = httpx.Client(timeout=timeout)
@@ -837,9 +861,15 @@ class HttpMenhirClient:
             for record in counted_records[:effective_verdict_limit]
             if (rendered := _format_authority_record(record, drill_down=self._drill_down))
         ]
-        if not counted:
+        sources = []
+        if self._source_memories and isinstance(data, dict):
+            block = format_source_memories(data.get("source_memories"))
+            if block:
+                sources.append(block)
+        tail = [*counted, *sources]
+        if not tail:
             return placed
-        return RecallSnippets([*placed, *counted], [*placed.extras, *counted], counted)
+        return RecallSnippets([*placed, *tail], [*placed.extras, *tail], counted, sources)
 
     def get_scalar_view_items(
         self, namespace: str, view_uuid: str, *, offset: int = 0, limit: int = 20

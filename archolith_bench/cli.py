@@ -334,6 +334,11 @@ def main(argv: list[str] | None = None) -> None:
                                 "'counted', advisory) no longer mark the other memories "
                                 "non-authoritative; they render after the memories, outside "
                                 "--recall-limit (at most 3). Other verdicts are unchanged.")
+    harness_p.add_argument("--source-memories", action="store_true",
+                           help="Memory benchmarks: render Menhir's source memories (raw episodes, "
+                                "oldest first, as its build_context does) as one block after the "
+                                "memories, outside --recall-limit. Menhir sends them when "
+                                "MENHIR_FRONTIER_SOURCE_MEMORIES is on (its default).")
     harness_p.add_argument("--namespace-template", default="lme-{question_id}",
                            help="Recall-only: namespace per item, formatted with {question_id} "
                                 "(default: lme-{question_id}, matching _ingest_lme.py).")
@@ -1277,6 +1282,7 @@ def _run_harness(args: argparse.Namespace) -> None:
             client = HttpMenhirClient(
                 args.menhir_url, api_key=menhir_key, drill_down=getattr(args, "drill_down", False),
                 counted_authority_only=getattr(args, "counted_authority_only", False),
+                source_memories=getattr(args, "source_memories", False),
             )
             send_fn = send_chat
         checkpoint = None
@@ -1285,7 +1291,8 @@ def _run_harness(args: argparse.Namespace) -> None:
                 args.output_dir, adapter.benchmark_id, args.model,
                 prompt_tag=checkpoint_prompt_tag(
                     adapter, drill_down=getattr(args, "drill_down", False),
-                    counted_authority_only=getattr(args, "counted_authority_only", False)),
+                    counted_authority_only=getattr(args, "counted_authority_only", False),
+                    source_memories=getattr(args, "source_memories", False)),
             )
             checkpoint = MemoryCheckpoint(ckpt_path)
             done = checkpoint.done_count()
