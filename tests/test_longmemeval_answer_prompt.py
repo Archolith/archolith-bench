@@ -24,6 +24,31 @@ def test_current_quantity_questions_answer_the_value_not_a_count() -> None:
             ) in _MEMORY_SYSTEM_PROMPT
 
 
+def test_candidate_answers_get_the_best_supported_one_not_a_bare_dont_know() -> None:
+    assert "Answer whenever the retrieved memory addresses the question" in _MEMORY_SYSTEM_PROMPT
+    assert ('do not stop at "I don\'t know": give the best-supported candidate as your answer, then briefly '
+            "name the other candidate") in _MEMORY_SYSTEM_PROMPT
+    assert ("Say you don't know only when no retrieved memory addresses what the question asks about"
+            ) in _MEMORY_SYSTEM_PROMPT
+    # Undated candidates: a value stated as a change outranks one stated without such wording.
+    assert 'prefer a value the user states as a change or update ("now"' in _MEMORY_SYSTEM_PROMPT
+    assert "say you don't know; do not arbitrarily choose one" not in _MEMORY_SYSTEM_PROMPT
+
+
+def test_harness_recall_limit_defaults_to_20(monkeypatch) -> None:
+    import inspect
+
+    from archolith_bench import cli
+    from archolith_bench.ci.stratified import run_stratified_slice
+
+    seen = {}
+    monkeypatch.setattr(cli, "_run_harness", lambda args: seen.update(vars(args)))
+    cli.main(["harness", "longmemeval-menhir"])
+    assert seen["recall_limit"] == 20
+    assert inspect.signature(run_stratified_slice).parameters["recall_limit"].default == 20
+    assert inspect.signature(run_memory_ab).parameters["recall_limit"].default == 20
+
+
 def test_checkpoint_is_keyed_by_the_answer_prompt(tmp_path) -> None:
     fp = LongMemEvalMemoryAdapter.prompt_fingerprint
     assert len(fp) == 10

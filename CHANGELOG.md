@@ -1,3 +1,9 @@
+## 2026-10-25 - LME answer prompt picks the best-supported candidate; recall limit 20
+
+- The memory answer prompt no longer stops at "I don't know" when the recall holds candidate answers: it gives the best-supported one, names the other, and abstains only when no memory addresses the question. With unknown source times it prefers a value stated as a change ("now", "switched to"). Conflicting authoritative records lose their authority instead of forcing "I don't know". The answer `prompt_fingerprint` changes for every arm.
+- `--recall-limit` defaults to 20 (was 10), as do `run_memory_ab` (`LME_RECALL_LIMIT`) and `run_stratified_slice`.
+- o500 recall-only A/B (Menhir 953ca6e + #383, bench 06ab93b, one run per arm): 0.694 baseline, 0.686 with limit 20 alone, 0.710 with the prompt alone, 0.720 with both (+2.6 points, 95% CI +0.2 to +5.0; "don't know" answers 67 to 36; abstention items did not drop). Not measured together with the #36 writer prompt text.
+
 ## 2026-10-24 - Agent memory writer for assistant turns (`LME_SEGMENTATION=adaptive-writer`, #168 P3)
 
 - New segmentation mode `adaptive-writer`: user turns go through `adaptive` unchanged; assistant turns are recorded as TurnEvidence only, and an LLM writer (`scripts/longmemeval/lib/memory_writer.py`, OpenAI Flex) turns each one into 0..20 standalone, dated, third-person items about what the assistant said. Each item is ingested as `role=agent`, `source=agent-writer`, grounded on its assistant turn's evidence, so it stays agent-tier and cannot supersede a user statement in Menhir.
