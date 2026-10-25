@@ -1,3 +1,8 @@
+## 2026-10-25 - Menhir recall facts render their statement time
+
+- `archolith_bench/harness/menhir_client.py`: a fact line becomes `- <happened> | said <time> | <fact>` when Menhir sends `said_at` (Menhir `MENHIR_FRONTIER_FACT_SAID_TIME`, off by default); unchanged otherwise, so the answer prompt is the same for arms without it.
+- `tests/test_menhir_client_contract.py`: `test_recall_renders_said_time_only_when_menhir_sends_it`.
+
 ## 2026-10-25 - LME answer prompt picks the best-supported candidate; recall limit 20
 
 - The memory answer prompt no longer stops at "I don't know" when the recall holds candidate answers: it gives the best-supported one, names the other, and abstains only when no memory addresses the question. With unknown source times it prefers a value stated as a change ("now", "switched to"). Conflicting authoritative records lose their authority instead of forcing "I don't know". The answer `prompt_fingerprint` changes for every arm.

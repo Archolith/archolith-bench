@@ -348,6 +348,39 @@ def test_recall_ignores_timestamp_only_temporal_bookkeeping(http_client):
     assert "supporting fact text unavailable" not in recalled[0]
 
 
+def test_recall_renders_said_time_only_when_menhir_sends_it(http_client):
+    client, fake = http_client
+    fake.response_data = {
+        "results": [{
+            "name": "Fitbit",
+            "content": "User wears a Fitbit.",
+            "temporal_facts": [
+                {
+                    "fact": "User has worn a Fitbit for 3 months",
+                    "valid_at": "2023-03-01T00:00:00Z",
+                    "said_at": "2023-06-01T10:00:00Z",
+                    "temporal_role": "current_belief",
+                },
+                {
+                    "fact": "User switched to an Apple Watch",
+                    "valid_at": "2023-05-20T00:00:00Z",
+                    "temporal_role": "current_belief",
+                },
+            ],
+        }]
+    }
+
+    recalled = client.recall("lme-08e075c7", "What watch?")
+
+    assert recalled == [
+        "Fitbit: User wears a Fitbit.\n"
+        "source-time evidence (when the fact was true):\n"
+        "- 2023-03-01T00:00:00Z | said 2023-06-01T10:00:00Z"
+        " | User has worn a Fitbit for 3 months | belief: current belief\n"
+        "- 2023-05-20T00:00:00Z | User switched to an Apple Watch | belief: current belief"
+    ]
+
+
 def test_recall_labels_string_results_when_authority_is_present(http_client):
     client, fake = http_client
     fake.response_data = {

@@ -135,7 +135,10 @@ def _format_source_time_evidence(item: dict[str, Any]) -> str:
             happened = valid_at or "unknown"
         role = str(temporal_fact.get("temporal_role") or "").strip().replace("_", " ")
         role_label = f" | belief: {role}" if role else ""
-        lines.append(f"- {happened} | {fact}{role_label}")
+        # Statement time, only when Menhir sends it (MENHIR_FRONTIER_FACT_SAID_TIME).
+        said_at = str(temporal_fact.get("said_at") or "").strip()
+        said_label = f" | said {said_at}" if said_at else ""
+        lines.append(f"- {happened}{said_label} | {fact}{role_label}")
     if len(lines) == 1:
         return "source time: unknown"
     return "\n".join(lines)
