@@ -473,10 +473,12 @@ fi
 # Benchmark mode runs no scheduler, so nothing repairs a READY episode whose content embedding the
 # worker failed to write: the source-memory lane silently cannot see it. Embed the gaps with the
 # serving tree's code and exit non-zero (set -e stops the build) if any READY episode is still
-# unembedded. Uses the NEO4J_*/embed settings exported above.
+# unembedded. Uses the NEO4J_*/embed settings exported above. PYTHONPATH pins the serving tree's
+# src, as menhir-main.sh does: a shared venv's editable install may point at another checkout.
 if [ "${LME_EMBED_BACKFILL}" = "1" ]; then
   log "backfilling missing episode content embeddings (--require-complete)..."
-  "${MENHIR_FRONTIER_PY}" "${MENHIR_FRONTIER}/scripts/backfill_episode_embeddings.py" --require-complete
+  PYTHONPATH="${MENHIR_FRONTIER}/src" \
+    "${MENHIR_FRONTIER_PY}" "${MENHIR_FRONTIER}/scripts/backfill_episode_embeddings.py" --require-complete
 else
   log "embedding backfill SKIPPED (LME_EMBED_BACKFILL=0): unembedded READY episodes are not checked."
 fi

@@ -229,7 +229,8 @@ def test_build_exports_the_toggle_and_gates_after_the_ingest() -> None:
     promote_at = build.index("promote_persistent.sh\"\n")
     assert ingest_at < backfill_at < promote_at
     # The serving tree's code embeds, against the NEO4J_* exported for this build.
-    assert '"${MENHIR_FRONTIER_PY}" "${MENHIR_FRONTIER}/scripts/backfill_episode_embeddings.py"' in build
+    assert ('PYTHONPATH="${MENHIR_FRONTIER}/src" \\\n'
+            '    "${MENHIR_FRONTIER_PY}" "${MENHIR_FRONTIER}/scripts/backfill_episode_embeddings.py"') in build
     assert build.index('export NEO4J_URI="bolt://localhost:${LME_BOLT}"') < backfill_at
 
 
