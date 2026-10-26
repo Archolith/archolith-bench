@@ -70,6 +70,10 @@ stages:
         glob: "src/menhir/domain/ingest.py"
       - repo: menhir
         glob: "src/menhir/core/ingest_guard.py"
+      # build_graph.sh runs it after the ingest drains: it decides which episodes the
+      # source-memory lane can see at all.
+      - repo: menhir
+        glob: "scripts/backfill_episode_embeddings.py"
       # Graphiti patches rewrite extraction behavior in place; they are load-bearing
       # and easy to forget because they live under infrastructure/.
       - repo: menhir

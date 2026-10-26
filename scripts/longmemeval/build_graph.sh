@@ -275,6 +275,8 @@ fi
   --setting "require_fresh=${LME_REQUIRE_FRESH}" \
   --setting "resumed=${LME_RESUME}" \
   --setting "segmentation=${LME_SEGMENTATION}" \
+  --setting "store_only_context=${LME_STORE_ONLY_CONTEXT}" \
+  --setting "embed_backfill=${LME_EMBED_BACKFILL}" \
   --setting "strict_failure_policy=zero-failed-episodes-per-namespace" \
   --setting "ingest_target_items=${INGEST_TARGET}" \
   --setting "ingest_concurrency=${LME_INGEST_CONCURRENCY}" \
@@ -357,6 +359,7 @@ export MENHIR_CANONICAL_SELF_BINDING_MODE="${LME_CANONICAL_SELF_BINDING_MODE}"
 export MENHIR_PERSONAL_MEMORY_CHAT_MODEL="${LME_EXTRACT_MODEL}"
 export MENHIR_PERSONAL_MEMORY_SUM_GROUNDING=1
 export LME_REQUIRE_TURN_EVIDENCE="${LME_REQUIRE_TURN_EVIDENCE}"
+export LME_STORE_ONLY_CONTEXT="${LME_STORE_ONLY_CONTEXT}"
 # Per-episode LLM call budget; see config.sh.
 export MENHIR_MAX_LLM_CALLS_PER_JOB="${LME_MAX_LLM_CALLS_PER_JOB}"
 # Anchored time and service tier: recorded in the attempt record above, and retry.sh must
@@ -420,6 +423,16 @@ export OPENAI_API_KEY="${OPENAI_KEY}" OPENAI_CHAT_MODEL="${LME_EXTRACT_MODEL}" O
 # health check while ours fails to bind, and ingest would drive the old writer.
 curl -sf "${MENHIR_URL}/api/health" >/dev/null 2>&1 &&
   die "something already serves ${MENHIR_URL}; stop it before building (an earlier attempt's menhir?)"
+# Fail before any paid work if the serving tree lacks what these settings need. An older Menhir
+# ignores an unknown store_only field and would EXTRACT every question turn instead.
+if [ "${LME_STORE_ONLY_CONTEXT}" = "1" ] &&
+  ! grep -q "store_only" "${MENHIR_FRONTIER}/src/menhir/api/routes_support.py" 2>/dev/null; then
+  die "LME_STORE_ONLY_CONTEXT=1 but ${MENHIR_FRONTIER} has no store_only ingest (Menhir #388); set it to 0 or update the tree"
+fi
+if [ "${LME_EMBED_BACKFILL}" = "1" ] &&
+  ! grep -q -- "--require-complete" "${MENHIR_FRONTIER}/scripts/backfill_episode_embeddings.py" 2>/dev/null; then
+  die "LME_EMBED_BACKFILL=1 but ${MENHIR_FRONTIER} has no backfill --require-complete (Menhir #389); set it to 0 or update the tree"
+fi
 log "starting ingest menhir on ${MENHIR_URL}..."
 ( cd "${MENHIR_FRONTIER}" && "${MENHIR_FRONTIER_BIN}" serve --port "${MENHIR_PORT}" ) & MENHIR_PID=$!
 for _ in $(seq 1 90); do curl -sf "${MENHIR_URL}/api/health" >/dev/null 2>&1 && break; sleep 2; done
@@ -456,6 +469,17 @@ if [ "${LME_SCALAR_STATE_ENABLED}" = "1" ]; then
   INGEST_ARGS+=(--consolidate-scalar)
 fi
 "${BENCH_PY}" "$(dirname "${BASH_SOURCE[0]}")/lib/ingest.py" "${INGEST_ARGS[@]}"
+
+# Benchmark mode runs no scheduler, so nothing repairs a READY episode whose content embedding the
+# worker failed to write: the source-memory lane silently cannot see it. Embed the gaps with the
+# serving tree's code and exit non-zero (set -e stops the build) if any READY episode is still
+# unembedded. Uses the NEO4J_*/embed settings exported above.
+if [ "${LME_EMBED_BACKFILL}" = "1" ]; then
+  log "backfilling missing episode content embeddings (--require-complete)..."
+  "${MENHIR_FRONTIER_PY}" "${MENHIR_FRONTIER}/scripts/backfill_episode_embeddings.py" --require-complete
+else
+  log "embedding backfill SKIPPED (LME_EMBED_BACKFILL=0): unembedded READY episodes are not checked."
+fi
 
 if [ "${LME_SCALAR_STATE_ENABLED}" = "1" ]; then
   "${BENCH_PY}" - "${LME_MANIFEST_PATH}" "${LME_REQUIRE_SCALAR_OUTPUT}" "${INGEST_TARGET}" \

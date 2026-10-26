@@ -125,6 +125,12 @@ LME_RESET_FILE="${LME_RESET_FILE:-}"
 # labelled noncanonical.
 LME_NONCANONICAL="${LME_NONCANONICAL:-0}"
 LME_REQUIRE_TURN_EVIDENCE="${LME_REQUIRE_TURN_EVIDENCE:-1}"
+# CONTEXT_ONLY user turns (questions/requests) become store-only source memories: embedded, never
+# extracted (archolith-bench#43). 0 restores evidence-only. Needs Menhir store_only ingest (#388).
+LME_STORE_ONLY_CONTEXT="${LME_STORE_ONLY_CONTEXT:-1}"
+# After the ingest drains, embed any READY episode still missing content_embedding and fail the
+# build if one remains (benchmark mode runs no scheduler to repair them). Needs Menhir #389.
+LME_EMBED_BACKFILL="${LME_EMBED_BACKFILL:-1}"
 
 # ---- Evidence capture: ON for every run, not just the KU buildout ----
 # WHY THESE DEFAULT ON. The decision points that explain a scalar result are recorded through the
