@@ -451,6 +451,7 @@ class StubMenhirClient:
         turn_evidence_uuid: str | None = None,
         idempotency_key: str | None = None,
         memory_role: str | None = None,
+        store_only: bool = False,
     ) -> None:
         """Append a formatted snippet to the group's list."""
         if not content:
@@ -613,8 +614,12 @@ class HttpMenhirClient:
         turn_evidence_uuid: str | None = None,
         idempotency_key: str | None = None,
         memory_role: str | None = None,
+        store_only: bool = False,
     ) -> dict[str, Any] | None:
         """Ingest a snippet as a menhir episode in the group's namespace silo.
+
+        ``store_only`` asks Menhir to keep the episode as an embedded source memory without
+        running extraction (sent only when true, so other requests are byte-identical).
 
         ``memory_role`` (keyword-only) is sent as the payload ``role`` field (e.g. ``"agent"``);
         it is independent of the positional ``role``, which only drives the "{role}: " prefix.
@@ -681,6 +686,8 @@ class HttpMenhirClient:
             payload["idempotency_key"] = idempotency_key
         if memory_role is not None:
             payload["role"] = memory_role
+        if store_only:
+            payload["store_only"] = True
         response = self._client.post(
             url,
             params={"wait": "true" if wait else "false"},

@@ -88,6 +88,16 @@ NEO4J_PW = os.getenv("LME_NEO4J_PW", "lmedata123")
 REQUIRE_TURN_EVIDENCE = os.getenv("LME_REQUIRE_TURN_EVIDENCE", "1").strip().lower() in {
     "1", "true", "yes", "on",
 }
+# CONTEXT_ONLY user turns (questions, requests) still state facts ("what should I cook in my
+# Instant Pot"). On: keep them as store-only source memories Menhir embeds but never extracts.
+# Off: evidence only, no episode (the pre-#43 behaviour). Needs a Menhir with store_only ingest,
+# which an older Menhir silently ignores (it would extract the turn), so it is off unless set;
+# config.sh turns it on for builds, and build_graph.sh checks the serving tree first.
+STORE_ONLY_CONTEXT = os.getenv("LME_STORE_ONLY_CONTEXT", "0").strip().lower() in {
+    "1", "true", "yes", "on",
+}
+# Menhir's :Episodic.extraction_mode value for store-only episodes.
+_STORE_ONLY = "store_only"
 
 # Sentence splitting — long multi-topic messages bury factual claims in geographic
 # noise, causing Graphiti's node resolution to collapse distinct entities (e.g.
@@ -122,6 +132,9 @@ class IngestTurn:
     # >= 0 marks a memory-writer item: its position among the items written for one assistant
     # turn. ``turn_key`` is then the assistant turn's, and the evidence is that turn's.
     writer_index: int = -1
+    # True for a CONTEXT_ONLY user turn kept as a source memory: an embedded :Episodic node
+    # Menhir never extracts (archolith-bench#43). Only meaningful with extract=True.
+    store_only: bool = False
 
 
 @dataclass
@@ -196,6 +209,7 @@ def _ingest_turn(
     ingest_key: str | None = None,
     source: str = "",
     writer_index: int = -1,
+    store_only: bool = False,
 ) -> str:
     """Ingest one turn with bounded exponential backoff on transient errors.
 
@@ -227,6 +241,9 @@ def _ingest_turn(
     an assistant turn can never be captured under ``declarant="user"`` (menhir's evidence
     projection is fail-closed on ``role='user' AND declarant='user'``, so assistant
     evidence stays inert rather than founding a user-declared claim).
+
+    ``store_only=True`` (CONTEXT_ONLY user turns) records evidence and creates the episode as a
+    source memory that Menhir embeds but never extracts or projects.
 
     Uses wait=False: the namespace-window scheduler is the completeness
     guarantee, so we do not block on an HTTP request per turn. It still keeps
@@ -295,6 +312,8 @@ def _ingest_turn(
     key_kwargs = {"idempotency_key": ingest_key} if ingest_key is not None else {}
     if is_writer:
         key_kwargs["memory_role"] = memory_writer.WRITER_ROLE
+    if store_only:
+        key_kwargs["store_only"] = True
     for attempt in range(tries):
         try:
             result = client.ingest(
@@ -480,7 +499,8 @@ def _submitted_epoch_millis(item: dict) -> list[int]:
 
 
 def _user_turns_submitted(turns: Iterator[IngestTurn]) -> int:
-    """Distinct user source turns sent to extraction, keyed as ``_ingest_turn`` keys evidence.
+    """Distinct user source turns ingested as episodes (store-only included, since Menhir admits
+    those too), keyed as ``_ingest_turn`` keys evidence.
 
     Counted per source turn, not per segment: Menhir's admission gate may legitimately downgrade
     a heuristic claim segment that is not verbatim in the turn, but the whole turn must be admitted.
@@ -501,13 +521,18 @@ def _integrity_counts(ns: str, submitted_epoch_millis: list[int]) -> dict[str, i
     nl = ns.lower()
     admitted, unprojected = _cypher_counts(
         # Provenance: a user turn's evidence is admitted by a user-tier memory and projected.
+        # A store-only episode is admitted but never projected (Menhir mints no projection for
+        # it), so only an extracted admitter makes a missing projection a violation.
         f"MATCH (t:TurnEvidence {{namespace:'{ns}'}}) "
         "WITH t, EXISTS { MATCH (q:Episodic)-[:ADMITTED_ON]->(t) WHERE q.valid_at IS NULL "
         "AND q.source = 'user' AND NOT coalesce(q.is_evidence_projection, false) } AS admitted, "
+        "EXISTS { MATCH (q:Episodic)-[:ADMITTED_ON]->(t) WHERE q.valid_at IS NULL "
+        "AND q.source = 'user' AND NOT coalesce(q.is_evidence_projection, false) "
+        f"AND coalesce(q.extraction_mode, '') <> '{_STORE_ONLY}' }} AS extracted, "
         "EXISTS { MATCH (p:Episodic)-[:ADMITTED_ON]->(t) "
         "WHERE coalesce(p.is_evidence_projection, false) } AS projected "
         "RETURN sum(CASE WHEN admitted THEN 1 ELSE 0 END), "
-        "sum(CASE WHEN admitted AND NOT projected THEN 1 ELSE 0 END);",
+        "sum(CASE WHEN extracted AND NOT projected THEN 1 ELSE 0 END);",
         2,
     )
     (unfounded,) = _cypher_counts(
@@ -531,8 +556,10 @@ def _integrity_counts(ns: str, submitted_epoch_millis: list[int]) -> dict[str, i
     )
     (time_unpaired,) = _cypher_counts(
         # Each READY queue node resolves to exactly one Graphiti episode dated at its reference_time.
+        # A store-only node is never extracted, so it has no Graphiti episode to pair with.
         f"MATCH (q:Episodic {{namespace:'{ns}'}}) "
         "WHERE q.valid_at IS NULL AND q.processing_state = 'READY' "
+        f"AND coalesce(q.extraction_mode, '') <> '{_STORE_ONLY}' "
         f"OPTIONAL MATCH (g:Episodic {{group_id:'{ns}'}}) "
         "WHERE g.uuid = q.resolved_episode_uuid AND g.valid_at IS NOT NULL "
         "WITH q, collect(g) AS gs "
@@ -1119,11 +1146,13 @@ def _ingest_pool(
         while run.cursor < len(run.plan):
             turn = run.plan[run.cursor]
             run.cursor += 1
-            writer_kwargs = (
+            turn_kwargs = (
                 {"source": turn.source, "writer_index": turn.writer_index}
                 if turn.writer_index >= 0
                 else {}
             )
+            if turn.store_only:
+                turn_kwargs["store_only"] = True
             episode_uuid = _ingest_turn(
                 client,
                 run.namespace,
@@ -1136,7 +1165,7 @@ def _ingest_pool(
                 turn_key=turn.turn_key or None,
                 evidence_cache=run.evidence_cache,
                 ingest_key=_ingest_key(turn),
-                **writer_kwargs,
+                **turn_kwargs,
             )
             run.last_progress_at = time.time()
             if episode_uuid:
@@ -1613,6 +1642,7 @@ def _iter_item_turns(
             # turns had different roles -- would file assistant words under
             # declarant="user".
             extract = True
+            store_only = False
             if segmentation == "none":
                 contents = [content]
             elif segmentation == "sentence":
@@ -1639,6 +1669,12 @@ def _iter_item_turns(
                     # extraction keeps the turn's own evidence record intact.
                     contents = [content]
                     extract = False
+                    # A user's question still states facts about them (archolith-bench#43): keep
+                    # it as a store-only source memory -- embedded, never extracted. Assistant
+                    # CONTEXT_ONLY turns stay evidence only.
+                    if STORE_ONLY_CONTEXT and (role.strip().lower() or "user") == "user":
+                        extract = True
+                        store_only = True
                 elif mode == SegmentationMode.SEGMENT_CLAIMS:
                     contents = [
                         content,
@@ -1664,6 +1700,7 @@ def _iter_item_turns(
                     evidence_text=content,
                     turn_key=turn_key,
                     segment_index=segment_index,
+                    store_only=store_only,
                 )
             if writer_mode and role.strip().lower() == "assistant":
                 for writer_index, writer_item in enumerate(
@@ -1753,6 +1790,9 @@ def _turn_plan_digest(
                _h(t.content), _h(t.evidence_text)]
         if t.writer_index >= 0:
             row += [t.source, t.writer_index]
+        if t.store_only:
+            # Appended only when set, so a plan without store-only turns keeps its old digest.
+            row.append("store_only")
         return row
 
     payload = {
