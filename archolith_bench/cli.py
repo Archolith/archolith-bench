@@ -340,6 +340,11 @@ def main(argv: list[str] | None = None) -> None:
                                 "memories, outside --recall-limit (default on; was off before the "
                                 "o500 A/B). Menhir sends them when MENHIR_FRONTIER_SOURCE_MEMORIES "
                                 "is on (its default). --no-source-memories restores the old context.")
+    harness_p.add_argument("--recall-trace", action="store_true", default=False,
+                           help="Memory benchmarks: ask Menhir for the per-candidate retrieval trace "
+                                "and store a compact content-free copy per item in the checkpoint "
+                                "'recall_trace'. Diagnostic only; does not change answers or the "
+                                "checkpoint name.")
     harness_p.add_argument("--namespace-template", default="lme-{question_id}",
                            help="Recall-only: namespace per item, formatted with {question_id} "
                                 "(default: lme-{question_id}, matching _ingest_lme.py).")
@@ -1284,6 +1289,7 @@ def _run_harness(args: argparse.Namespace) -> None:
                 args.menhir_url, api_key=menhir_key, drill_down=getattr(args, "drill_down", False),
                 counted_authority_only=getattr(args, "counted_authority_only", False),
                 source_memories=getattr(args, "source_memories", False),
+                recall_trace=getattr(args, "recall_trace", False),
             )
             send_fn = send_chat
         checkpoint = None

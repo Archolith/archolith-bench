@@ -67,6 +67,8 @@ class TaskResult:
     scorer_raw_usage: dict = field(default_factory=dict)
     unofficial_correct: bool | None = None
     unofficial_scorer_raw_usage: dict = field(default_factory=dict)
+    # Opt-in (--recall-trace) compact per-recall candidate/rank/lane rows; empty when off.
+    recall_trace: dict = field(default_factory=dict)
 
 
 @dataclass

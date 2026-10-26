@@ -493,6 +493,7 @@ def _run_memory_arm(
                 continue
         question = adapter.question(item)
         drill_namespace = None
+        recall_trace: dict | None = None
         if arm == NO_MEMORY or client is None:
             memory_context = ""
         elif recall_only:
@@ -502,6 +503,7 @@ def _run_memory_arm(
             group_id = namespace_template.format(question_id=item.get("question_id") or task_id)
             drill_namespace = group_id
             recalled = client.recall(group_id, question, limit=recall_limit)
+            recall_trace = getattr(client, "last_recall_trace", None)
             memory_context = _value_context_for_arm(
                 arm, adapter, item, recalled, question, recall_limit, task_id
             )
@@ -534,6 +536,7 @@ def _run_memory_arm(
                     memory_context = _agentic_recall(client, group_id, subqueries, recall_limit)
                 else:
                     recalled = client.recall(group_id, question, limit=recall_limit)
+                    recall_trace = getattr(client, "last_recall_trace", None)
                     memory_context = _value_context_for_arm(
                         arm, adapter, item, recalled, question, recall_limit, task_id
                     )
@@ -604,6 +607,7 @@ def _run_memory_arm(
             scorer_raw_usage=scorer_usage,
             unofficial_correct=unofficial,
             unofficial_scorer_raw_usage=unofficial_usage,
+            recall_trace=recall_trace or {},
         )
         results.append(tr)
         turn_dicts.append({"input_tokens": inp, "output_tokens": out})
