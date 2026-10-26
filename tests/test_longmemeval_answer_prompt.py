@@ -35,6 +35,17 @@ def test_candidate_answers_get_the_best_supported_one_not_a_bare_dont_know() -> 
     assert "say you don't know; do not arbitrarily choose one" not in _MEMORY_SYSTEM_PROMPT
 
 
+def test_advice_questions_get_tailored_suggestions_not_a_refusal() -> None:
+    rule = ("When the question asks for suggestions, tips, advice or recommendations, answer with helpful, "
+            "concrete suggestions tailored to the preferences, plans, possessions and situation the retrieved "
+            "memory shows; general knowledge is allowed for this. Never answer such a question by saying the "
+            "memory holds no suggestions.\n\n")
+    assert rule in _MEMORY_SYSTEM_PROMPT
+    # Sits between the counting rules and the veto policy, where the replay measured it.
+    assert _MEMORY_SYSTEM_PROMPT.index("following the rules above.\n\n" + rule) < _MEMORY_SYSTEM_PROMPT.index(
+        "Safe veto policy")
+
+
 def test_harness_recall_limit_defaults_to_20(monkeypatch) -> None:
     import inspect
 
