@@ -128,6 +128,10 @@ LME_REQUIRE_TURN_EVIDENCE="${LME_REQUIRE_TURN_EVIDENCE:-1}"
 # CONTEXT_ONLY user turns (questions/requests) become store-only source memories: embedded, never
 # extracted (archolith-bench#43). 0 restores evidence-only. Needs Menhir store_only ingest (#388).
 LME_STORE_ONLY_CONTEXT="${LME_STORE_ONLY_CONTEXT:-1}"
+# 1: every assistant turn is sent verbatim (role=assistant) as a store-only source memory instead
+# of the segmenter's evidence-only/extract-whole routing (#168 plain-client baseline). Adaptive
+# segmentation only. Needs Menhir store_only ingest (#388).
+LME_ASSISTANT_STORE_ONLY="${LME_ASSISTANT_STORE_ONLY:-0}"
 # After the ingest drains, embed any READY episode still missing content_embedding and fail the
 # build if one remains (benchmark mode runs no scheduler to repair them). Needs Menhir #389.
 LME_EMBED_BACKFILL="${LME_EMBED_BACKFILL:-1}"

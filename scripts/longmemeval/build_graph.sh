@@ -276,6 +276,7 @@ fi
   --setting "resumed=${LME_RESUME}" \
   --setting "segmentation=${LME_SEGMENTATION}" \
   --setting "store_only_context=${LME_STORE_ONLY_CONTEXT}" \
+  --setting "assistant_store_only=${LME_ASSISTANT_STORE_ONLY}" \
   --setting "embed_backfill=${LME_EMBED_BACKFILL}" \
   --setting "strict_failure_policy=zero-failed-episodes-per-namespace" \
   --setting "ingest_target_items=${INGEST_TARGET}" \
@@ -360,6 +361,7 @@ export MENHIR_PERSONAL_MEMORY_CHAT_MODEL="${LME_EXTRACT_MODEL}"
 export MENHIR_PERSONAL_MEMORY_SUM_GROUNDING=1
 export LME_REQUIRE_TURN_EVIDENCE="${LME_REQUIRE_TURN_EVIDENCE}"
 export LME_STORE_ONLY_CONTEXT="${LME_STORE_ONLY_CONTEXT}"
+export LME_ASSISTANT_STORE_ONLY="${LME_ASSISTANT_STORE_ONLY}"
 # Per-episode LLM call budget; see config.sh.
 export MENHIR_MAX_LLM_CALLS_PER_JOB="${LME_MAX_LLM_CALLS_PER_JOB}"
 # Anchored time and service tier: recorded in the attempt record above, and retry.sh must
@@ -425,7 +427,10 @@ curl -sf "${MENHIR_URL}/api/health" >/dev/null 2>&1 &&
   die "something already serves ${MENHIR_URL}; stop it before building (an earlier attempt's menhir?)"
 # Fail before any paid work if the serving tree lacks what these settings need. An older Menhir
 # ignores an unknown store_only field and would EXTRACT every question turn instead.
-if [ "${LME_STORE_ONLY_CONTEXT}" = "1" ] &&
+if [ "${LME_ASSISTANT_STORE_ONLY}" = "1" ] && [ "${LME_SEGMENTATION}" != "adaptive" ]; then
+  die "LME_ASSISTANT_STORE_ONLY=1 needs LME_SEGMENTATION=adaptive (got ${LME_SEGMENTATION})"
+fi
+if { [ "${LME_STORE_ONLY_CONTEXT}" = "1" ] || [ "${LME_ASSISTANT_STORE_ONLY}" = "1" ]; } &&
   ! grep -q "store_only" "${MENHIR_FRONTIER}/src/menhir/api/routes_support.py" 2>/dev/null; then
   die "LME_STORE_ONLY_CONTEXT=1 but ${MENHIR_FRONTIER} has no store_only ingest (Menhir #388); set it to 0 or update the tree"
 fi

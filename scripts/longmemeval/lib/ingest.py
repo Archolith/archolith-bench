@@ -96,6 +96,13 @@ REQUIRE_TURN_EVIDENCE = os.getenv("LME_REQUIRE_TURN_EVIDENCE", "1").strip().lowe
 STORE_ONLY_CONTEXT = os.getenv("LME_STORE_ONLY_CONTEXT", "0").strip().lower() in {
     "1", "true", "yes", "on",
 }
+# Plain-client assistant side (#168): every assistant turn is sent verbatim, with its role, as a
+# store-only source memory (embedded, never extracted) instead of the segmenter's evidence-only or
+# extract-whole routing. Adaptive segmentation only; off unless set, for the same older-Menhir
+# reason as above.
+ASSISTANT_STORE_ONLY = os.getenv("LME_ASSISTANT_STORE_ONLY", "0").strip().lower() in {
+    "1", "true", "yes", "on",
+}
 # Menhir's :Episodic.extraction_mode value for store-only episodes.
 _STORE_ONLY = "store_only"
 
@@ -269,7 +276,9 @@ def _ingest_turn(
     # turns are captured for every role, since they have no episode to ground and
     # the record is the only trace the source turn leaves. A writer item re-records its
     # assistant turn's evidence when the cache is empty (a resume); Menhir MERGEs on turn_key.
-    if turn_evidence_uuid is None and (is_user or not extract or is_writer):
+    # A store-only assistant turn keeps the evidence record it had as an evidence-only turn.
+    needs_evidence = is_user or not extract or is_writer or store_only
+    if turn_evidence_uuid is None and needs_evidence:
         for attempt in range(tries):
             try:
                 ev = client.record_turn_evidence(
@@ -298,7 +307,7 @@ def _ingest_turn(
                 print(f"    turn-evidence retry {attempt+1}/{tries} after {exc.__class__.__name__} -> sleep {wait}s", flush=True)
                 time.sleep(wait)
 
-    if REQUIRE_TURN_EVIDENCE and (is_user or not extract or is_writer) and not turn_evidence_uuid:
+    if REQUIRE_TURN_EVIDENCE and needs_evidence and not turn_evidence_uuid:
         raise RuntimeError(
             "turn-evidence capture returned no turn_id; refusing to continue without "
             f"grounding for namespace {ns}"
@@ -314,6 +323,10 @@ def _ingest_turn(
         key_kwargs["memory_role"] = memory_writer.WRITER_ROLE
     if store_only:
         key_kwargs["store_only"] = True
+        # A non-user store-only turn names its speaker. Store-only user turns send no role, so
+        # their requests (and idempotency digests) stay as they were.
+        if not is_user and not is_writer:
+            key_kwargs["memory_role"] = normalized_role
     for attempt in range(tries):
         try:
             result = client.ingest(
@@ -1675,6 +1688,10 @@ def _iter_item_turns(
                     # writer's items (below) are the agent-tier memories grounded on it.
                     contents = [content]
                     extract = False
+                elif ASSISTANT_STORE_ONLY and role.strip().lower() == "assistant":
+                    # The whole turn as one store-only source memory, whatever the segmenter says.
+                    contents = [content]
+                    store_only = True
                 elif mode == SegmentationMode.SKIP:
                     contents = []
                 elif mode == SegmentationMode.CONTEXT_ONLY:
