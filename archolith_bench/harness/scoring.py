@@ -39,21 +39,89 @@ _JUDGE_SYSTEM_ABSTENTION = (
 )
 
 
+# LongMemEval's official judge prompts, verbatim from get_anscheck_prompt() in
+# xiaowu0162/LongMemEval src/evaluation/evaluate_qa.py (commit d6dc8b50a2d9). Each is sent as a
+# single user message; placeholders are question, answer (rubric / explanation), response.
+_LME_BASE = (
+    "I will give you a question, a correct answer, and a response from a model. Please answer yes "
+    "if the response contains the correct answer. Otherwise, answer no. If the response is equivalent "
+    "to the correct answer or contains all the intermediate steps to get the correct answer, you should "
+    "also answer yes. If the response only contains a subset of the information required by the "
+    "answer, answer no. "
+)
+_LME_QA_TAIL = (
+    "\n\nQuestion: {}\n\nCorrect Answer: {}\n\nModel Response: {}\n\n"
+    "Is the model response correct? Answer yes or no only."
+)
+_LME_JUDGE_TEMPLATES = {
+    "single-session-user": _LME_BASE + _LME_QA_TAIL,
+    "single-session-assistant": _LME_BASE + _LME_QA_TAIL,
+    "multi-session": _LME_BASE + _LME_QA_TAIL,
+    "temporal-reasoning": _LME_BASE + (
+        "In addition, do not penalize off-by-one errors for the number of days. If the question asks "
+        "for the number of days/weeks/months, etc., and the model makes off-by-one errors (e.g., "
+        "predicting 19 days when the answer is 18), the model's response is still correct. "
+    ) + _LME_QA_TAIL,
+    "knowledge-update": (
+        "I will give you a question, a correct answer, and a response from a model. Please answer yes "
+        "if the response contains the correct answer. Otherwise, answer no. If the response contains "
+        "some previous information along with an updated answer, the response should be considered as "
+        "correct as long as the updated answer is the required answer."
+    ) + _LME_QA_TAIL,
+    "single-session-preference": (
+        "I will give you a question, a rubric for desired personalized response, and a response from a "
+        "model. Please answer yes if the response satisfies the desired response. Otherwise, answer no. "
+        "The model does not need to reflect all the points in the rubric. The response is correct as "
+        "long as it recalls and utilizes the user's personal information correctly.\n\nQuestion: {}\n\n"
+        "Rubric: {}\n\nModel Response: {}\n\nIs the model response correct? Answer yes or no only."
+    ),
+}
+_LME_ABSTENTION_TEMPLATE = (
+    "I will give you an unanswerable question, an explanation, and a response from a model. Please "
+    "answer yes if the model correctly identifies the question as unanswerable. The model could say "
+    "that the information is incomplete, or some other information is given but the asked information "
+    "is not.\n\nQuestion: {}\n\nExplanation: {}\n\nModel Response: {}\n\nDoes the model correctly "
+    "identify the question as unanswerable? Answer yes or no only."
+)
+
+
+def is_lme_abstention(item: dict) -> bool:
+    """LongMemEval marks unanswerable questions by an ``_abs`` question id, not by question_type."""
+    return "_abs" in str(item.get("question_id") or "")
+
+
 def _is_abstention(item: dict) -> bool:
     gold = str(item.get("answer") or "").strip().lower()
-    return item.get("question_type") == "abstention" or gold in {"", "no answer", "unknown"}
+    return (is_lme_abstention(item) or item.get("question_type") == "abstention"
+            or gold in {"", "no answer", "unknown"})
+
+
+def _lme_judge_prompt(item: dict, response_text: str) -> str | None:
+    """The official LongMemEval judge prompt for a LongMemEval item, else None."""
+    question, answer = str(item.get("question") or ""), str(item.get("answer") or "")
+    if is_lme_abstention(item):
+        return _LME_ABSTENTION_TEMPLATE.format(question, answer, response_text)
+    template = _LME_JUDGE_TEMPLATES.get(str(item.get("question_type") or ""))
+    return template.format(question, answer, response_text) if template else None
+
+
+def _generic_user_message(item: dict, response_text: str) -> dict:
+    question, gold = str(item.get("question") or ""), str(item.get("answer") or "")
+    user = (f"Question: {question}\n\nGold answer: {gold}\n\nModel response: {response_text}\n\n"
+            "Is the model response correct? Answer yes or no.")
+    return {"role": "user", "content": user}
 
 
 def _judge_messages(item: dict, response_text: str) -> list[dict]:
+    lme = _lme_judge_prompt(item, response_text)
+    if lme is not None:
+        return [{"role": "user", "content": lme}]
     question = str(item.get("question") or "")
     if _is_abstention(item):
         user = f"Question: {question}\n\nModel response: {response_text}\n\nIs the response a correct abstention? Answer yes or no."
         return [{"role": "system", "content": _JUDGE_SYSTEM_ABSTENTION},
                 {"role": "user", "content": user}]
-    gold = str(item.get("answer") or "")
-    user = (f"Question: {question}\n\nGold answer: {gold}\n\nModel response: {response_text}\n\n"
-            "Is the model response correct? Answer yes or no.")
-    return [{"role": "system", "content": _JUDGE_SYSTEM}, {"role": "user", "content": user}]
+    return [{"role": "system", "content": _JUDGE_SYSTEM}, _generic_user_message(item, response_text)]
 
 
 def _parse_yes(text: str) -> bool:
@@ -115,8 +183,7 @@ _UNOFFICIAL_JUDGE_SYSTEM = (
 def _unofficial_judge_messages(item: dict, response_text: str) -> list[dict]:
     if _is_abstention(item):
         return _judge_messages(item, response_text)
-    msgs = _judge_messages(item, response_text)
-    return [{"role": "system", "content": _UNOFFICIAL_JUDGE_SYSTEM}, msgs[1]]
+    return [{"role": "system", "content": _UNOFFICIAL_JUDGE_SYSTEM}, _generic_user_message(item, response_text)]
 
 
 class UnofficialJudgeScorer:

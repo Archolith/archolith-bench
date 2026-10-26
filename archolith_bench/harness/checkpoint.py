@@ -49,13 +49,14 @@ def checkpoint_path_for(
 
 def checkpoint_prompt_tag(
     adapter: object, *, drill_down: bool = False, counted_authority_only: bool = False,
-    source_memories: bool = False,
+    source_memories: bool = False, official_judge: bool = False,
 ) -> str | None:
     """The ``prompt_tag`` for a run: the adapter's prompt fingerprint, marked for drill-down,
-    counted-authority-only and source-memory rendering.
+    counted-authority-only and source-memory rendering, and for grading with LongMemEval's
+    official judge prompts.
 
-    Each changes how answers are produced but not the arm names, so without the mark a resume
-    would mix them with plain answers in one checkpoint.
+    Each changes how answers are produced or graded but not the arm names, so without the mark a
+    resume would mix them with plain answers (or older grades) in one checkpoint.
     """
     tag = getattr(adapter, "prompt_fingerprint", None)
     if drill_down:
@@ -64,6 +65,8 @@ def checkpoint_prompt_tag(
         tag = f"{tag or ''}ca"
     if source_memories:
         tag = f"{tag or ''}sm"
+    if official_judge:
+        tag = f"{tag or ''}oj"
     return tag
 
 

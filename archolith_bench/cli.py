@@ -1293,7 +1293,8 @@ def _run_harness(args: argparse.Namespace) -> None:
                 prompt_tag=checkpoint_prompt_tag(
                     adapter, drill_down=getattr(args, "drill_down", False),
                     counted_authority_only=getattr(args, "counted_authority_only", False),
-                    source_memories=getattr(args, "source_memories", False)),
+                    source_memories=getattr(args, "source_memories", False),
+                    official_judge=getattr(args, "scorer", "containment") == "llm-judge"),
             )
             checkpoint = MemoryCheckpoint(ckpt_path)
             done = checkpoint.done_count()

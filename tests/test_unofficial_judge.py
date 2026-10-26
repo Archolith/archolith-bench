@@ -23,6 +23,7 @@ from archolith_bench.harness.scoring import (
     _UNOFFICIAL_JUDGE_SYSTEM,
     LLMJudgeScorer,
     UnofficialJudgeScorer,
+    _generic_user_message,
     _judge_messages,
 )
 
@@ -64,7 +65,7 @@ def test_unofficial_scorer_prompt_layout_strict_and_usage() -> None:
     assert kwargs.get("strict") is True
     assert messages[0]["content"] == _UNOFFICIAL_JUDGE_SYSTEM
     assert messages[0]["content"] != _JUDGE_SYSTEM
-    assert messages[1] == _judge_messages(item, "At least 3.")[1]
+    assert messages[1] == _generic_user_message(item, "At least 3.")
     assert "Question: How many?" in messages[1]["content"]
     assert "Gold answer: 3" in messages[1]["content"]
     assert "Model response: At least 3." in messages[1]["content"]

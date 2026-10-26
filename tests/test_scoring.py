@@ -26,14 +26,15 @@ def _stub_send_fn_yes_if_gold():
     def send_fn(client, base_url, api_key, messages, model, **kwargs):
         prompt = messages[-1]["content"]
         # gold is in the judge prompt as "Gold answer: <gold>"
+        # (LongMemEval items get the official prompt: "Correct Answer:" / "Model Response:")
         gold = ""
         for line in prompt.splitlines():
-            if line.startswith("Gold answer:"):
+            if line.startswith(("Gold answer:", "Correct Answer:")):
                 gold = line.split(":", 1)[1].strip()
         # the response is in "Model response: <resp>"
         resp = ""
         for line in prompt.splitlines():
-            if line.startswith("Model response:"):
+            if line.startswith(("Model response:", "Model Response:")):
                 resp = line.split(":", 1)[1].strip()
         verdict = "yes" if gold and gold.lower() in resp.lower() else "no"
         return verdict, 1.0, {"prompt_tokens": 10, "completion_tokens": 1}

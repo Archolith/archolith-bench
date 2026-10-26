@@ -157,6 +157,8 @@ stages:
         glob: "archolith_bench/harness/longmemeval.py"
       - repo: bench
         glob: "archolith_bench/harness/menhir_client.py"
+      - repo: bench
+        glob: "archolith_bench/harness/scoring.py"
 
   harness:
     description: >
