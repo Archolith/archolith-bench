@@ -47,6 +47,47 @@ class RecallSnippets(list):
         self.sources: tuple[str, ...] = tuple(sources)
 
 
+_TRACE_CANDIDATE_KEYS = (
+    "uuid", "source", "similarity", "survived_floor", "final_score",
+    "rank", "cosine_rank", "content_rank", "content_cosine",
+)
+_TRACE_RESULT_KEYS = ("final_score", "retrieval_score", "memory_type", "source", "lane")
+_TRACE_SOURCE_MEMORY_KEYS = ("uuid", "reference_time", "cosine", "source", "pool_id")
+
+
+def _compact_recall_trace(data: Any, limit: int) -> dict[str, Any] | None:
+    """Content-free summary of a traced recall response, or None if it is not a dict."""
+    if not isinstance(data, dict):
+        return None
+    trace = data.get("trace")
+    trace = trace if isinstance(trace, dict) else {}
+    results = []
+    for pos, item in enumerate(data.get("results") or [], start=1):
+        if not isinstance(item, dict):
+            continue
+        row: dict[str, Any] = {"uuid": item.get("uuid"), "rank": pos}
+        row.update({k: item[k] for k in _TRACE_RESULT_KEYS if k in item})
+        results.append(row)
+    candidates = [
+        {k: c[k] for k in _TRACE_CANDIDATE_KEYS if k in c}
+        for c in (trace.get("candidates") or [])
+        if isinstance(c, dict)
+    ]
+    source_memories = [
+        {k: s[k] for k in _TRACE_SOURCE_MEMORY_KEYS if k in s}
+        for s in (data.get("source_memories") or [])
+        if isinstance(s, dict)
+    ]
+    return {
+        "candidates_evaluated": data.get("candidates_evaluated"),
+        "limit": limit,
+        "results": results,
+        "candidates": candidates,
+        "source_memories": source_memories,
+        "phases": trace.get("phases"),
+    }
+
+
 def format_source_memories(raw: Any) -> str:
     """Menhir's source-memory section (raw episodes, oldest first) as its build_context renders
     it, without the internal pool tag. Empty when there is nothing to show."""
@@ -505,6 +546,7 @@ class HttpMenhirClient:
         drill_down: bool = False,
         counted_authority_only: bool = False,
         source_memories: bool = False,
+        recall_trace: bool = False,
     ) -> None:
         """
         Initialize HTTP client against a real menhir instance.
@@ -528,8 +570,12 @@ class HttpMenhirClient:
             source_memories: Render the response's ``source_memories`` (raw episodes, as Menhir's
                 own build_context does) as one block after the memories, outside ``limit``.
                 Not on a blocking event advisory, which suppresses the memories too.
+            recall_trace: Ask Menhir for the per-candidate retrieval trace and keep a compact,
+                content-free copy in ``last_recall_trace``. Diagnostic only; answers are unchanged.
         """
         self._base_url = base_url
+        self._recall_trace = recall_trace
+        self.last_recall_trace: dict[str, Any] | None = None
         self._drill_down = drill_down
         self._counted_authority_only = counted_authority_only
         self._source_memories = source_memories
@@ -755,9 +801,14 @@ class HttpMenhirClient:
             if counted_verdict_limit is not None:
                 effective_verdict_limit = max(0, min(COUNTED_AUTHORITY_MAX, counted_verdict_limit))
             payload["counted_verdict_limit"] = effective_verdict_limit
+        self.last_recall_trace = None
+        if self._recall_trace:
+            payload["trace"] = True
         response = self._client.post(url, json=payload, headers=self._headers)
         response.raise_for_status()
         data = response.json()
+        if self._recall_trace:
+            self.last_recall_trace = _compact_recall_trace(data, limit)
 
         # Extract list of items (top-level list or nested in a known key)
         items: list[Any] = []

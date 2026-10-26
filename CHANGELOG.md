@@ -1,3 +1,8 @@
+## 2026-10-26 - Opt-in per-recall trace capture (`--recall-trace`)
+
+- `--recall-trace` asks Menhir for the retrieval trace and stores a compact, content-free copy per item in the checkpoint `recall_trace`: result ranks, per-candidate source/similarity/floor/score/ranks, source-memory ids and cosines. Off by default; it changes no answer and not the checkpoint name.
+- `tests/test_recall_trace.py`.
+
 ## 2026-10-25 - Accept verbatim-skipped user episodes in the pairing check
 
 - `_integrity_counts` (`ready_episodes_time_unpaired`): when Menhir's evidence projection already extracted the same text, it marks the client episode READY with substage `verbatim_skipped` and `extraction_skipped_for` set to that projection. Such an episode has no Graphiti episode of its own, so every one counted as unpaired: 512 of 515 READY user episodes in a stopped o500 build. It now passes when the named projection is READY, in the same namespace, with the same `reference_time`. The projection is itself checked for its own Graphiti pairing. On the stopped build the count drops from 512 to 18; those 18 are skips whose projection was still ENRICHING when the build stopped.
@@ -57,23 +62,3 @@
 - An episode or projection that FAILED on the provider account (quota/auth) is not a content failure: it spends no retry and is never terminal. The run stops while Menhir still reports the condition and requeues the row once it clears (at most 3 times per run). `failed_requeued` counts retries that happened; the manifest adds `provider_requeued`.
 - One ingest client per manifest (OS lock), one segmentation mode per build, and no duplicate ingest keys in a plan. A failed graph read during the projection sweep holds the namespace back instead of reading as "no failures". The final drain re-checks every manifested namespace on each run.
 - `build_graph.sh` takes `LME_RESUME=1` (container, volume, provenance and manifest dir must exist and match) and refuses to start when something already serves the Menhir port. `validate_run.py` accepts an interrupted ingest phase followed by a completed one and reports `attempt_count`. `retry.py` only counts and retries episodes under `LME_NS_PREFIX`.
-
-## 2026-10-17 - Keep Menhir verb-facet facts outside the limit in every memory mode
-
-- The value-augmented arms and agentic recall re-capped the context to `recall_limit`, so verb-facet facts displaced ranked memories there. `recall()` now returns the facet snippets as `extras`, and those merges keep them in place without counting them. Agentic recall keeps at most 3 in total.
-- The client keeps at most 3 facet facts per recall, the same cap Menhir uses.
-- The Recall Lab rescore scripts render facet facts the same way as the client.
-- Responses without facet facts give the same context as before.
-
-## 2026-10-16 - Run the drill-down tool loop over the Responses API for OpenAI reasoning models
-
-- gpt-6-luna rejects function tools on `/v1/chat/completions` unless reasoning is turned off, which made the first `--drill-down` run fail with a 400. `send_with_tools` now sends OpenAI reasoning models through `/v1/responses` (`send_responses_with_tools`), keeping their default reasoning so the tool arm stays comparable with the other arms. Other models keep the chat-completions loop.
-- Same contract as the chat loop: shared retry policy, last round forbids tools. Any response whose status is not `completed`, or an empty reply, raises instead of being graded or having its tool calls run; the error carries the API's status, incomplete details and error. Reasoning items are passed back with tool results, as the API requires.
-- The tool is sent with `strict: false`, matching chat-completions semantics for its optional arguments.
-- `--resume` with `--drill-down` uses its own checkpoint file, so drill-down and plain answers for the same arm never mix.
-
-## 2026-10-16 - Let the answer model drill into collapsed Menhir counts
-
-- `harness --recall-only --drill-down`: when Menhir collapses a scalar View to its total, the recall shows Menhir's own `built from N items; drill down: get_scalar_view_items(view_uuid=...)` line, and the answer model gets that tool plus a prompt note to use it as needed. Calls are served from `GET /api/scalar-views/{view_uuid}/items`, only for views shown in that item's recall and only in its namespace.
-- Items whose recall shows no collapsed View are answered exactly as before. Without `--drill-down` nothing changes.
-- New `send_chat_with_tools` shares `send_chat`'s retry policy (Flex waits, no retry on `insufficient_quota`); its last round forbids tools so the model has to answer. Tool calls are recorded in each result's `raw_usage`.
