@@ -340,6 +340,11 @@ def main(argv: list[str] | None = None) -> None:
                                 "memories, outside --recall-limit (default on; was off before the "
                                 "o500 A/B). Menhir sends them when MENHIR_FRONTIER_SOURCE_MEMORIES "
                                 "is on (its default). --no-source-memories restores the old context.")
+    harness_p.add_argument("--writer-items", type=int, default=0, metavar="N",
+                           help="Memory benchmarks: also render the N agent-writer items most "
+                                "similar to the question (Menhir source-memory lane, a second "
+                                "recall request) after the memories, outside --recall-limit. "
+                                "0 (default) = off.")
     harness_p.add_argument("--namespace-template", default="lme-{question_id}",
                            help="Recall-only: namespace per item, formatted with {question_id} "
                                 "(default: lme-{question_id}, matching _ingest_lme.py).")
@@ -1284,6 +1289,7 @@ def _run_harness(args: argparse.Namespace) -> None:
                 args.menhir_url, api_key=menhir_key, drill_down=getattr(args, "drill_down", False),
                 counted_authority_only=getattr(args, "counted_authority_only", False),
                 source_memories=getattr(args, "source_memories", False),
+                writer_items=getattr(args, "writer_items", 0) or 0,
             )
             send_fn = send_chat
         checkpoint = None
@@ -1294,6 +1300,7 @@ def _run_harness(args: argparse.Namespace) -> None:
                     adapter, drill_down=getattr(args, "drill_down", False),
                     counted_authority_only=getattr(args, "counted_authority_only", False),
                     source_memories=getattr(args, "source_memories", False),
+                    writer_items=getattr(args, "writer_items", 0) or 0,
                     official_judge=getattr(args, "scorer", "containment") == "llm-judge"),
             )
             checkpoint = MemoryCheckpoint(ckpt_path)

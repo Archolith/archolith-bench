@@ -29,22 +29,48 @@ VERB_FACET_MAX = 3
 # With ``counted_authority_only``, at most this many counted verdicts render after the memories,
 # outside ``limit``.
 COUNTED_AUTHORITY_MAX = 3
+# Writer-item lane: candidates requested from Menhir's source-memory lane (its per-call maximum).
+# Menhir's lane does not filter by source (#382 adds that), so the client keeps agent-writer rows.
+WRITER_ITEM_CANDIDATES = 50
+WRITER_SOURCE = "agent-writer"
+
+
+def writer_item_snippets(raw: Any, n: int, exclude_uuids: Iterable[str] = ()) -> list[str]:
+    """Top ``n`` agent-writer items from a ``source_memories`` list, most similar first.
+
+    ``exclude_uuids`` are items already shown in the source-memory block."""
+    if not isinstance(raw, list) or n <= 0:
+        return []
+    shown = set(exclude_uuids)
+    rows = [
+        r for r in raw
+        if isinstance(r, dict) and r.get("source") == WRITER_SOURCE
+        and str(r.get("content") or "").strip() and str(r.get("uuid") or "") not in shown
+    ]
+    rows.sort(key=lambda r: (-float(r.get("cosine") or 0.0), str(r.get("uuid") or "")))
+    return [
+        f"[agent-recorded note | {r.get('reference_time') or 'unknown time'}] "
+        f"{str(r['content']).strip()}"
+        for r in rows[:n]
+    ]
 
 
 class RecallSnippets(list):
-    """Rendered recall snippets. ``extras`` are the verb-facet snippets, counted verdicts and the
-    source-memory block among them: they sit outside ``limit``, so a caller that re-caps the
-    context must not count them. ``counted`` is the counted-verdict subset, capped separately from
-    the facets; ``sources`` is the source-memory block (at most one)."""
+    """Rendered recall snippets. ``extras`` are the verb-facet snippets, counted verdicts, the
+    source-memory block and writer items among them: they sit outside ``limit``, so a caller that
+    re-caps the context must not count them. ``counted`` is the counted-verdict subset, capped
+    separately from the facets; ``sources`` is the source-memory block (at most one); ``writer``
+    is the agent-writer items (``--writer-items``)."""
 
     def __init__(
         self, snippets: Iterable[str] = (), extras: Iterable[str] = (),
-        counted: Iterable[str] = (), sources: Iterable[str] = (),
+        counted: Iterable[str] = (), sources: Iterable[str] = (), writer: Iterable[str] = (),
     ) -> None:
         super().__init__(snippets)
         self.extras: tuple[str, ...] = tuple(extras)
         self.counted: tuple[str, ...] = tuple(counted)
         self.sources: tuple[str, ...] = tuple(sources)
+        self.writer: tuple[str, ...] = tuple(writer)
 
 
 def format_source_memories(raw: Any) -> str:
@@ -505,6 +531,7 @@ class HttpMenhirClient:
         drill_down: bool = False,
         counted_authority_only: bool = False,
         source_memories: bool = False,
+        writer_items: int = 0,
     ) -> None:
         """
         Initialize HTTP client against a real menhir instance.
@@ -528,17 +555,27 @@ class HttpMenhirClient:
             source_memories: Render the response's ``source_memories`` (raw episodes, as Menhir's
                 own build_context does) as one block after the memories, outside ``limit``.
                 Not on a blocking event advisory, which suppresses the memories too.
+            writer_items: When > 0, render up to this many agent-writer items (most similar
+                first) after the memories, outside ``limit``. They come from a second recall
+                request with a larger source-memory limit, so the first request and its rendered
+                context stay unchanged; items already in the source block are not repeated.
+                0 (default) sends no second request.
         """
         self._base_url = base_url
         self._drill_down = drill_down
         self._counted_authority_only = counted_authority_only
         self._source_memories = source_memories
+        self._writer_items = max(0, int(writer_items))
         self._ingest_path = ingest_path
         self._recall_path = recall_path
         self._client = httpx.Client(timeout=timeout)
         self._headers: dict[str, str] = {}
         if api_key:
             self._headers["Authorization"] = f"Bearer {api_key}"
+
+    @property
+    def writer_items(self) -> int:
+        return self._writer_items
 
     @property
     def counted_authority_only(self) -> bool:
@@ -869,14 +906,41 @@ class HttpMenhirClient:
             if (rendered := _format_authority_record(record, drill_down=self._drill_down))
         ]
         sources = []
+        shown_sources: list[str] = []
         if self._source_memories and isinstance(data, dict):
             block = format_source_memories(data.get("source_memories"))
             if block:
                 sources.append(block)
-        tail = [*counted, *sources]
+                raw_sources = data.get("source_memories")
+                shown_sources = [
+                    str(r.get("uuid") or "") for r in raw_sources if isinstance(r, dict)
+                ]
+        writer = self._recall_writer_items(url, group_id, query, shown_sources)
+        tail = [*counted, *sources, *writer]
         if not tail:
             return placed
-        return RecallSnippets([*placed, *tail], [*placed.extras, *tail], counted, sources)
+        return RecallSnippets(
+            [*placed, *tail], [*placed.extras, *tail], counted, sources, writer
+        )
+
+    def _recall_writer_items(
+        self, url: str, group_id: str, query: str, shown_sources: list[str]
+    ) -> list[str]:
+        """Agent-writer items for ``--writer-items`` from a second, source-memory-only request."""
+        if not self._writer_items:
+            return []
+        payload = {
+            "query": query,
+            "limit": 1,
+            "namespace": group_id,
+            "include_session": True,
+            "source_memory_limit": WRITER_ITEM_CANDIDATES,
+        }
+        response = self._client.post(url, json=payload, headers=self._headers)
+        response.raise_for_status()
+        data = response.json()
+        raw = data.get("source_memories") if isinstance(data, dict) else None
+        return writer_item_snippets(raw, self._writer_items, shown_sources)
 
     def get_scalar_view_items(
         self, namespace: str, view_uuid: str, *, offset: int = 0, limit: int = 20

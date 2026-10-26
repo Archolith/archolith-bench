@@ -1,3 +1,11 @@
+## 2026-10-26 - Render agent-writer items outside the recall limit (`--writer-items N`, #168)
+
+- `harness --writer-items N` adds up to N agent-writer items (`source = 'agent-writer'`, from `LME_SEGMENTATION=adaptive-writer` builds) after the memories, outside `--recall-limit`, most similar first, as `[agent-recorded note | <time>] <text>`. Off (0) by default: one recall request and an unchanged context.
+- The items come from a second recall request (`limit` 1, `source_memory_limit` 50), filtered to agent-writer rows client-side, because Menhir's source-memory lane does not filter by source (Menhir #382 would). The first request, and with it the memories, counted verdicts and the `--source-memories` block, stays exactly as without the flag. Items already in the source block are not repeated. A blocking event advisory sends no second request.
+- Agentic recall keeps at most N writer items across its subqueries, outside the memory cap and separate from the verb-facet cap. The checkpoint tag gains `wi<N>`.
+- Measured before source memories were on by default: SSA-56 W 47 to 54. Not yet measured together with the source block.
+- `tests/test_menhir_client_writer_items.py`.
+
 ## 2026-10-25 - Accept verbatim-skipped user episodes in the pairing check
 
 - `_integrity_counts` (`ready_episodes_time_unpaired`): when Menhir's evidence projection already extracted the same text, it marks the client episode READY with substage `verbatim_skipped` and `extraction_skipped_for` set to that projection. Such an episode has no Graphiti episode of its own, so every one counted as unpaired: 512 of 515 READY user episodes in a stopped o500 build. It now passes when the named projection is READY, in the same namespace, with the same `reference_time`. The projection is itself checked for its own Graphiti pairing. On the stopped build the count drops from 512 to 18; those 18 are skips whose projection was still ENRICHING when the build stopped.
