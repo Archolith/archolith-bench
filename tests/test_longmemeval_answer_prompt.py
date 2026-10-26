@@ -35,6 +35,13 @@ def test_candidate_answers_get_the_best_supported_one_not_a_bare_dont_know() -> 
     assert "say you don't know; do not arbitrarily choose one" not in _MEMORY_SYSTEM_PROMPT
 
 
+def test_computed_numbers_are_stated_plainly_not_as_a_lower_bound() -> None:
+    assert ("state the number the retrieved figures give as your answer, not a lower bound"
+            ) in _MEMORY_SYSTEM_PROMPT
+    assert 'do not write "at least N", "over N", or "more than N"' in _MEMORY_SYSTEM_PROMPT
+    assert "briefly note which figures are approximate or what is unknown" in _MEMORY_SYSTEM_PROMPT
+
+
 def test_harness_recall_limit_defaults_to_20(monkeypatch) -> None:
     import inspect
 
