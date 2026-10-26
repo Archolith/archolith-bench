@@ -557,13 +557,28 @@ def _integrity_counts(ns: str, submitted_epoch_millis: list[int]) -> dict[str, i
     (time_unpaired,) = _cypher_counts(
         # Each READY queue node resolves to exactly one Graphiti episode dated at its reference_time.
         # A store-only node is never extracted, so it has no Graphiti episode to pair with.
+        # A verbatim-skipped client (Menhir marks it READY with substage 'verbatim_skipped' and
+        # extraction_skipped_for = the projection that extracted the same text) has none either:
+        # it passes only when that projection is READY in this namespace with the same
+        # reference_time. The projection is itself a queue node here, so its own pairing is checked.
         f"MATCH (q:Episodic {{namespace:'{ns}'}}) "
         "WHERE q.valid_at IS NULL AND q.processing_state = 'READY' "
         f"AND coalesce(q.extraction_mode, '') <> '{_STORE_ONLY}' "
         f"OPTIONAL MATCH (g:Episodic {{group_id:'{ns}'}}) "
         "WHERE g.uuid = q.resolved_episode_uuid AND g.valid_at IS NOT NULL "
-        "WITH q, collect(g) AS gs "
-        "RETURN sum(CASE WHEN size(gs) <> 1 OR q.reference_time IS NULL THEN 1 "
+        "WITH q, collect(g) AS gs, "
+        "q.processing_substage = 'verbatim_skipped' AND q.extraction_skipped_for IS NOT NULL "
+        "AS skipped "
+        f"OPTIONAL MATCH (p:Episodic {{namespace:'{ns}'}}) "
+        "WHERE skipped AND p.uuid = q.extraction_skipped_for "
+        "AND coalesce(p.is_evidence_projection, false) AND p.processing_state = 'READY' "
+        "WITH q, gs, skipped, collect(p) AS ps "
+        "RETURN sum(CASE WHEN skipped THEN "
+        "CASE WHEN size(ps) = 1 AND q.reference_time IS NOT NULL "
+        "AND ps[0].reference_time IS NOT NULL "
+        "AND datetime(toString(ps[0].reference_time)).epochMillis "
+        "= datetime(toString(q.reference_time)).epochMillis THEN 0 ELSE 1 END "
+        "WHEN size(gs) <> 1 OR q.reference_time IS NULL THEN 1 "
         "WHEN datetime(toString(gs[0].valid_at)).epochMillis "
         "<> datetime(toString(q.reference_time)).epochMillis THEN 1 ELSE 0 END);",
         1,

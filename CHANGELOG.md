@@ -1,3 +1,8 @@
+## 2026-10-25 - Accept verbatim-skipped user episodes in the pairing check
+
+- `_integrity_counts` (`ready_episodes_time_unpaired`): when Menhir's evidence projection already extracted the same text, it marks the client episode READY with substage `verbatim_skipped` and `extraction_skipped_for` set to that projection. Such an episode has no Graphiti episode of its own, so every one counted as unpaired: 512 of 515 READY user episodes in a stopped o500 build. It now passes when the named projection is READY, in the same namespace, with the same `reference_time`. The projection is itself checked for its own Graphiti pairing. On the stopped build the count drops from 512 to 18; those 18 are skips whose projection was still ENRICHING when the build stopped.
+- `tests/test_lme_verbatim_skip_pairing.py`.
+
 ## 2026-10-25 - Keep user questions as store-only source memories; gate builds on complete embeddings
 
 - CONTEXT_ONLY user turns (questions, requests) still state facts about the user, but were captured as evidence only, so recall never saw them (#43). With `LME_STORE_ONLY_CONTEXT=1` (config.sh default; the standalone `ingest.py` default stays 0) each becomes an episode sent with `store_only`: Menhir records and embeds it as a source memory but never extracts or projects it (Menhir #388). Assistant CONTEXT_ONLY turns and writer-mode assistant turns stay evidence only. `HttpMenhirClient.ingest` gains `store_only`, sent only when true. The plan digest changes only for plans that contain a store-only turn.
