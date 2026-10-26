@@ -1,3 +1,9 @@
+## 2026-10-25 - LME answer prompt states computed numbers plainly, not as a lower bound
+
+- The memory answer prompt asks for the number the retrieved figures give (a count, total, sum or difference) as the answer, not "at least N", "over N" or "more than N", with approximate or missing figures noted after it. "About N" is unaffected. The answer `prompt_fingerprint` changes for every arm.
+- Why: in the src-sm10 o500 arm, 9 answers led with "at least" or "over". Only 2 passed under both the old judge and the official LongMemEval judge (#41), and 3 got different grades from the two, even where the number matched the gold ($185, $720, 10, 3). The 34 answers that led with "about", "around" or "approximately" passed both judges 32 times.
+- `tests/test_longmemeval_answer_prompt.py`: `test_computed_numbers_are_stated_plainly_not_as_a_lower_bound`.
+
 ## 2026-10-25 - Render Menhir source memories by default
 
 - `--source-memories` is now on by default; `--no-source-memories` restores the old context. Every harness run, including `run_stratified_slice`, gets the source block, and the checkpoint tag gains `sm`: scores from here on are not like-for-like with earlier baselines.
@@ -58,8 +64,3 @@
 - `harness --recall-only --drill-down`: when Menhir collapses a scalar View to its total, the recall shows Menhir's own `built from N items; drill down: get_scalar_view_items(view_uuid=...)` line, and the answer model gets that tool plus a prompt note to use it as needed. Calls are served from `GET /api/scalar-views/{view_uuid}/items`, only for views shown in that item's recall and only in its namespace.
 - Items whose recall shows no collapsed View are answered exactly as before. Without `--drill-down` nothing changes.
 - New `send_chat_with_tools` shares `send_chat`'s retry policy (Flex waits, no retry on `insufficient_quota`); its last round forbids tools so the model has to answer. Tool calls are recorded in each result's `raw_usage`.
-
-## 2026-10-05 - Check provenance, source time and cross-namespace links at acceptance
-
-- After each item, ingest records read-only graph integrity counts in the manifest: submitted vs admitted user turns, admitted turns that were never projected, unfounded assertions, Graphiti episodes whose `valid_at` is not a submitted session date, READY queue episodes not paired to their Graphiti time, and cross-namespace links.
-- `validate_run.py` adds `provenance_chain` and `source_time_integrity` checks, and `namespace_isolation` also fails on cross-namespace links. A missing or unreadable count fails as unknown.
