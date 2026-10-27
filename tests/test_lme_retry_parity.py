@@ -41,6 +41,8 @@ ANCHORED = {
     "anchored_time_model": "gpt-6-luna",
     "anchored_time_attach_model": "gpt-6-luna",
 }
+# Recorded later than the original identity, like anchored time: a graph without it is refused.
+RECORDED_LATER = {**ANCHORED, "assistant_turns_store_only_enabled": 1}
 
 
 def _build(**overrides) -> dict:
@@ -60,7 +62,7 @@ def _build(**overrides) -> dict:
         "bench_commit": "bbbb222",
         "surface_digest": "f" * 64,
         "started_at": "2026-10-15T00:00:00Z",
-        **ANCHORED,
+        **RECORDED_LATER,
     }
     record.update(overrides)
     return record
@@ -88,6 +90,7 @@ def _write_build(path: Path, record: dict) -> None:
     ("anchored_time_expiry_enabled", 1),
     ("anchored_time_model", "gpt-4o-mini"),
     ("anchored_time_attach_model", "gpt-4o-mini"),
+    ("assistant_turns_store_only_enabled", 0),
 ])
 @pytest.mark.parametrize("noncanonical", [False, True])
 def test_resume_refuses_changed_anchored_setting(tmp_path: Path, field, value, noncanonical) -> None:
@@ -97,13 +100,13 @@ def test_resume_refuses_changed_anchored_setting(tmp_path: Path, field, value, n
         provenance.begin(path, _build(**{field: value}), noncanonical=noncanonical)
 
 
-@pytest.mark.parametrize("field", sorted(ANCHORED))
+@pytest.mark.parametrize("field", sorted(RECORDED_LATER))
 @pytest.mark.parametrize("noncanonical", [False, True])
 def test_resume_refuses_setting_a_previously_unrecorded_behavior(tmp_path: Path, field, noncanonical) -> None:
     """A graph built before anchored time was recorded cannot be resumed with it set."""
     path = tmp_path / "graph-provenance.json"
     legacy = _build()
-    for key in ANCHORED:
+    for key in RECORDED_LATER:
         del legacy[key]
     _write_build(path, legacy)
     with pytest.raises(provenance.ProvenanceMismatch, match="was not recorded"):
@@ -140,6 +143,7 @@ def test_retry_with_build_settings_is_allowed(tmp_path: Path) -> None:
     ("anchored_time_expiry_enabled", 1),
     ("anchored_time_model", "gpt-4o-mini"),
     ("anchored_time_attach_model", "gpt-4o-mini"),
+    ("assistant_turns_store_only_enabled", 0),
 ])
 @pytest.mark.parametrize("noncanonical", [False, True])
 def test_retry_refuses_different_ingest_behavior(tmp_path: Path, field, value, noncanonical) -> None:
@@ -151,7 +155,7 @@ def test_retry_refuses_different_ingest_behavior(tmp_path: Path, field, value, n
         )
 
 
-@pytest.mark.parametrize("field", sorted(ANCHORED))
+@pytest.mark.parametrize("field", sorted(RECORDED_LATER))
 def test_retry_refuses_a_graph_that_never_recorded_the_behavior(tmp_path: Path, field) -> None:
     path = tmp_path / "graph-provenance.json"
     legacy = _build()
@@ -228,6 +232,7 @@ INGEST_ENV = (
     "MENHIR_CANONICAL_SELF_BINDING_MODE",
     "MENHIR_PERSONAL_MEMORY_CHAT_MODEL",
     "MENHIR_PERSONAL_MEMORY_SUM_GROUNDING",
+    "MENHIR_ASSISTANT_TURNS_STORE_ONLY_ENABLED",
     "LME_REQUIRE_TURN_EVIDENCE",
     "MENHIR_MAX_LLM_CALLS_PER_JOB",
     "MENHIR_ANCHORED_TIME_RESOLVER",

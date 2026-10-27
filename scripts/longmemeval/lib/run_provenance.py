@@ -55,6 +55,7 @@ IMMUTABLE_KEYS = (
     "anchored_time_expiry_enabled",
     "anchored_time_model",
     "anchored_time_attach_model",
+    "assistant_turns_store_only_enabled",
 )
 
 # Ingest behaviors that later code started recording. A graph whose record predates one of
@@ -69,6 +70,8 @@ MUST_BE_RECORDED_KEYS = (
     "anchored_time_expiry_enabled",
     "anchored_time_model",
     "anchored_time_attach_model",
+    # Menhir decides it when the worker processes an episode, so a retry re-decides it too.
+    "assistant_turns_store_only_enabled",
 )
 
 # What retry.sh must reproduce exactly: it re-enriches FAILED episodes in an existing graph,

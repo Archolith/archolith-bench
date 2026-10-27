@@ -20,6 +20,7 @@ esac
 for lane in "${LME_COUNTER_STATE_ENABLED}" "${LME_SCALAR_STATE_ENABLED}" "${MENHIR_PERSONAL_MEMORY_EVENT_HISTORY_ENABLED}"; do
   case "${lane}" in 0|1) ;; *) die "processing lane settings must be 0 or 1" ;; esac
 done
+case "${LME_ASSISTANT_TURN_POLICY}" in 0|1) ;; *) die "LME_ASSISTANT_TURN_POLICY must be 0 or 1" ;; esac
 for flag in "${LME_ANCHORED_TIME_RESOLVER}" "${LME_ANCHORED_TIME_ATTACH}" "${LME_ANCHORED_TIME_EXPIRY}"; do
   case "${flag}" in 0|1) ;; *) die "LME_ANCHORED_TIME_* settings must be 0 or 1" ;; esac
 done
@@ -203,6 +204,7 @@ cat > "${GRAPH_ATTEMPT_RECORD}" <<EOF
   "anchored_time_expiry_enabled": ${LME_ANCHORED_TIME_EXPIRY},
   "anchored_time_model": "${LME_ANCHORED_TIME_MODEL}",
   "anchored_time_attach_model": "${LME_ANCHORED_TIME_ATTACH_MODEL}",
+  "assistant_turns_store_only_enabled": ${LME_ASSISTANT_TURN_POLICY},
   "openai_service_tier": "${LME_OPENAI_SERVICE_TIER}",
   "max_llm_calls_per_job": ${LME_MAX_LLM_CALLS_PER_JOB},
   "scalar_output_required": ${LME_REQUIRE_SCALAR_OUTPUT},
@@ -277,6 +279,7 @@ fi
   --setting "segmentation=${LME_SEGMENTATION}" \
   --setting "store_only_context=${LME_STORE_ONLY_CONTEXT}" \
   --setting "assistant_store_only=${LME_ASSISTANT_STORE_ONLY}" \
+  --setting "assistant_turn_policy=${LME_ASSISTANT_TURN_POLICY}" \
   --setting "embed_backfill=${LME_EMBED_BACKFILL}" \
   --setting "strict_failure_policy=zero-failed-episodes-per-namespace" \
   --setting "ingest_target_items=${INGEST_TARGET}" \
@@ -359,6 +362,7 @@ export MENHIR_PERSONAL_MEMORY_SCALAR_CANONICAL_SELF="${LME_SCALAR_CANONICAL_SELF
 export MENHIR_CANONICAL_SELF_BINDING_MODE="${LME_CANONICAL_SELF_BINDING_MODE}"
 export MENHIR_PERSONAL_MEMORY_CHAT_MODEL="${LME_EXTRACT_MODEL}"
 export MENHIR_PERSONAL_MEMORY_SUM_GROUNDING=1
+export MENHIR_ASSISTANT_TURNS_STORE_ONLY_ENABLED="${LME_ASSISTANT_TURN_POLICY}"
 export LME_REQUIRE_TURN_EVIDENCE="${LME_REQUIRE_TURN_EVIDENCE}"
 export LME_STORE_ONLY_CONTEXT="${LME_STORE_ONLY_CONTEXT}"
 export LME_ASSISTANT_STORE_ONLY="${LME_ASSISTANT_STORE_ONLY}"
@@ -430,9 +434,14 @@ curl -sf "${MENHIR_URL}/api/health" >/dev/null 2>&1 &&
 if [ "${LME_ASSISTANT_STORE_ONLY}" = "1" ] && [ "${LME_SEGMENTATION}" != "adaptive" ]; then
   die "LME_ASSISTANT_STORE_ONLY=1 needs LME_SEGMENTATION=adaptive (got ${LME_SEGMENTATION})"
 fi
-if { [ "${LME_STORE_ONLY_CONTEXT}" = "1" ] || [ "${LME_ASSISTANT_STORE_ONLY}" = "1" ]; } &&
+if [ "${LME_STORE_ONLY_CONTEXT}" = "1" ] &&
   ! grep -q "store_only" "${MENHIR_FRONTIER}/src/menhir/api/routes_support.py" 2>/dev/null; then
   die "LME_STORE_ONLY_CONTEXT=1 but ${MENHIR_FRONTIER} has no store_only ingest (Menhir #388); set it to 0 or update the tree"
+fi
+# An older Menhir ignores the policy env and would extract every raw assistant turn.
+if [ "${LME_ASSISTANT_STORE_ONLY}" = "1" ] &&
+  ! grep -q "MENHIR_ASSISTANT_TURNS_STORE_ONLY_ENABLED" "${MENHIR_FRONTIER}/src/menhir/config/feature_flags.py" 2>/dev/null; then
+  die "LME_ASSISTANT_STORE_ONLY=1 but ${MENHIR_FRONTIER} has no assistant-turn policy (MENHIR_ASSISTANT_TURNS_STORE_ONLY_ENABLED); update the tree"
 fi
 if [ "${LME_EMBED_BACKFILL}" = "1" ] &&
   ! grep -q -- "--require-complete" "${MENHIR_FRONTIER}/scripts/backfill_episode_embeddings.py" 2>/dev/null; then

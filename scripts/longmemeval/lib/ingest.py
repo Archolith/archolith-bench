@@ -96,10 +96,11 @@ REQUIRE_TURN_EVIDENCE = os.getenv("LME_REQUIRE_TURN_EVIDENCE", "1").strip().lowe
 STORE_ONLY_CONTEXT = os.getenv("LME_STORE_ONLY_CONTEXT", "0").strip().lower() in {
     "1", "true", "yes", "on",
 }
-# Plain-client assistant side (#168): every assistant turn is sent verbatim, with its role, as a
-# store-only source memory (embedded, never extracted) instead of the segmenter's evidence-only or
-# extract-whole routing. Adaptive segmentation only; off unless set, for the same older-Menhir
-# reason as above.
+# Plain-client assistant side (#168): every assistant turn is sent verbatim as one episode with
+# role="assistant", grounded on its own turn evidence, instead of the segmenter's evidence-only or
+# extract-whole routing. Menhir's assistant-turn policy (MENHIR_ASSISTANT_TURNS_STORE_ONLY_ENABLED)
+# then keeps it store-only; the bench sends no store_only for it. Adaptive segmentation only; off
+# unless set, since an older Menhir would extract every assistant turn.
 ASSISTANT_STORE_ONLY = os.getenv("LME_ASSISTANT_STORE_ONLY", "0").strip().lower() in {
     "1", "true", "yes", "on",
 }
@@ -142,6 +143,9 @@ class IngestTurn:
     # True for a CONTEXT_ONLY user turn kept as a source memory: an embedded :Episodic node
     # Menhir never extracts (archolith-bench#43). Only meaningful with extract=True.
     store_only: bool = False
+    # True for a raw assistant turn (LME_ASSISTANT_STORE_ONLY): sent verbatim with its declared
+    # role and grounded; Menhir's turn-role policy decides it is store-only.
+    raw_turn: bool = False
 
 
 @dataclass
@@ -217,6 +221,7 @@ def _ingest_turn(
     source: str = "",
     writer_index: int = -1,
     store_only: bool = False,
+    raw_turn: bool = False,
 ) -> str:
     """Ingest one turn with bounded exponential backoff on transient errors.
 
@@ -252,6 +257,9 @@ def _ingest_turn(
     ``store_only=True`` (CONTEXT_ONLY user turns) records evidence and creates the episode as a
     source memory that Menhir embeds but never extracts or projects.
 
+    ``raw_turn=True`` (assistant turns under LME_ASSISTANT_STORE_ONLY) records evidence and sends
+    the whole turn with its declared role, as a plain client would; Menhir decides store-only.
+
     Uses wait=False: the namespace-window scheduler is the completeness
     guarantee, so we do not block on an HTTP request per turn. It still keeps
     at most one episode active per namespace while allowing different
@@ -276,8 +284,8 @@ def _ingest_turn(
     # turns are captured for every role, since they have no episode to ground and
     # the record is the only trace the source turn leaves. A writer item re-records its
     # assistant turn's evidence when the cache is empty (a resume); Menhir MERGEs on turn_key.
-    # A store-only assistant turn keeps the evidence record it had as an evidence-only turn.
-    needs_evidence = is_user or not extract or is_writer or store_only
+    # A store-only or raw assistant turn keeps the evidence record it had as an evidence-only turn.
+    needs_evidence = is_user or not extract or is_writer or store_only or raw_turn
     if turn_evidence_uuid is None and needs_evidence:
         for attempt in range(tries):
             try:
@@ -323,10 +331,10 @@ def _ingest_turn(
         key_kwargs["memory_role"] = memory_writer.WRITER_ROLE
     if store_only:
         key_kwargs["store_only"] = True
-        # A non-user store-only turn names its speaker. Store-only user turns send no role, so
-        # their requests (and idempotency digests) stay as they were.
-        if not is_user and not is_writer:
-            key_kwargs["memory_role"] = normalized_role
+    # A non-user store-only or raw turn names its speaker. Store-only user turns send no role, so
+    # their requests (and idempotency digests) stay as they were.
+    if (store_only or raw_turn) and not is_user and not is_writer:
+        key_kwargs["memory_role"] = normalized_role
     for attempt in range(tries):
         try:
             result = client.ingest(
@@ -1181,6 +1189,8 @@ def _ingest_pool(
             )
             if turn.store_only:
                 turn_kwargs["store_only"] = True
+            if turn.raw_turn:
+                turn_kwargs["raw_turn"] = True
             episode_uuid = _ingest_turn(
                 client,
                 run.namespace,
@@ -1671,6 +1681,7 @@ def _iter_item_turns(
             # declarant="user".
             extract = True
             store_only = False
+            raw_turn = False
             if segmentation == "none":
                 contents = [content]
             elif segmentation == "sentence":
@@ -1689,9 +1700,10 @@ def _iter_item_turns(
                     contents = [content]
                     extract = False
                 elif ASSISTANT_STORE_ONLY and role.strip().lower() == "assistant":
-                    # The whole turn as one store-only source memory, whatever the segmenter says.
+                    # The whole turn as one raw episode with its role, whatever the segmenter says;
+                    # Menhir's turn-role policy keeps it store-only.
                     contents = [content]
-                    store_only = True
+                    raw_turn = True
                 elif mode == SegmentationMode.SKIP:
                     contents = []
                 elif mode == SegmentationMode.CONTEXT_ONLY:
@@ -1733,6 +1745,7 @@ def _iter_item_turns(
                     turn_key=turn_key,
                     segment_index=segment_index,
                     store_only=store_only,
+                    raw_turn=raw_turn,
                 )
             if writer_mode and role.strip().lower() == "assistant":
                 for writer_index, writer_item in enumerate(
@@ -1825,6 +1838,8 @@ def _turn_plan_digest(
         if t.store_only:
             # Appended only when set, so a plan without store-only turns keeps its old digest.
             row.append("store_only")
+        if t.raw_turn:
+            row.append("raw_turn")
         return row
 
     payload = {
