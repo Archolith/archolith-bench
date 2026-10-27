@@ -882,6 +882,11 @@ class HttpMenhirClient:
             if rendered:
                 snippets.append(rendered)
 
+        # Menhir's deterministic query hint (flag-gated server-side; absent when off).
+        query_hint = data.get("query_hint") if isinstance(data, dict) else None
+        if isinstance(query_hint, str) and query_hint.strip():
+            snippets.append(f"[QUERY NOTE] {query_hint.strip()}")
+
         n_head = len(snippets)
         facet_snippets: list[str] = []
         for item in items:
