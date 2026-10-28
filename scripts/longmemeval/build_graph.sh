@@ -188,7 +188,6 @@ cat > "${GRAPH_ATTEMPT_RECORD}" <<EOF
   "scalar_history_enabled": ${LME_SCALAR_HISTORY_ENABLED},
   "scalar_consolidation_k": ${LME_SCALAR_CONSOLIDATION_K},
   "scalar_threshold": "${LME_SCALAR_THRESHOLD}",
-  "scalar_canonical_self": ${LME_SCALAR_CANONICAL_SELF},
   "canonical_self_binding_mode": "${LME_CANONICAL_SELF_BINDING_MODE}",
   "extract_model": "${LME_EXTRACT_MODEL}",
   "anchored_time_resolver_enabled": ${LME_ANCHORED_TIME_RESOLVER},
@@ -337,7 +336,6 @@ export MENHIR_PERSONAL_MEMORY_SCALAR_HISTORY_ENABLED="${LME_SCALAR_HISTORY_ENABL
 # and the 0.67-vs-2/3 trap. Reconcile, View authority, sum grounding and the assistant-turn policy
 # are always on since the #168 freeze and are not exported.
 export MENHIR_PERSONAL_MEMORY_SCALAR_THRESHOLD="${LME_SCALAR_THRESHOLD}"
-export MENHIR_PERSONAL_MEMORY_SCALAR_CANONICAL_SELF="${LME_SCALAR_CANONICAL_SELF}"
 export MENHIR_CANONICAL_SELF_BINDING_MODE="${LME_CANONICAL_SELF_BINDING_MODE}"
 export MENHIR_PERSONAL_MEMORY_CHAT_MODEL="${LME_EXTRACT_MODEL}"
 export LME_REQUIRE_TURN_EVIDENCE="${LME_REQUIRE_TURN_EVIDENCE}"

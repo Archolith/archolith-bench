@@ -188,10 +188,7 @@ LME_SCALAR_RECONCILE_ATTRIBUTE="${LME_SCALAR_RECONCILE_ATTRIBUTE:-1}"
 LME_SCALAR_RECONCILE_SCOPE="${LME_SCALAR_RECONCILE_SCOPE:-1}"
 LME_SCALAR_RECONCILE_SUBJECT="${LME_SCALAR_RECONCILE_SUBJECT:-1}"
 # Menhir always reconciles since the #168 freeze; build_graph.sh no longer exports the three above.
-# Measured effect: ZERO cells in every configuration (the prompt already emits 'user' almost
-# always). Off by default here; flip on only to re-measure.
-LME_SCALAR_CANONICAL_SELF="${LME_SCALAR_CANONICAL_SELF:-0}"
-# Graphiti author-node binding is separate from scalar subject normalization.
+# Graphiti author-node binding (off | observe | enforce).
 LME_CANONICAL_SELF_BINDING_MODE="${LME_CANONICAL_SELF_BINDING_MODE:-${MENHIR_CANONICAL_SELF_BINDING_MODE:-off}}"
 # A one-item plumbing smoke may validly abstain at the consistency gate. Canonical/full builds keep
 # this on so promotion refuses a corpus that produced no durable scalar assertion/View at all.

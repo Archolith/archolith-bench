@@ -107,8 +107,7 @@ run settings. Resuming with different lanes or missing completion receipts is re
 
 Graphiti author-node binding is selected with `LME_CANONICAL_SELF_BINDING_MODE=off|observe|enforce`
 (default `off`, falling back to an explicitly supplied `MENHIR_CANONICAL_SELF_BINDING_MODE`).
-It is separate from `LME_SCALAR_CANONICAL_SELF`, which normalizes scalar subjects. The build
-validates and forwards the mode, records it in graph provenance, and refuses a resume with a
+The build validates and forwards the mode, records it in graph provenance, and refuses a resume with a
 changed or previously unrecorded mode. `observe` records decisions without applying binding;
 `enforce` applies the automatic-memory identity contract, not a guarantee of fact attribution.
 Choose and freeze the mode before the final ingest; no mode or feature default is promoted here.
