@@ -1526,13 +1526,13 @@ def test_build_script_passes_selected_lanes_to_server_and_ingest(scalar, counter
     result = subprocess.run([bash, '-c', command], env=env, capture_output=True, text=True, check=True)
     lines = result.stdout.splitlines()
     # Menhir removed the counter lane; build_graph.sh no longer exports its flag.
-    assert not any(l.startswith("export MENHIR_PERSONAL_MEMORY_CONSOLIDATION_ENABLED")
-                   for l in script.splitlines())
+    assert not any(ln.startswith("export MENHIR_PERSONAL_MEMORY_CONSOLIDATION_ENABLED")
+                   for ln in script.splitlines())
     # Menhir archived the event-history lane; neither script exports its flag any more.
     for name in ("build_graph.sh", "retry.sh"):
         text = (ROOT / "scripts/longmemeval" / name).read_text()
-        assert not any(l.startswith("export MENHIR_PERSONAL_MEMORY_EVENT_HISTORY")
-                       for l in text.splitlines())
+        assert not any(ln.startswith("export MENHIR_PERSONAL_MEMORY_EVENT_HISTORY")
+                       for ln in text.splitlines())
     assert "--consolidate-events" not in lines
     for option, value in [("--consolidate-scalar", scalar), ("--consolidate-counter", counter)]:
         assert (option in lines) is (value == "1")
