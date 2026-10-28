@@ -27,9 +27,10 @@ def _menhir_root() -> Path:
         candidates.append(Path(os.environ["MENHIR_ROOT"]))
     candidates.extend((Path.cwd() / "menhir", Path.cwd().parent / "menhir"))
     for candidate in candidates:
-        if (candidate / "src" / "menhir" / "services" / "structural_scalar_composer.py").is_file():
+        # The deterministic extractor was removed from Menhir main on 2026-10-27.
+        if (candidate / "src" / "menhir" / "services" / "deterministic_scalar_extractor.py").is_file():
             return candidate.resolve()
-    pytest.skip("set MENHIR_ROOT or provide a local ../menhir sibling")
+    pytest.skip("set MENHIR_ROOT to a Menhir checkout of archive/bucket1-features-2026-10-27")
 
 
 @pytest.fixture(scope="module")
