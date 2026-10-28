@@ -1515,10 +1515,10 @@ def test_build_script_passes_selected_lanes_to_server_and_ingest(scalar, counter
     start = script.index("INGEST_ARGS=(")
     end = script.index('"${BENCH_PY}" "$(dirname "${BASH_SOURCE[0]}")/lib/ingest.py"', start)
     exports = '\n'.join(line for line in script.splitlines() if line.startswith(
-        "export MENHIR_PERSONAL_MEMORY_EVENT_HISTORY_ENABLED"
+        "export MENHIR_PERSONAL_MEMORY_SCALAR_STATE_ENABLED"
     ))
     env = dict(os.environ, LME_SCALAR_STATE_ENABLED=scalar, LME_COUNTER_STATE_ENABLED=counter,
-               MENHIR_PERSONAL_MEMORY_EVENT_HISTORY_ENABLED=event)
+               LME_EVENT_HISTORY_ENABLED=event)
     setup = 'set -eu; LIMIT=1; MENHIR_URL=http://unused; LME_MANIFEST_PATH=unused; LME_SEGMENTATION=adaptive; '
     setup += 'LME_INGEST_CONCURRENCY=1; LME_INGEST_STOP_AFTER_ITEMS=0; LME_SCALAR_CONSOLIDATION_K=3; LME_SCALAR_CALL_BUDGET=50; '
     command = setup + exports + '\n' + script[start:end]
@@ -1528,7 +1528,13 @@ def test_build_script_passes_selected_lanes_to_server_and_ingest(scalar, counter
     # Menhir removed the counter lane; build_graph.sh no longer exports its flag.
     assert not any(l.startswith("export MENHIR_PERSONAL_MEMORY_CONSOLIDATION_ENABLED")
                    for l in script.splitlines())
-    for option, value in [("--consolidate-scalar", scalar), ("--consolidate-counter", counter), ("--consolidate-events", event)]:
+    # Menhir archived the event-history lane; neither script exports its flag any more.
+    for name in ("build_graph.sh", "retry.sh"):
+        text = (ROOT / "scripts/longmemeval" / name).read_text()
+        assert not any(l.startswith("export MENHIR_PERSONAL_MEMORY_EVENT_HISTORY")
+                       for l in text.splitlines())
+    assert "--consolidate-events" not in lines
+    for option, value in [("--consolidate-scalar", scalar), ("--consolidate-counter", counter)]:
         assert (option in lines) is (value == "1")
 
 

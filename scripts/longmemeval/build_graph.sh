@@ -17,13 +17,15 @@ case "${LME_CANONICAL_SELF_BINDING_MODE}" in
   off|observe|enforce) ;;
   *) die "LME_CANONICAL_SELF_BINDING_MODE must be off, observe, or enforce" ;;
 esac
-for lane in "${LME_COUNTER_STATE_ENABLED}" "${LME_SCALAR_STATE_ENABLED}" "${MENHIR_PERSONAL_MEMORY_EVENT_HISTORY_ENABLED}"; do
+for lane in "${LME_COUNTER_STATE_ENABLED}" "${LME_SCALAR_STATE_ENABLED}" "${LME_EVENT_HISTORY_ENABLED}"; do
   case "${lane}" in 0|1) ;; *) die "processing lane settings must be 0 or 1" ;; esac
 done
 # Menhir removed the consolidation counter lane (2026-10-28); a counter build would record a lane
 # that never ran. Kept as a setting so earlier graphs' provenance (counter_state_enabled=0) resumes.
 [ "${LME_COUNTER_STATE_ENABLED}" = "0" ] ||
   die "LME_COUNTER_STATE_ENABLED=1: Menhir removed the consolidation counter lane (2026-10-28)"
+[ "${LME_EVENT_HISTORY_ENABLED}" = "0" ] ||
+  die "LME_EVENT_HISTORY_ENABLED=1: Menhir archived the event-history lane (2026-10-28)"
 for flag in "${LME_ANCHORED_TIME_RESOLVER}"; do
   case "${flag}" in 0|1) ;; *) die "LME_ANCHORED_TIME_RESOLVER must be 0 or 1" ;; esac
 done
@@ -187,7 +189,7 @@ cat > "${GRAPH_ATTEMPT_RECORD}" <<EOF
   "segmentation": "${LME_SEGMENTATION}",
   "ingest_concurrency": ${LME_INGEST_CONCURRENCY},
   "counter_state_enabled": ${LME_COUNTER_STATE_ENABLED},
-  "event_history_enabled": ${MENHIR_PERSONAL_MEMORY_EVENT_HISTORY_ENABLED},
+  "event_history_enabled": ${LME_EVENT_HISTORY_ENABLED},
   "scalar_state_enabled": ${LME_SCALAR_STATE_ENABLED},
   "scalar_history_enabled": ${LME_SCALAR_HISTORY_ENABLED},
   "scalar_consolidation_k": ${LME_SCALAR_CONSOLIDATION_K},
@@ -276,7 +278,7 @@ fi
   --setting "ingest_target_items=${INGEST_TARGET}" \
   --setting "ingest_concurrency=${LME_INGEST_CONCURRENCY}" \
   --setting "counter_state_enabled=${LME_COUNTER_STATE_ENABLED}" \
-  --setting "event_history_enabled=${MENHIR_PERSONAL_MEMORY_EVENT_HISTORY_ENABLED}" \
+  --setting "event_history_enabled=${LME_EVENT_HISTORY_ENABLED}" \
   --setting "scalar_state_enabled=${LME_SCALAR_STATE_ENABLED}" \
   --setting "scalar_history_enabled=${LME_SCALAR_HISTORY_ENABLED}" \
   --setting "scalar_consolidation_k=${LME_SCALAR_CONSOLIDATION_K}" \
@@ -332,7 +334,6 @@ export LME_NEO4J_CONTAINER="${LME_NEO4J_NAME}" LME_NEO4J_PW="${LME_NEO4J_PW}"
 # another menhir process (the cross-process WinError 32 on rollover is the log-noise source).
 export MENHIR_LOG_DIR="${LME_RESULTS_DIR}/menhir-logs"; mkdir -p "${MENHIR_LOG_DIR}"
 export MENHIR_BENCHMARK_MODE=1 MENHIR_API_HOST=127.0.0.1 MENHIR_API_PORT="${MENHIR_PORT}"
-export MENHIR_PERSONAL_MEMORY_EVENT_HISTORY_ENABLED
 export MENHIR_PERSONAL_MEMORY_SCALAR_STATE_ENABLED="${LME_SCALAR_STATE_ENABLED}"
 export MENHIR_PERSONAL_MEMORY_SCALAR_HISTORY_ENABLED="${LME_SCALAR_HISTORY_ENABLED}"
 # Typed-scalar vote threshold (Menhir's default is unanimous). See config.sh for the measured grid
@@ -457,7 +458,6 @@ if [ "${LME_INGEST_STOP_AFTER_ITEMS}" -gt 0 ]; then
   INGEST_ARGS+=(--manifest-item-limit "${LME_INGEST_STOP_AFTER_ITEMS}")
 fi
 if [ "${LME_COUNTER_STATE_ENABLED}" = "1" ]; then INGEST_ARGS+=(--consolidate-counter); fi
-if [ "${MENHIR_PERSONAL_MEMORY_EVENT_HISTORY_ENABLED}" = "1" ]; then INGEST_ARGS+=(--consolidate-events); fi
 INGEST_ARGS+=(--consolidation-k "${LME_SCALAR_CONSOLIDATION_K}" --consolidation-call-budget "${LME_SCALAR_CALL_BUDGET}")
 if [ "${LME_SCALAR_STATE_ENABLED}" = "1" ]; then
   INGEST_ARGS+=(--consolidate-scalar)

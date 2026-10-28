@@ -54,7 +54,7 @@ cat > "${RETRY_RECORD}" <<EOF
 {
   "container": "${LME_NEO4J_NAME}",
   "counter_state_enabled": ${LME_COUNTER_STATE_ENABLED},
-  "event_history_enabled": ${MENHIR_PERSONAL_MEMORY_EVENT_HISTORY_ENABLED},
+  "event_history_enabled": ${LME_EVENT_HISTORY_ENABLED},
   "scalar_state_enabled": ${LME_SCALAR_STATE_ENABLED},
   "canonical_self_binding_mode": "${LME_CANONICAL_SELF_BINDING_MODE}",
   "extract_model": "${LME_EXTRACT_MODEL}",
@@ -95,7 +95,6 @@ export MENHIR_API_PORT="${MENHIR_PORT}"
 export MENHIR_INGEST_CONCURRENCY="${MENHIR_INGEST_CONCURRENCY:-8}"
 
 # ---- ingest behavior: identical to build_graph.sh ----------------------------
-export MENHIR_PERSONAL_MEMORY_EVENT_HISTORY_ENABLED
 export MENHIR_PERSONAL_MEMORY_SCALAR_STATE_ENABLED="${LME_SCALAR_STATE_ENABLED}"
 export MENHIR_PERSONAL_MEMORY_SCALAR_HISTORY_ENABLED="${LME_SCALAR_HISTORY_ENABLED}"
 export MENHIR_PERSONAL_MEMORY_SCALAR_THRESHOLD="${LME_SCALAR_THRESHOLD}"

@@ -87,9 +87,9 @@ LME_RECALL_LIMIT=5 ./lme.sh recall-ab main 30 --subset temporal-reasoning
 
 Benchmark mode keeps the maintenance scheduler disabled. Builds invoke `/api/phase3/run`
 after each namespace drains when any lane is requested. Select scalars with
-`LME_SCALAR_STATE_ENABLED=1` and events with `MENHIR_PERSONAL_MEMORY_EVENT_HISTORY_ENABLED=1`;
-omitted lanes remain off. The KU wrapper requires scalars and scalar history, but events still
-need explicit opt-in. Menhir removed the consolidation counter lane on 2026-10-28, so
+`LME_SCALAR_STATE_ENABLED=1`; omitted lanes remain off. The KU wrapper requires scalars and
+scalar history. Menhir archived the event-history lane on 2026-10-28, so `build_graph.sh` (and the
+KU wrapper) refuse `LME_EVENT_HISTORY_ENABLED=1`; the setting stays only for provenance. Menhir removed the consolidation counter lane on 2026-10-28, so
 `build_graph.sh` refuses `LME_COUNTER_STATE_ENABLED=1`.
 
 The request and the server counter setting both reflect the counter selection. Requested

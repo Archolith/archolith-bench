@@ -226,7 +226,6 @@ def test_cli_check_retry_refuses_without_provenance(tmp_path: Path) -> None:
 # Every Menhir setting that changes what enrichment writes. retry.sh re-enriches episodes in a
 # graph build_graph.sh made, so each must be exported with the same value expression.
 INGEST_ENV = (
-    "MENHIR_PERSONAL_MEMORY_EVENT_HISTORY_ENABLED",
     "MENHIR_PERSONAL_MEMORY_SCALAR_STATE_ENABLED",
     "MENHIR_PERSONAL_MEMORY_SCALAR_HISTORY_ENABLED",
     "MENHIR_PERSONAL_MEMORY_SCALAR_THRESHOLD",
