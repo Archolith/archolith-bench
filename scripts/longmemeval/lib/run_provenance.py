@@ -51,11 +51,8 @@ IMMUTABLE_KEYS = (
     "canonical_self_binding_mode",
     "extract_model",
     "anchored_time_resolver_enabled",
-    "anchored_time_attach_enabled",
-    "anchored_time_expiry_enabled",
     "anchored_time_model",
     "anchored_time_attach_model",
-    "assistant_turns_store_only_enabled",
 )
 
 # Ingest behaviors that later code started recording. A graph whose record predates one of
@@ -66,13 +63,11 @@ MUST_BE_RECORDED_KEYS = (
     "canonical_self_binding_mode",
     "extract_model",
     "anchored_time_resolver_enabled",
-    "anchored_time_attach_enabled",
-    "anchored_time_expiry_enabled",
     "anchored_time_model",
     "anchored_time_attach_model",
-    # Menhir decides it when the worker processes an episode, so a retry re-decides it too.
-    "assistant_turns_store_only_enabled",
 )
+# Attach, expiry and the assistant-turn policy are no longer recorded: since the #168 freeze they
+# are not settings (attach and expiry follow the resolver), so menhir_commit decides them.
 
 # What retry.sh must reproduce exactly: it re-enriches FAILED episodes in an existing graph,
 # so any difference here makes one graph out of two configurations.

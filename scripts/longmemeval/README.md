@@ -113,10 +113,11 @@ changed or previously unrecorded mode. `observe` records decisions without apply
 `enforce` applies the automatic-memory identity contract, not a guarantee of fact attribution.
 Choose and freeze the mode before the final ingest; no mode or feature default is promoted here.
 
-Anchored time is on by default for builds: `LME_ANCHORED_TIME_RESOLVER=1` and
-`LME_ANCHORED_TIME_ATTACH=1`, with `LME_ANCHORED_TIME_MODEL` (and `_ATTACH_MODEL`) defaulting
-to `gpt-6-luna`. `LME_ANCHORED_TIME_EXPIRY` is wired but defaults to 0 until it has a live
-readback. Attach requires the resolver, and both require `LME_EXTRACT_PROVIDER=openai`.
+Anchored time is on by default for builds: `LME_ANCHORED_TIME_RESOLVER=1`, with
+`LME_ANCHORED_TIME_MODEL` (and `_ATTACH_MODEL`) defaulting to `gpt-6-luna`. Since the #168 freeze
+Menhir runs the attach check and expiry whenever the resolver is on; neither is a separate setting.
+The resolver requires `LME_EXTRACT_PROVIDER=openai`. `build_graph.sh` and `retry.sh` refuse to start
+Menhir when the environment sets a flag the serving tree lists as retired (`lib/retired_flags.py`).
 `LME_OPENAI_SERVICE_TIER` (default `flex`) is forwarded as `MENHIR_OPENAI_SERVICE_TIER` (set in
 `config.sh`, so the recall and analysis serves of every wrapper get it too, not only the build) and, for
 the harness's answer and judge calls, as `BENCHMARK_SERVICE_TIER`; both apply it only to reasoning

@@ -91,11 +91,9 @@ export BENCHMARK_SERVICE_TIER="${BENCHMARK_SERVICE_TIER:-${LME_OPENAI_SERVICE_TI
 export MENHIR_OPENAI_SERVICE_TIER="${MENHIR_OPENAI_SERVICE_TIER:-${LME_OPENAI_SERVICE_TIER}}"
 
 # ---- Anchored time (ingest-time; part of the graph's identity) ----
-# Resolver + blind attach check on for the n=500 build (owner decision, menhir #281).
-# Expiry is wired but off until it has a live readback.
+# Resolver on for the n=500 build (owner decision, menhir #281). Since the #168 freeze Menhir runs
+# the attach check and expiry whenever the resolver is on; neither is a separate setting.
 LME_ANCHORED_TIME_RESOLVER="${LME_ANCHORED_TIME_RESOLVER:-1}"
-LME_ANCHORED_TIME_ATTACH="${LME_ANCHORED_TIME_ATTACH:-1}"
-LME_ANCHORED_TIME_EXPIRY="${LME_ANCHORED_TIME_EXPIRY:-0}"
 LME_ANCHORED_TIME_MODEL="${LME_ANCHORED_TIME_MODEL:-gpt-6-luna}"
 LME_ANCHORED_TIME_ATTACH_MODEL="${LME_ANCHORED_TIME_ATTACH_MODEL:-${LME_ANCHORED_TIME_MODEL}}"
 # Per-episode LLM call budget. 100 is Menhir's default (above its measured p99 of 84). A refusal
@@ -130,11 +128,8 @@ LME_REQUIRE_TURN_EVIDENCE="${LME_REQUIRE_TURN_EVIDENCE:-1}"
 LME_STORE_ONLY_CONTEXT="${LME_STORE_ONLY_CONTEXT:-1}"
 # 1: every assistant turn is sent verbatim with role=assistant, as a plain client would, instead
 # of the segmenter's evidence-only/extract-whole routing (#168 plain-client baseline). Menhir's
-# assistant-turn policy (below) keeps it store-only. Adaptive segmentation only.
+# assistant-turn policy (always on since the #168 freeze) keeps it store-only. Adaptive only.
 LME_ASSISTANT_STORE_ONLY="${LME_ASSISTANT_STORE_ONLY:-0}"
-# Menhir's MENHIR_ASSISTANT_TURNS_STORE_ONLY_ENABLED for the ingest and retry serves: 1 (Menhir's
-# default) stores a raw assistant turn without extracting it; 0 extracts it (the A/B arm).
-LME_ASSISTANT_TURN_POLICY="${LME_ASSISTANT_TURN_POLICY:-1}"
 # After the ingest drains, embed any READY episode still missing content_embedding and fail the
 # build if one remains (benchmark mode runs no scheduler to repair them). Needs Menhir #389.
 LME_EMBED_BACKFILL="${LME_EMBED_BACKFILL:-1}"
@@ -192,6 +187,7 @@ LME_SCALAR_THRESHOLD="${LME_SCALAR_THRESHOLD:-2/3}"
 LME_SCALAR_RECONCILE_ATTRIBUTE="${LME_SCALAR_RECONCILE_ATTRIBUTE:-1}"
 LME_SCALAR_RECONCILE_SCOPE="${LME_SCALAR_RECONCILE_SCOPE:-1}"
 LME_SCALAR_RECONCILE_SUBJECT="${LME_SCALAR_RECONCILE_SUBJECT:-1}"
+# Menhir always reconciles since the #168 freeze; build_graph.sh no longer exports the three above.
 # Measured effect: ZERO cells in every configuration (the prompt already emits 'user' almost
 # always). Off by default here; flip on only to re-measure.
 LME_SCALAR_CANONICAL_SELF="${LME_SCALAR_CANONICAL_SELF:-0}"

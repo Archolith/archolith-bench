@@ -98,7 +98,7 @@ STORE_ONLY_CONTEXT = os.getenv("LME_STORE_ONLY_CONTEXT", "0").strip().lower() in
 }
 # Plain-client assistant side (#168): every assistant turn is sent verbatim as one episode with
 # role="assistant", grounded on its own turn evidence, instead of the segmenter's evidence-only or
-# extract-whole routing. Menhir's assistant-turn policy (MENHIR_ASSISTANT_TURNS_STORE_ONLY_ENABLED)
+# extract-whole routing. Menhir's assistant-turn policy (always on since the #168 freeze)
 # then keeps it store-only; the bench sends no store_only for it. Adaptive segmentation only; off
 # unless set, since an older Menhir would extract every assistant turn.
 ASSISTANT_STORE_ONLY = os.getenv("LME_ASSISTANT_STORE_ONLY", "0").strip().lower() in {

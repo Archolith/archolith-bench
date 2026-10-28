@@ -20,14 +20,9 @@ esac
 for lane in "${LME_COUNTER_STATE_ENABLED}" "${LME_SCALAR_STATE_ENABLED}" "${MENHIR_PERSONAL_MEMORY_EVENT_HISTORY_ENABLED}"; do
   case "${lane}" in 0|1) ;; *) die "processing lane settings must be 0 or 1" ;; esac
 done
-case "${LME_ASSISTANT_TURN_POLICY}" in 0|1) ;; *) die "LME_ASSISTANT_TURN_POLICY must be 0 or 1" ;; esac
-for flag in "${LME_ANCHORED_TIME_RESOLVER}" "${LME_ANCHORED_TIME_ATTACH}" "${LME_ANCHORED_TIME_EXPIRY}"; do
-  case "${flag}" in 0|1) ;; *) die "LME_ANCHORED_TIME_* settings must be 0 or 1" ;; esac
+for flag in "${LME_ANCHORED_TIME_RESOLVER}"; do
+  case "${flag}" in 0|1) ;; *) die "LME_ANCHORED_TIME_RESOLVER must be 0 or 1" ;; esac
 done
-# Menhir builds the attach check only inside the resolver; attach without it would be recorded
-# as on while doing nothing.
-[ "${LME_ANCHORED_TIME_ATTACH}" = "0" ] || [ "${LME_ANCHORED_TIME_RESOLVER}" = "1" ] ||
-  die "LME_ANCHORED_TIME_ATTACH=1 requires LME_ANCHORED_TIME_RESOLVER=1"
 # The resolver uses the extraction client, so a local endpoint would receive the OpenAI model name.
 [ "${LME_EXTRACT_PROVIDER}" = "openai" ] || [ "${LME_ANCHORED_TIME_RESOLVER}" = "0" ] ||
   die "anchored time needs LME_EXTRACT_PROVIDER=openai; set LME_ANCHORED_TIME_RESOLVER=0 for local extraction"
@@ -193,18 +188,12 @@ cat > "${GRAPH_ATTEMPT_RECORD}" <<EOF
   "scalar_history_enabled": ${LME_SCALAR_HISTORY_ENABLED},
   "scalar_consolidation_k": ${LME_SCALAR_CONSOLIDATION_K},
   "scalar_threshold": "${LME_SCALAR_THRESHOLD}",
-  "scalar_reconcile_attribute": ${LME_SCALAR_RECONCILE_ATTRIBUTE},
-  "scalar_reconcile_scope": ${LME_SCALAR_RECONCILE_SCOPE},
-  "scalar_reconcile_subject": ${LME_SCALAR_RECONCILE_SUBJECT},
   "scalar_canonical_self": ${LME_SCALAR_CANONICAL_SELF},
   "canonical_self_binding_mode": "${LME_CANONICAL_SELF_BINDING_MODE}",
   "extract_model": "${LME_EXTRACT_MODEL}",
   "anchored_time_resolver_enabled": ${LME_ANCHORED_TIME_RESOLVER},
-  "anchored_time_attach_enabled": ${LME_ANCHORED_TIME_ATTACH},
-  "anchored_time_expiry_enabled": ${LME_ANCHORED_TIME_EXPIRY},
   "anchored_time_model": "${LME_ANCHORED_TIME_MODEL}",
   "anchored_time_attach_model": "${LME_ANCHORED_TIME_ATTACH_MODEL}",
-  "assistant_turns_store_only_enabled": ${LME_ASSISTANT_TURN_POLICY},
   "openai_service_tier": "${LME_OPENAI_SERVICE_TIER}",
   "max_llm_calls_per_job": ${LME_MAX_LLM_CALLS_PER_JOB},
   "scalar_output_required": ${LME_REQUIRE_SCALAR_OUTPUT},
@@ -279,7 +268,6 @@ fi
   --setting "segmentation=${LME_SEGMENTATION}" \
   --setting "store_only_context=${LME_STORE_ONLY_CONTEXT}" \
   --setting "assistant_store_only=${LME_ASSISTANT_STORE_ONLY}" \
-  --setting "assistant_turn_policy=${LME_ASSISTANT_TURN_POLICY}" \
   --setting "embed_backfill=${LME_EMBED_BACKFILL}" \
   --setting "strict_failure_policy=zero-failed-episodes-per-namespace" \
   --setting "ingest_target_items=${INGEST_TARGET}" \
@@ -291,17 +279,12 @@ fi
   --setting "scalar_consolidation_k=${LME_SCALAR_CONSOLIDATION_K}" \
   --setting "scalar_consolidation_call_budget=${LME_SCALAR_CALL_BUDGET}" \
   --setting "scalar_threshold=${LME_SCALAR_THRESHOLD}" \
-  --setting "scalar_reconcile_attribute=${LME_SCALAR_RECONCILE_ATTRIBUTE}" \
-  --setting "scalar_reconcile_scope=${LME_SCALAR_RECONCILE_SCOPE}" \
-  --setting "scalar_reconcile_subject=${LME_SCALAR_RECONCILE_SUBJECT}" \
   --setting "consolidation_audit_enabled=${LME_CONSOLIDATION_AUDIT_ENABLED}" \
   --setting "recall_audit_enabled=${LME_RECALL_AUDIT_ENABLED}" \
   --setting "menhir_log_level=${MENHIR_LOG_LEVEL:-${LME_MENHIR_LOG_LEVEL}}" \
   --setting "turn_evidence_required=${LME_REQUIRE_TURN_EVIDENCE}" \
   --setting "extract_model=${LME_EXTRACT_MODEL}" \
   --setting "anchored_time_resolver_enabled=${LME_ANCHORED_TIME_RESOLVER}" \
-  --setting "anchored_time_attach_enabled=${LME_ANCHORED_TIME_ATTACH}" \
-  --setting "anchored_time_expiry_enabled=${LME_ANCHORED_TIME_EXPIRY}" \
   --setting "anchored_time_model=${LME_ANCHORED_TIME_MODEL}" \
   --setting "anchored_time_attach_model=${LME_ANCHORED_TIME_ATTACH_MODEL}" \
   --setting "openai_service_tier=${LME_OPENAI_SERVICE_TIER}" \
@@ -350,19 +333,13 @@ export MENHIR_PERSONAL_MEMORY_CONSOLIDATION_ENABLED="${LME_COUNTER_STATE_ENABLED
 export MENHIR_PERSONAL_MEMORY_EVENT_HISTORY_ENABLED
 export MENHIR_PERSONAL_MEMORY_SCALAR_STATE_ENABLED="${LME_SCALAR_STATE_ENABLED}"
 export MENHIR_PERSONAL_MEMORY_SCALAR_HISTORY_ENABLED="${LME_SCALAR_HISTORY_ENABLED}"
-export MENHIR_PERSONAL_MEMORY_SCALAR_VIEW_AUTHORITY_ENABLED=0
-# Typed-scalar gate relaxations. These are default-OFF inside menhir, so without these exports a
-# scalar build silently reproduces the unanimous-threshold baseline (20/100 correct current Views)
-# no matter what else changed. See config.sh for the measured grid and the 0.67-vs-2/3 trap.
+# Typed-scalar vote threshold (Menhir's default is unanimous). See config.sh for the measured grid
+# and the 0.67-vs-2/3 trap. Reconcile, View authority, sum grounding and the assistant-turn policy
+# are always on since the #168 freeze and are not exported.
 export MENHIR_PERSONAL_MEMORY_SCALAR_THRESHOLD="${LME_SCALAR_THRESHOLD}"
-export MENHIR_PERSONAL_MEMORY_SCALAR_RECONCILE_ATTRIBUTE="${LME_SCALAR_RECONCILE_ATTRIBUTE}"
-export MENHIR_PERSONAL_MEMORY_SCALAR_RECONCILE_SCOPE="${LME_SCALAR_RECONCILE_SCOPE}"
-export MENHIR_PERSONAL_MEMORY_SCALAR_RECONCILE_SUBJECT="${LME_SCALAR_RECONCILE_SUBJECT}"
 export MENHIR_PERSONAL_MEMORY_SCALAR_CANONICAL_SELF="${LME_SCALAR_CANONICAL_SELF}"
 export MENHIR_CANONICAL_SELF_BINDING_MODE="${LME_CANONICAL_SELF_BINDING_MODE}"
 export MENHIR_PERSONAL_MEMORY_CHAT_MODEL="${LME_EXTRACT_MODEL}"
-export MENHIR_PERSONAL_MEMORY_SUM_GROUNDING=1
-export MENHIR_ASSISTANT_TURNS_STORE_ONLY_ENABLED="${LME_ASSISTANT_TURN_POLICY}"
 export LME_REQUIRE_TURN_EVIDENCE="${LME_REQUIRE_TURN_EVIDENCE}"
 export LME_STORE_ONLY_CONTEXT="${LME_STORE_ONLY_CONTEXT}"
 export LME_ASSISTANT_STORE_ONLY="${LME_ASSISTANT_STORE_ONLY}"
@@ -371,8 +348,6 @@ export MENHIR_MAX_LLM_CALLS_PER_JOB="${LME_MAX_LLM_CALLS_PER_JOB}"
 # Anchored time and service tier: recorded in the attempt record above, and retry.sh must
 # export the same values (tests/test_lme_retry_parity.py).
 export MENHIR_ANCHORED_TIME_RESOLVER="${LME_ANCHORED_TIME_RESOLVER}"
-export MENHIR_ANCHORED_TIME_ATTACH="${LME_ANCHORED_TIME_ATTACH}"
-export MENHIR_ANCHORED_TIME_EXPIRY="${LME_ANCHORED_TIME_EXPIRY}"
 export MENHIR_ANCHORED_TIME_MODEL="${LME_ANCHORED_TIME_MODEL}"
 export MENHIR_ANCHORED_TIME_ATTACH_MODEL="${LME_ANCHORED_TIME_ATTACH_MODEL}"
 export MENHIR_OPENAI_SERVICE_TIER="${LME_OPENAI_SERVICE_TIER}"
@@ -438,7 +413,8 @@ if [ "${LME_STORE_ONLY_CONTEXT}" = "1" ] &&
   ! grep -q "store_only" "${MENHIR_FRONTIER}/src/menhir/api/routes_support.py" 2>/dev/null; then
   die "LME_STORE_ONLY_CONTEXT=1 but ${MENHIR_FRONTIER} has no store_only ingest (Menhir #388); set it to 0 or update the tree"
 fi
-# An older Menhir ignores the policy env and would extract every raw assistant turn.
+# A Menhir older than the assistant-turn policy would extract every raw assistant turn. The name
+# stays in feature_flags.py (as RETIRED) after the #168 freeze made the policy always on.
 if [ "${LME_ASSISTANT_STORE_ONLY}" = "1" ] &&
   ! grep -q "MENHIR_ASSISTANT_TURNS_STORE_ONLY_ENABLED" "${MENHIR_FRONTIER}/src/menhir/config/feature_flags.py" 2>/dev/null; then
   die "LME_ASSISTANT_STORE_ONLY=1 but ${MENHIR_FRONTIER} has no assistant-turn policy (MENHIR_ASSISTANT_TURNS_STORE_ONLY_ENABLED); update the tree"
@@ -447,6 +423,9 @@ if [ "${LME_EMBED_BACKFILL}" = "1" ] &&
   ! grep -q -- "--require-complete" "${MENHIR_FRONTIER}/scripts/backfill_episode_embeddings.py" 2>/dev/null; then
   die "LME_EMBED_BACKFILL=1 but ${MENHIR_FRONTIER} has no backfill --require-complete (Menhir #389); set it to 0 or update the tree"
 fi
+# Menhir ignores a retired flag, so a caller's export of one (e.g. =0) would silently run it on.
+"${BENCH_PY}" -I "$(dirname "${BASH_SOURCE[0]}")/lib/retired_flags.py" check "${MENHIR_FRONTIER}" ||
+  die "the environment sets flags ${MENHIR_FRONTIER} has retired; see above"
 log "starting ingest menhir on ${MENHIR_URL}..."
 ( cd "${MENHIR_FRONTIER}" && "${MENHIR_FRONTIER_BIN}" serve --port "${MENHIR_PORT}" ) & MENHIR_PID=$!
 for _ in $(seq 1 90); do curl -sf "${MENHIR_URL}/api/health" >/dev/null 2>&1 && break; sleep 2; done

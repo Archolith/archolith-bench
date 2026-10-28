@@ -38,7 +38,6 @@ lme_container_running "${LME_NEO4J_NAME}" \
 [ -f "${BENCH_PY}" ] || die "archolith-bench venv python missing: ${BENCH_PY}"
 # Providers below are OpenAI only; a graph built against a local endpoint is not retryable here.
 [ "${LME_EXTRACT_PROVIDER}" = "openai" ] || die "retry.sh supports LME_EXTRACT_PROVIDER=openai only"
-case "${LME_ASSISTANT_TURN_POLICY}" in 0|1) ;; *) die "LME_ASSISTANT_TURN_POLICY must be 0 or 1" ;; esac
 
 OPENAI_KEY="$("${MENHIR_FRONTIER_PY}" - "${BENCH_DIR}/.env" OPENAI_API_KEY <<'PY'
 import sys; from dotenv import dotenv_values; print(dotenv_values(sys.argv[1]).get(sys.argv[2],""))
@@ -60,11 +59,8 @@ cat > "${RETRY_RECORD}" <<EOF
   "canonical_self_binding_mode": "${LME_CANONICAL_SELF_BINDING_MODE}",
   "extract_model": "${LME_EXTRACT_MODEL}",
   "anchored_time_resolver_enabled": ${LME_ANCHORED_TIME_RESOLVER},
-  "anchored_time_attach_enabled": ${LME_ANCHORED_TIME_ATTACH},
-  "anchored_time_expiry_enabled": ${LME_ANCHORED_TIME_EXPIRY},
   "anchored_time_model": "${LME_ANCHORED_TIME_MODEL}",
   "anchored_time_attach_model": "${LME_ANCHORED_TIME_ATTACH_MODEL}",
-  "assistant_turns_store_only_enabled": ${LME_ASSISTANT_TURN_POLICY},
   "menhir_commit": "$(git -C "${MENHIR_MAIN}" rev-parse HEAD 2>/dev/null || echo unknown)",
   "bench_commit": "$(git -C "${BENCH_DIR}" rev-parse HEAD 2>/dev/null || echo unknown)",
   "surface_digest": "${RETRY_SURFACE_DIGEST}"
@@ -103,21 +99,13 @@ export MENHIR_PERSONAL_MEMORY_CONSOLIDATION_ENABLED="${LME_COUNTER_STATE_ENABLED
 export MENHIR_PERSONAL_MEMORY_EVENT_HISTORY_ENABLED
 export MENHIR_PERSONAL_MEMORY_SCALAR_STATE_ENABLED="${LME_SCALAR_STATE_ENABLED}"
 export MENHIR_PERSONAL_MEMORY_SCALAR_HISTORY_ENABLED="${LME_SCALAR_HISTORY_ENABLED}"
-export MENHIR_PERSONAL_MEMORY_SCALAR_VIEW_AUTHORITY_ENABLED=0
 export MENHIR_PERSONAL_MEMORY_SCALAR_THRESHOLD="${LME_SCALAR_THRESHOLD}"
-export MENHIR_PERSONAL_MEMORY_SCALAR_RECONCILE_ATTRIBUTE="${LME_SCALAR_RECONCILE_ATTRIBUTE}"
-export MENHIR_PERSONAL_MEMORY_SCALAR_RECONCILE_SCOPE="${LME_SCALAR_RECONCILE_SCOPE}"
-export MENHIR_PERSONAL_MEMORY_SCALAR_RECONCILE_SUBJECT="${LME_SCALAR_RECONCILE_SUBJECT}"
 export MENHIR_PERSONAL_MEMORY_SCALAR_CANONICAL_SELF="${LME_SCALAR_CANONICAL_SELF}"
 export MENHIR_CANONICAL_SELF_BINDING_MODE="${LME_CANONICAL_SELF_BINDING_MODE}"
 export MENHIR_PERSONAL_MEMORY_CHAT_MODEL="${LME_EXTRACT_MODEL}"
-export MENHIR_PERSONAL_MEMORY_SUM_GROUNDING=1
-export MENHIR_ASSISTANT_TURNS_STORE_ONLY_ENABLED="${LME_ASSISTANT_TURN_POLICY}"
 export LME_REQUIRE_TURN_EVIDENCE="${LME_REQUIRE_TURN_EVIDENCE}"
 export MENHIR_MAX_LLM_CALLS_PER_JOB="${LME_MAX_LLM_CALLS_PER_JOB}"
 export MENHIR_ANCHORED_TIME_RESOLVER="${LME_ANCHORED_TIME_RESOLVER}"
-export MENHIR_ANCHORED_TIME_ATTACH="${LME_ANCHORED_TIME_ATTACH}"
-export MENHIR_ANCHORED_TIME_EXPIRY="${LME_ANCHORED_TIME_EXPIRY}"
 export MENHIR_ANCHORED_TIME_MODEL="${LME_ANCHORED_TIME_MODEL}"
 export MENHIR_ANCHORED_TIME_ATTACH_MODEL="${LME_ANCHORED_TIME_ATTACH_MODEL}"
 export MENHIR_OPENAI_SERVICE_TIER="${LME_OPENAI_SERVICE_TIER}"
@@ -154,6 +142,9 @@ export OPENAI_EMBED_MODEL="${LME_EMBED_MODEL}"
   --setting "openai_service_tier=${LME_OPENAI_SERVICE_TIER}" \
   --setting "noncanonical=${LME_NONCANONICAL}"
 
+# Menhir ignores a retired flag, so a caller's export of one (e.g. =0) would silently run it on.
+"${BENCH_PY}" -I "$(dirname "${BASH_SOURCE[0]}")/lib/retired_flags.py" check "${MENHIR_FRONTIER}" ||
+  die "the environment sets flags ${MENHIR_FRONTIER} has retired; see above"
 log "starting menhir-frontier on ${MENHIR_URL} (pointing at ${LME_NEO4J_NAME})..."
 ( cd "${MENHIR_FRONTIER}" && "${MENHIR_FRONTIER_BIN}" serve --port "${MENHIR_PORT}" ) & MENHIR_PID=$!
 

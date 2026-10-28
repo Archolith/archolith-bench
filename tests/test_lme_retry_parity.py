@@ -36,13 +36,17 @@ provenance = _load("lme_run_provenance_retry_test", LME / "lib" / "run_provenanc
 ANCHORED = {
     "extract_model": "gpt-4o-mini",
     "anchored_time_resolver_enabled": 1,
-    "anchored_time_attach_enabled": 1,
-    "anchored_time_expiry_enabled": 0,
     "anchored_time_model": "gpt-6-luna",
     "anchored_time_attach_model": "gpt-6-luna",
 }
-# Recorded later than the original identity, like anchored time: a graph without it is refused.
-RECORDED_LATER = {**ANCHORED, "assistant_turns_store_only_enabled": 1}
+# Recorded later than the original identity: a graph without them is refused.
+RECORDED_LATER = dict(ANCHORED)
+# No longer settings since the #168 freeze; old provenance files still carry them.
+RETIRED_RECORD_KEYS = {
+    "anchored_time_attach_enabled": 1,
+    "anchored_time_expiry_enabled": 0,
+    "assistant_turns_store_only_enabled": 1,
+}
 
 
 def _build(**overrides) -> dict:
@@ -86,11 +90,8 @@ def _write_build(path: Path, record: dict) -> None:
 @pytest.mark.parametrize("field, value", [
     ("extract_model", "gpt-6-luna"),
     ("anchored_time_resolver_enabled", 0),
-    ("anchored_time_attach_enabled", 0),
-    ("anchored_time_expiry_enabled", 1),
     ("anchored_time_model", "gpt-4o-mini"),
     ("anchored_time_attach_model", "gpt-4o-mini"),
-    ("assistant_turns_store_only_enabled", 0),
 ])
 @pytest.mark.parametrize("noncanonical", [False, True])
 def test_resume_refuses_changed_anchored_setting(tmp_path: Path, field, value, noncanonical) -> None:
@@ -111,6 +112,15 @@ def test_resume_refuses_setting_a_previously_unrecorded_behavior(tmp_path: Path,
     _write_build(path, legacy)
     with pytest.raises(provenance.ProvenanceMismatch, match="was not recorded"):
         provenance.begin(path, _build(), noncanonical=noncanonical)
+
+
+def test_resume_and_retry_of_a_graph_recording_retired_keys_ignore_them(tmp_path: Path) -> None:
+    """A pre-freeze provenance file still names attach, expiry and the policy; they are not identity."""
+    path = tmp_path / "graph-provenance.json"
+    _write_build(path, _build(**RETIRED_RECORD_KEYS))
+    document = provenance.begin(path, _build(started_at="2026-10-28T00:00:00Z"))
+    assert not set(RETIRED_RECORD_KEYS) & set(document["identity"])
+    provenance.assert_retry_matches(provenance._read(path), _retry())
 
 
 def test_matching_anchored_resume_is_allowed(tmp_path: Path) -> None:
@@ -139,11 +149,8 @@ def test_retry_with_build_settings_is_allowed(tmp_path: Path) -> None:
     ("canonical_self_binding_mode", "enforce"),
     ("extract_model", "gpt-6-luna"),
     ("anchored_time_resolver_enabled", 0),
-    ("anchored_time_attach_enabled", 0),
-    ("anchored_time_expiry_enabled", 1),
     ("anchored_time_model", "gpt-4o-mini"),
     ("anchored_time_attach_model", "gpt-4o-mini"),
-    ("assistant_turns_store_only_enabled", 0),
 ])
 @pytest.mark.parametrize("noncanonical", [False, True])
 def test_retry_refuses_different_ingest_behavior(tmp_path: Path, field, value, noncanonical) -> None:
@@ -169,7 +176,7 @@ def test_retry_refuses_when_it_omits_a_behavior(tmp_path: Path) -> None:
     path = tmp_path / "graph-provenance.json"
     _write_build(path, _build())
     incomplete = _retry()
-    del incomplete["anchored_time_attach_enabled"]
+    del incomplete["anchored_time_attach_model"]
     with pytest.raises(provenance.ProvenanceMismatch, match="not set by this retry"):
         provenance.assert_retry_matches(provenance._read(path), incomplete, noncanonical=True)
 
@@ -223,21 +230,13 @@ INGEST_ENV = (
     "MENHIR_PERSONAL_MEMORY_EVENT_HISTORY_ENABLED",
     "MENHIR_PERSONAL_MEMORY_SCALAR_STATE_ENABLED",
     "MENHIR_PERSONAL_MEMORY_SCALAR_HISTORY_ENABLED",
-    "MENHIR_PERSONAL_MEMORY_SCALAR_VIEW_AUTHORITY_ENABLED",
     "MENHIR_PERSONAL_MEMORY_SCALAR_THRESHOLD",
-    "MENHIR_PERSONAL_MEMORY_SCALAR_RECONCILE_ATTRIBUTE",
-    "MENHIR_PERSONAL_MEMORY_SCALAR_RECONCILE_SCOPE",
-    "MENHIR_PERSONAL_MEMORY_SCALAR_RECONCILE_SUBJECT",
     "MENHIR_PERSONAL_MEMORY_SCALAR_CANONICAL_SELF",
     "MENHIR_CANONICAL_SELF_BINDING_MODE",
     "MENHIR_PERSONAL_MEMORY_CHAT_MODEL",
-    "MENHIR_PERSONAL_MEMORY_SUM_GROUNDING",
-    "MENHIR_ASSISTANT_TURNS_STORE_ONLY_ENABLED",
     "LME_REQUIRE_TURN_EVIDENCE",
     "MENHIR_MAX_LLM_CALLS_PER_JOB",
     "MENHIR_ANCHORED_TIME_RESOLVER",
-    "MENHIR_ANCHORED_TIME_ATTACH",
-    "MENHIR_ANCHORED_TIME_EXPIRY",
     "MENHIR_ANCHORED_TIME_MODEL",
     "MENHIR_ANCHORED_TIME_ATTACH_MODEL",
     "MENHIR_OPENAI_SERVICE_TIER",
@@ -272,6 +271,26 @@ def test_retry_exports_the_same_ingest_settings_as_the_build() -> None:
         assert name in build, f"build_graph.sh does not export {name}"
         assert name in retry, f"retry.sh does not export {name}"
         assert retry[name] == build[name], f"{name}: build={build[name]!r} retry={retry[name]!r}"
+
+
+# Retired by the #168 freeze; Menhir ignores them, so exporting one would record a setting
+# that does not apply.
+RETIRED_ENV = (
+    "MENHIR_PERSONAL_MEMORY_SCALAR_VIEW_AUTHORITY_ENABLED",
+    "MENHIR_PERSONAL_MEMORY_SCALAR_RECONCILE_ATTRIBUTE",
+    "MENHIR_PERSONAL_MEMORY_SCALAR_RECONCILE_SCOPE",
+    "MENHIR_PERSONAL_MEMORY_SCALAR_RECONCILE_SUBJECT",
+    "MENHIR_PERSONAL_MEMORY_SUM_GROUNDING",
+    "MENHIR_ASSISTANT_TURNS_STORE_ONLY_ENABLED",
+    "MENHIR_ANCHORED_TIME_ATTACH",
+    "MENHIR_ANCHORED_TIME_EXPIRY",
+)
+
+
+@pytest.mark.parametrize("script", ["build_graph.sh", "retry.sh"])
+def test_build_and_retry_export_no_retired_flag(script) -> None:
+    exports = _exports((LME / script).read_text(encoding="utf-8"))
+    assert not set(RETIRED_ENV) & set(exports)
 
 
 def test_retry_record_lines_match_the_build_attempt_record() -> None:
@@ -329,10 +348,10 @@ def _clean_env(**values: str) -> dict[str, str]:
 
 def test_config_defaults() -> None:
     command = "set -eu\n" + _config_lines() + '\nprintf "%s\\n" "$LME_ANCHORED_TIME_RESOLVER" ' \
-        '"$LME_ANCHORED_TIME_ATTACH" "$LME_ANCHORED_TIME_EXPIRY" "$LME_ANCHORED_TIME_MODEL" ' \
+        '"$LME_ANCHORED_TIME_MODEL" ' \
         '"$LME_ANCHORED_TIME_ATTACH_MODEL" "$LME_OPENAI_SERVICE_TIER" "$LME_MAX_LLM_CALLS_PER_JOB"'
     result = subprocess.run([_bash(), "-c", command], env=_clean_env(), capture_output=True, text=True, check=True)
-    assert result.stdout.split() == ["1", "1", "0", "gpt-6-luna", "gpt-6-luna", "flex", "100"]
+    assert result.stdout.split() == ["1", "gpt-6-luna", "gpt-6-luna", "flex", "100"]
 
 
 @pytest.mark.parametrize("overrides, expected", [
@@ -360,11 +379,10 @@ def test_attach_model_follows_resolver_model_override() -> None:
 
 @pytest.mark.parametrize("overrides, message", [
     ({"LME_ANCHORED_TIME_RESOLVER": "yes"}, "must be 0 or 1"),
-    ({"LME_ANCHORED_TIME_EXPIRY": "2"}, "must be 0 or 1"),
-    ({"LME_ANCHORED_TIME_RESOLVER": "0"}, "requires LME_ANCHORED_TIME_RESOLVER=1"),
     ({"LME_EXTRACT_PROVIDER": "local"}, "needs LME_EXTRACT_PROVIDER=openai"),
     ({}, None),
-    ({"LME_ANCHORED_TIME_RESOLVER": "0", "LME_ANCHORED_TIME_ATTACH": "0", "LME_EXTRACT_PROVIDER": "local"}, None),
+    ({"LME_ANCHORED_TIME_RESOLVER": "0"}, None),
+    ({"LME_ANCHORED_TIME_RESOLVER": "0", "LME_EXTRACT_PROVIDER": "local"}, None),
 ])
 def test_build_validates_anchored_settings_before_any_work(overrides, message) -> None:
     script = (LME / "build_graph.sh").read_text(encoding="utf-8")

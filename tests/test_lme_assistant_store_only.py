@@ -1,9 +1,8 @@
 """LME_ASSISTANT_STORE_ONLY: raw assistant turns as store-only source memories (#168).
 
 On, every assistant turn is sent verbatim, with role="assistant", as one episode grounded on its
-own turn evidence, and no store_only: Menhir's assistant-turn policy (LME_ASSISTANT_TURN_POLICY ->
-MENHIR_ASSISTANT_TURNS_STORE_ONLY_ENABLED) keeps it store-only. Off (the default), the adaptive
-segmenter routes it as before.
+own turn evidence, and no store_only: Menhir's assistant-turn policy (always on since the #168
+freeze) keeps it store-only. Off (the default), the adaptive segmenter routes it as before.
 """
 
 from __future__ import annotations
@@ -162,12 +161,13 @@ def test_store_only_user_turn_request_is_unchanged() -> None:
 def test_config_defaults_off_and_build_records_and_checks_it() -> None:
     config = (LME / "config.sh").read_text(encoding="utf-8")
     assert re.search(r'^LME_ASSISTANT_STORE_ONLY="\$\{LME_ASSISTANT_STORE_ONLY:-0\}"', config, re.MULTILINE)
-    assert re.search(r'^LME_ASSISTANT_TURN_POLICY="\$\{LME_ASSISTANT_TURN_POLICY:-1\}"', config, re.MULTILINE)
+    # The policy is not switchable since the #168 freeze, so the bench neither sets nor records it.
+    assert "LME_ASSISTANT_TURN_POLICY" not in config
     build = (LME / "build_graph.sh").read_text(encoding="utf-8")
     assert 'export LME_ASSISTANT_STORE_ONLY="${LME_ASSISTANT_STORE_ONLY}"' in build
     assert '--setting "assistant_store_only=${LME_ASSISTANT_STORE_ONLY}"' in build
-    assert '--setting "assistant_turn_policy=${LME_ASSISTANT_TURN_POLICY}"' in build
-    assert 'export MENHIR_ASSISTANT_TURNS_STORE_ONLY_ENABLED="${LME_ASSISTANT_TURN_POLICY}"' in build
+    assert "LME_ASSISTANT_TURN_POLICY" not in build
+    assert "export MENHIR_ASSISTANT_TURNS_STORE_ONLY_ENABLED" not in build
     serve = build.index('"${MENHIR_FRONTIER_BIN}" serve')
     assert build.index("LME_ASSISTANT_STORE_ONLY=1 needs LME_SEGMENTATION=adaptive") < serve
     # An older Menhir ignores the policy env and would extract every raw assistant turn.
