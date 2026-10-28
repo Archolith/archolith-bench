@@ -20,6 +20,10 @@ esac
 for lane in "${LME_COUNTER_STATE_ENABLED}" "${LME_SCALAR_STATE_ENABLED}" "${MENHIR_PERSONAL_MEMORY_EVENT_HISTORY_ENABLED}"; do
   case "${lane}" in 0|1) ;; *) die "processing lane settings must be 0 or 1" ;; esac
 done
+# Menhir removed the consolidation counter lane (2026-10-28); a counter build would record a lane
+# that never ran. Kept as a setting so earlier graphs' provenance (counter_state_enabled=0) resumes.
+[ "${LME_COUNTER_STATE_ENABLED}" = "0" ] ||
+  die "LME_COUNTER_STATE_ENABLED=1: Menhir removed the consolidation counter lane (2026-10-28)"
 for flag in "${LME_ANCHORED_TIME_RESOLVER}"; do
   case "${flag}" in 0|1) ;; *) die "LME_ANCHORED_TIME_RESOLVER must be 0 or 1" ;; esac
 done
@@ -328,7 +332,6 @@ export LME_NEO4J_CONTAINER="${LME_NEO4J_NAME}" LME_NEO4J_PW="${LME_NEO4J_PW}"
 # another menhir process (the cross-process WinError 32 on rollover is the log-noise source).
 export MENHIR_LOG_DIR="${LME_RESULTS_DIR}/menhir-logs"; mkdir -p "${MENHIR_LOG_DIR}"
 export MENHIR_BENCHMARK_MODE=1 MENHIR_API_HOST=127.0.0.1 MENHIR_API_PORT="${MENHIR_PORT}"
-export MENHIR_PERSONAL_MEMORY_CONSOLIDATION_ENABLED="${LME_COUNTER_STATE_ENABLED}"
 export MENHIR_PERSONAL_MEMORY_EVENT_HISTORY_ENABLED
 export MENHIR_PERSONAL_MEMORY_SCALAR_STATE_ENABLED="${LME_SCALAR_STATE_ENABLED}"
 export MENHIR_PERSONAL_MEMORY_SCALAR_HISTORY_ENABLED="${LME_SCALAR_HISTORY_ENABLED}"

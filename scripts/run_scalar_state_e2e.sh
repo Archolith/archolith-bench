@@ -97,7 +97,6 @@ rm -f "${MENHIR_MCP_TELEMETRY_DB}" 2>/dev/null || true
 export MENHIR_API_HOST=127.0.0.1 MENHIR_API_PORT="${SS_PORT}"
 # THE difference from build_graph.sh: scheduler must run, and the scalar path must be enabled.
 export MENHIR_BENCHMARK_MODE=0
-export MENHIR_PERSONAL_MEMORY_CONSOLIDATION_ENABLED=1
 export MENHIR_PERSONAL_MEMORY_SCALAR_STATE_ENABLED=1
 export MENHIR_PERSONAL_MEMORY_SCALAR_STATE_PERCEIVER_VERSION="${SS_PERCEIVER_VERSION}"
 # Step 7 current-state View authority canary (default OFF; SS_VIEW_AUTHORITY=1 turns the live

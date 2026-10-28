@@ -51,7 +51,7 @@ case "${ARM}" in
 esac
 
 # This dedicated wrapper must never silently fall back to the ordinary non-scalar LME defaults.
-export LME_COUNTER_STATE_ENABLED="${LME_COUNTER_STATE_ENABLED:-${MENHIR_PERSONAL_MEMORY_CONSOLIDATION_ENABLED:-0}}"
+export LME_COUNTER_STATE_ENABLED="${LME_COUNTER_STATE_ENABLED:-0}"
 export LME_SCALAR_STATE_ENABLED="1"
 export LME_SCALAR_HISTORY_ENABLED="1"
 export LME_REQUIRE_TURN_EVIDENCE="1"

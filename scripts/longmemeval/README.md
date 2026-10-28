@@ -86,10 +86,11 @@ LME_RECALL_LIMIT=5 ./lme.sh recall-ab main 30 --subset temporal-reasoning
 ## Explicit consolidation lanes
 
 Benchmark mode keeps the maintenance scheduler disabled. Builds invoke `/api/phase3/run`
-after each namespace drains when any lane is requested. Select counters with
-`LME_COUNTER_STATE_ENABLED=1`, scalars with `LME_SCALAR_STATE_ENABLED=1`, and events with
-`MENHIR_PERSONAL_MEMORY_EVENT_HISTORY_ENABLED=1`; omitted lanes remain off. The KU wrapper
-requires scalars and scalar history, but counters and events still need explicit opt-in.
+after each namespace drains when any lane is requested. Select scalars with
+`LME_SCALAR_STATE_ENABLED=1` and events with `MENHIR_PERSONAL_MEMORY_EVENT_HISTORY_ENABLED=1`;
+omitted lanes remain off. The KU wrapper requires scalars and scalar history, but events still
+need explicit opt-in. Menhir removed the consolidation counter lane on 2026-10-28, so
+`build_graph.sh` refuses `LME_COUNTER_STATE_ENABLED=1`.
 
 The request and the server counter setting both reflect the counter selection. Requested
 lanes must complete before a namespace enters the manifest. Events may legitimately produce
