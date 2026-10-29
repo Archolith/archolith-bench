@@ -381,6 +381,46 @@ def test_recall_renders_said_time_only_when_menhir_sends_it(http_client):
     ]
 
 
+def test_recall_renders_event_time_only_when_menhir_sends_it(http_client):
+    client, fake = http_client
+    fake.response_data = {
+        "results": [{
+            "name": "Trip",
+            "content": "User went to Lisbon.",
+            "temporal_facts": [
+                {
+                    "fact": "User flew to Lisbon",
+                    "valid_at": "2023-06-01T10:00:00Z",
+                    "event_time": "2023-05-27 (from 'last Saturday')",
+                    "temporal_role": "current_belief",
+                },
+                {
+                    "fact": "User stayed in Porto",
+                    "valid_at": "2023-04-01T00:00:00Z",
+                    "invalid_at": "2023-04-10T00:00:00Z",
+                    "event_time": "planned 2023-04",
+                    "temporal_role": "ended",
+                },
+                {
+                    "fact": "User booked a hotel",
+                    "valid_at": "2023-05-20T00:00:00Z",
+                    "temporal_role": "current_belief",
+                },
+            ],
+        }]
+    }
+
+    recalled = client.recall("lme-0a1b2c3d", "When?")
+
+    assert recalled == [
+        "Trip: User went to Lisbon.\n"
+        "source-time evidence (when the fact was true):\n"
+        "- 2023-05-27 (from 'last Saturday') | User flew to Lisbon | belief: current belief\n"
+        "- planned 2023-04 through 2023-04-10T00:00:00Z | User stayed in Porto | belief: ended\n"
+        "- 2023-05-20T00:00:00Z | User booked a hotel | belief: current belief"
+    ]
+
+
 def test_recall_labels_string_results_when_authority_is_present(http_client):
     client, fake = http_client
     fake.response_data = {
