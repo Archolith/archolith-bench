@@ -50,6 +50,12 @@ The built-in analysis harnesses (`matrix`, `msc`, `ablation`) already loop acros
 - OpenAI API key in `archolith-bench/.env` as `OPENAI_API_KEY`
 - HuggingFace dataset: `xiaowu0162/longmemeval` (auto-cached)
 
+**Parallelism and spend.** Run as parallel as the system can handle within reason. Ingest every
+namespace of a fixture at once (`LME_INGEST_CONCURRENCY` = item count; `config.sh` still defaults to 1,
+so set it). Lower it only for a measured limit, and record why. Paid runs under $0.25 are pre-approved
+when each has a cost monitor with a manual ceiling. The full rule is in
+[`.agent/README.md`](../../.agent/README.md#parallelism-and-paid-run-approval-standing-owner-rule-2026-10-29).
+
 ## Quickstart
 
 ```bash

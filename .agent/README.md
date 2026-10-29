@@ -95,6 +95,20 @@ cancellation. Key contract points:
   scheduling once the running total (including checkpointed rows) reaches it.
 - API keys and request bodies are never logged.
 
+### Parallelism and paid-run approval (standing owner rule, 2026-10-29)
+- **Run as parallel as possible.** Ingest as many namespaces at once as the system can handle within
+  reason: for a staged fixture, every namespace at once (`LME_INGEST_CONCURRENCY` = fixture size;
+  the staged campaign's default). Note that `scripts/longmemeval/config.sh` still defaults to 1 for
+  plain `build_graph.sh` runs, so set it explicitly there. Lanes (`LANE_WORKERS`), slices and scoring
+  shards also run in parallel. Lower parallelism only for a measured limit, such as a single-slot local
+  model (calls just queue), capacity 429s that keep recurring, or Neo4j/host memory, and record the
+  reason with the run.
+- **Paid runs under $0.25 are pre-approved.** No owner go-ahead is needed, provided the run has a cost
+  monitor with a manual ceiling: a guard on the run's own telemetry that stops it at a USD ceiling set
+  explicitly for that run, e.g. the staged `cost_guard.py` ceiling, `rs-score.sh`'s Menhir and harness
+  ceilings, or `run_flex(max_usd=...)`. Multiple ceilings must sum to under $0.25. Anything larger,
+  or unmonitored, still needs explicit approval. Embeddings never need approval.
+
 ### Progress on long runs
 Long bench loops (R1/facet ladders, live recall) print a live heartbeat via
 `archolith_bench/progress.py` — `ProgressReporter` / `track` / `run_ladder`. Progress goes
