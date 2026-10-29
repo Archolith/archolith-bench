@@ -1,7 +1,7 @@
-## 2026-10-29 - Docs: run benchmarks as parallel as possible; paid runs under $0.25 pre-approved with a cost ceiling
+## 2026-10-29 - Wide ingest by default (`LME_INGEST_CONCURRENCY=30`); paid runs under $0.25 pre-approved with a cost ceiling
 
 - `.agent/README.md` (LLM-call helpers) and `scripts/longmemeval/README.md` (Prerequisites) state the owner's standing rule: ingest as many namespaces at once as the system can handle within reason (every namespace of a staged fixture), parallel lanes, slices and shards, lowering it only for a measured, recorded limit. A paid run under $0.25 needs no owner go-ahead if a cost monitor with a manual ceiling (the cost guard, `rs-score.sh` ceilings, `run_flex(max_usd=...)`) covers it.
-- `config.sh` still defaults `LME_INGEST_CONCURRENCY` to 1 for plain `build_graph.sh` runs; the docs say to set it.
+- `LME_INGEST_CONCURRENCY` now defaults to 30 (was 1) in `config.sh` and as `ingest.py`'s `--namespace-window` fallback; 30 namespaces at once was measured clean on 2026-10-29. The guarded KU reingest keeps its own 1-4 width.
 - `CHANGELOG-archive.md`: the oldest dated entry moved there (10-entry limit).
 
 ## 2026-10-26 - LME answer prompt gives tailored suggestions for advice questions

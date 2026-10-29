@@ -1425,8 +1425,8 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ap.add_argument(
         "--namespace-window",
         type=_positive_int,
-        default=os.getenv("LME_INGEST_CONCURRENCY", "1"),
-        help="sliding pool size: item namespaces ingested/enriched concurrently (default: 1)",
+        default=os.getenv("LME_INGEST_CONCURRENCY", "30"),
+        help="sliding pool size: item namespaces ingested/enriched concurrently (default: 30)",
     )
     ap.add_argument(
         "--reset-namespace",

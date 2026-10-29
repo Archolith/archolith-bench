@@ -164,9 +164,11 @@ LME_SCALAR_STATE_ENABLED="${LME_SCALAR_STATE_ENABLED:-0}"
 LME_SCALAR_HISTORY_ENABLED="${LME_SCALAR_HISTORY_ENABLED:-0}"
 LME_SCALAR_CONSOLIDATION_K="${LME_SCALAR_CONSOLIDATION_K:-3}"
 LME_SCALAR_CALL_BUDGET="${LME_SCALAR_CALL_BUDGET:-50}"
-# Number of distinct item namespaces enriched concurrently. The general framework remains
-# single-flight by default; guarded KU reingests opt into width 2.
-LME_INGEST_CONCURRENCY="${LME_INGEST_CONCURRENCY:-1}"
+# Number of distinct item namespaces enriched concurrently (each namespace stays serial). Default
+# is wide: as many as the system handles within reason (owner rule 2026-10-29); 30 at once was
+# measured clean on 2026-10-29 (Flex capacity 429s were retried). Lower it only for a measured
+# limit and record why. Guarded KU reingests keep their own 1-4 width.
+LME_INGEST_CONCURRENCY="${LME_INGEST_CONCURRENCY:-30}"
 # ---- Typed-scalar consistency gate (menhir-side, all default-off in menhir itself) ----
 # The gate groups k samples by an exact identity label (subject/attribute/scope/kind/unit/op/value)
 # and commits only what recurs in >= threshold*k samples. The model smears one fact's identity
