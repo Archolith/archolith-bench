@@ -3,6 +3,7 @@
 - `.agent/README.md` (LLM-call helpers) and `scripts/longmemeval/README.md` (Prerequisites) state the owner's standing rule: ingest as many namespaces at once as the system can handle within reason (every namespace of a staged fixture), parallel lanes, slices and shards, lowering it only for a measured, recorded limit. A paid run under $0.25 needs no owner go-ahead if a cost monitor with a manual ceiling (the cost guard, `rs-score.sh` ceilings, `run_flex(max_usd=...)`) covers it.
 - `LME_INGEST_CONCURRENCY` now defaults to 30 (was 1) in `config.sh` and as `ingest.py`'s `--namespace-window` fallback; 30 namespaces at once was measured clean on 2026-10-29. The guarded KU reingest keeps its own 1-4 width.
 - `CHANGELOG-archive.md`: the oldest dated entry moved there (10-entry limit).
+- Removed `scripts/longmemeval/analysis/ablation_sweep.sh`, the `lme.sh ablation` verb and `LME_PORT_ABL`. Every arm set retired `MENHIR_FRONTIER_*` flags that Menhir ignores, so all arms ran the same config.
 
 ## 2026-10-26 - LME answer prompt gives tailored suggestions for advice questions
 

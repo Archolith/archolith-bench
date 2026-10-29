@@ -13,7 +13,6 @@
 #   lme.sh retry                       # reset+drain FAILED episodes
 #   lme.sh matrix [per_type]           # answer-accuracy matrix (analysis)
 #   lme.sh msc <config>                # minimal-sufficient-context sweep (analysis)
-#   lme.sh ablation                    # per-oracle ablation (analysis)
 #   lme.sh presence                    # retrieval quality (analysis)
 #   lme.sh brief-ab [--score]          # BriefBuilder A/B (flat vs +Timeline); --score spends OpenAI
 #   lme.sh entropy [floor|both]        # D0 retrieval-entropy instrument (GPT-free fitness function)
@@ -72,9 +71,6 @@ case "$COMMAND" in
   msc)
     if [ -z "${2:-}" ]; then echo "usage: lme.sh msc <config>" >&2; exit 1; fi
     "${_LONGMEMEVAL_DIR}/analysis/msc_sweep.sh" "$2"
-    ;;
-  ablation)
-    "${_LONGMEMEVAL_DIR}/analysis/ablation_sweep.sh"
     ;;
   presence)
     # Forward LME_BOLT/LME_NEO4J_PW so the harness's own graphiti-arm connection targets

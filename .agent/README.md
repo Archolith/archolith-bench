@@ -132,7 +132,7 @@ Quickstart:
 
 **⚠️ Stratification (load-bearing):** the dataset is grouped by `question_type`, so a bare
 `--limit N` samples only `temporal-reasoning` (the hardest type) — a fair run MUST sweep all 6
-types via `--subset`. The `matrix`/`msc`/`ablation` verbs already do; see the runbook's
+types via `--subset`. The `matrix`/`msc` verbs already do; see the runbook's
 Stratification section. Every value in `config.sh` is env-overridable; nothing is hardcoded in
 the scripts. OpenAI key is read at runtime from `menhir/.env`, never committed.
 

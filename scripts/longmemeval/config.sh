@@ -56,10 +56,9 @@ LME_PORT_RECALL="${LME_PORT_RECALL:-8103}"             # recall_ab.sh (shared pe
 LME_PORT_BUILDOUT_MAIN="${LME_PORT_BUILDOUT_MAIN:-8105}"       # buildout_ab.sh (main branch, fresh graph)
 LME_PORT_BUILDOUT_FRONTIER="${LME_PORT_BUILDOUT_FRONTIER:-8106}" # buildout_ab.sh (frontier, fresh graph)
 
-# ---- Analysis ports (answer matrix, MSC sweep, ablation, retrieval quality) ----
+# ---- Analysis ports (answer matrix, MSC sweep, retrieval quality) ----
 LME_PORT_MATRIX="${LME_PORT_MATRIX:-8112}"             # analysis/answer_matrix.sh
 LME_PORT_MSC="${LME_PORT_MSC:-8113}"                   # analysis/msc_sweep.sh
-LME_PORT_ABL="${LME_PORT_ABL:-8114}"                   # analysis/ablation_sweep.sh
 LME_PORT_RQ="${LME_PORT_RQ:-8109}"                     # analysis/lib/retrieval_quality.py
 LME_PORT_BRIEF="${LME_PORT_BRIEF:-8118}"               # analysis/brief_ab.sh (BriefBuilder A/B)
 LME_PORT_ENTROPY="${LME_PORT_ENTROPY:-8119}"           # analysis/entropy.sh (D0 retrieval entropy)

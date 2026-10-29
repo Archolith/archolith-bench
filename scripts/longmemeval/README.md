@@ -18,7 +18,6 @@ Workflow: `buildout-ab` (self-contained; does not use the persistent graph)
 Measurement tools isolating specific aspects:
 - **Answer matrix**: accuracy across 3 menhir configs × 6 question types (measures retrieval + generation separately)
 - **MSC sweep**: minimal-sufficient-context (k vs accuracy curve) reveals the brief-construction bottleneck
-- **Ablation sweep**: add-one-in breakdown of oracle components' marginal effects
 - **Retrieval quality**: deterministic gold-presence-at-rank (no answer-model spend)
 - **D0 retrieval entropy** (`analysis/entropy.sh [floor|delivered|both]`): distance-from-query-sufficient-state, GPT-free; FLOOR = evidence dispersion, DELIVERED = retriever walk to first gold hit
 - **Perception gate tuning** (`analysis/perception_tune.py`, env `PT_*`): live threshold/veto sweep of menhir-frontier's perception boundary over the counting + held-out slices (dataset+LLM, no graph)
@@ -37,7 +36,7 @@ The LongMemEval dataset is grouped by `question_type`:
 
 **⚠️ Bare `--limit N` takes the first N items, which are 100% `temporal-reasoning`.** This is a sampling trap. All fair runs **MUST** sweep all 6 types via `--subset <type>` with `LME_PER_TYPE` items each (configurable, default 15/type).
 
-The built-in analysis harnesses (`matrix`, `msc`, `ablation`) already loop across all 6 types. The runbook scripts (`recall-ab`, `buildout-ab`) accept `--subset` to run a single type.
+The built-in analysis harnesses (`matrix`, `msc`) already loop across all 6 types. The runbook scripts (`recall-ab`, `buildout-ab`) accept `--subset` to run a single type.
 
 ## Prerequisites
 
@@ -77,7 +76,6 @@ when each has a cost monitor with a manual ceiling. The full rule is in
 # 5. Analysis (stratified, all 6 types)
 ./lme.sh matrix      # answer accuracy
 ./lme.sh msc node_plain  # minimal sufficient context (main config)
-./lme.sh ablation    # oracle component ablation
 
 # 6. M1 IR gate (retrieval-only, no answer-model spend; needs a menhir server on LME_PORT_RQ)
 LME_PER_TYPE=133 ./lme.sh ir-gate   # 133 = full 500-item corpus (max per-type count); default 15 = 90-item sample
@@ -548,7 +546,6 @@ LME_PORT_BUILDOUT_MAIN=8105     # buildout_ab.sh (main)
 LME_PORT_BUILDOUT_FRONTIER=8106 # buildout_ab.sh (frontier)
 LME_PORT_MATRIX=8112            # analysis/answer_matrix.sh
 LME_PORT_MSC=8113               # analysis/msc_sweep.sh
-LME_PORT_ABL=8114               # analysis/ablation_sweep.sh
 LME_PORT_RQ=8109                # analysis/lib/retrieval_quality.py
 
 # Models
@@ -601,7 +598,6 @@ With N=15/type (90 total), expect ±~0.13 standard error on the score. Report pe
 ### Analysis Outputs
 - **Answer matrix**: 3 configs × 6 types × 15 items = 270 questions. Reveals which config is strongest per type.
 - **MSC sweep**: accuracy vs k (1, 2, 3, 5, 10). If plateau at k=5, brief construction is the bottleneck, not retrieval.
-- **Ablation**: marginal effects of oracle components (oracle ranking, intent lens, evidence anchor, etc.). Warden gate zeros the score on anecdotal evidence.
 - **Retrieval quality**: gold-rank histogram (rank at which the answer's tokens first appear in top-k) — no answer-model cost.
 - **Brief A/B** (`lme.sh brief-ab [--score]`): does the frontier BriefBuilder brief beat the flat
   relevance brief? Serves menhir-frontier twice over the pre-built graph
