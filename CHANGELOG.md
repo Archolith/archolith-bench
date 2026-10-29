@@ -4,6 +4,7 @@
 - `LME_INGEST_CONCURRENCY` now defaults to 30 (was 1) in `config.sh` and as `ingest.py`'s `--namespace-window` fallback; 30 namespaces at once was measured clean on 2026-10-29. The guarded KU reingest keeps its own 1-4 width.
 - `CHANGELOG-archive.md`: the oldest dated entry moved there (10-entry limit).
 - Removed `scripts/longmemeval/analysis/ablation_sweep.sh`, the `lme.sh ablation` verb and `LME_PORT_ABL`. Every arm set retired `MENHIR_FRONTIER_*` flags that Menhir ignores, so all arms ran the same config.
+- LME answer model defaults to `gpt-6-luna` (was `gpt-4o`), on the Flex tier like every other LLM role (owner decision for the frozen run, Menhir #123). Covers `config.sh`, the rescore and answer/brief A/B fallbacks, and the KU buildout scripts' `BENCHMARK_MODEL`, which was hard-coded to `gpt-4o` alongside `--model "${LME_ANSWER_MODEL}"`. The answer model is part of the checkpoint name, so earlier gpt-4o checkpoints no longer resume.
 
 ## 2026-10-26 - LME answer prompt gives tailored suggestions for advice questions
 

@@ -422,7 +422,7 @@ python scripts/longmemeval/lib/summarize_llm_usage.py <run>/mcp_telemetry.db   -
 
 Rates live in `INGEST_RATES_USD_PER_1M` in that script: static and dated, matching
 `core/metrics.py`'s convention. They are deliberately **not** `core.metrics.PRICING_DEFAULTS`,
-which is keyed by provider and whose `openai` entry is gpt-4o ($2.50/$10.00), the answer model;
+which is keyed by provider and whose `openai` entry is gpt-4o ($2.50/$10.00), the former answer model;
 ingest runs on gpt-4o-mini, 16x cheaper on input, so pricing ingest there would overstate a
 buildout by roughly an order of magnitude.
 
@@ -550,7 +550,7 @@ LME_PORT_RQ=8109                # analysis/lib/retrieval_quality.py
 
 # Models
 LME_EXTRACT_MODEL=gpt-6-luna   # gpt-4o-mini is deprecated; not comparable to Zep/Mem0's mini numbers
-LME_ANSWER_MODEL=gpt-4o
+LME_ANSWER_MODEL=gpt-6-luna
 LME_JUDGE_MODEL=gpt-6-luna
 LME_OPENAI_SERVICE_TIER=flex   # reasoning models only (Menhir and the harness)
 LME_EMBED_MODEL=text-embedding-3-small

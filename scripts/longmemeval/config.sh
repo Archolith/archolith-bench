@@ -76,13 +76,13 @@ LME_EXTRACT_MODEL="${LME_EXTRACT_MODEL:-gpt-6-luna}"
 LME_EXTRACT_PROVIDER="${LME_EXTRACT_PROVIDER:-openai}"
 LME_EXTRACT_BASE_URL="${LME_EXTRACT_BASE_URL:-}"
 LME_EXTRACT_API_KEY="${LME_EXTRACT_API_KEY:-not-needed}"
-LME_ANSWER_MODEL="${LME_ANSWER_MODEL:-gpt-4o}"
+LME_ANSWER_MODEL="${LME_ANSWER_MODEL:-gpt-6-luna}"
 LME_JUDGE_MODEL="${LME_JUDGE_MODEL:-gpt-6-luna}"
 LME_EMBED_MODEL="${LME_EMBED_MODEL:-text-embedding-3-small}"
 LME_SCORER="${LME_SCORER:-llm-judge}"
 # OpenAI service tier for Menhir's calls and the harness's answer/judge calls. Both send it only
-# to reasoning models (gpt-5/gpt-6/o-series) on the OpenAI endpoint, so a gpt-4o answer model is
-# unaffected. Empty sends no tier.
+# to reasoning models (gpt-5/gpt-6/o-series) on the OpenAI endpoint, so a non-reasoning answer model
+# such as gpt-4o is unaffected. Empty sends no tier.
 LME_OPENAI_SERVICE_TIER="${LME_OPENAI_SERVICE_TIER:-flex}"
 export BENCHMARK_SERVICE_TIER="${BENCHMARK_SERVICE_TIER:-${LME_OPENAI_SERVICE_TIER}}"
 # Every wrapper that serves Menhir sources this file, so the recall/analysis serves get the same

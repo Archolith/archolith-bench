@@ -5,7 +5,7 @@
 #   3. run the perception consolidation (writes Views, new surface)   4. collect WITH-VIEWS brief
 #   5. answer + judge both arms                       6. leave the Views in place (pass saved)
 # Use after a View-surface / pipeline change to confirm the lift without a throwaway delete.
-# Cost: one consolidation (~90 namespaces) + gpt-4o answers/judges over the counting slice. STOP on 429.
+# Cost: one consolidation (~90 namespaces) + LME_ANSWER_MODEL answers and LME_JUDGE_MODEL judges (gpt-6-luna, Flex) over the counting slice. STOP on 429.
 set -uo pipefail
 HERE="$(dirname "${BASH_SOURCE[0]}")"
 source "$HERE/../config.sh"

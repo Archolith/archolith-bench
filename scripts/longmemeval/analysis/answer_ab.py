@@ -5,7 +5,7 @@ and the D0 retrieval collapse (a correct View goes censored -> rank-1), but neve
 change actual answers. This measures exactly that, scoped to the COUNTING SLICE (the questions a
 count/total View can plausibly answer), via the answer-facing path:
 
-    /api/context (BriefBuilder — where committed Views surface) -> gpt-4o answer -> gpt-6-luna judge (Flex)
+    /api/context (BriefBuilder — where committed Views surface) -> gpt-6-luna answer -> gpt-6-luna judge (Flex)
 
 Two arms, gathered by the runner (`answer_ab.sh`) serving menhir over the SAME graph and deleting the
 perception Views between collect passes:
@@ -28,7 +28,7 @@ MODE = os.getenv("MODE", "collect")
 TAG = os.getenv("AB_TAG", "withviews")
 MENHIR_URL = os.getenv("MENHIR_URL", "http://localhost:8120").rstrip("/")
 OPENAI_KEY = os.environ.get("OPENAI_API_KEY", "")
-ANSWER_MODEL = os.getenv("ANSWER_MODEL", "gpt-4o")
+ANSWER_MODEL = os.getenv("ANSWER_MODEL", "gpt-6-luna")
 JUDGE_MODEL = os.getenv("JUDGE_MODEL", "gpt-6-luna")
 OUT = os.getenv("AB_OUT", os.path.expanduser("~/lme-answer-ab"))
 os.makedirs(OUT, exist_ok=True)

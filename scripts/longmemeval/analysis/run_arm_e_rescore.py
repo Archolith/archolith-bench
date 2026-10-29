@@ -156,7 +156,7 @@ def main() -> None:
         model=os.environ.get("LME_JUDGE_MODEL", "gpt-6-luna"),
     )
     checkpoint = MemoryCheckpoint(
-        checkpoint_path_for(RESULTS_DIR, adapter.benchmark_id, os.environ.get("LME_ANSWER_MODEL", "gpt-4o"))
+        checkpoint_path_for(RESULTS_DIR, adapter.benchmark_id, os.environ.get("LME_ANSWER_MODEL", "gpt-6-luna"))
     )
     print(f"[arm-e-rescore] {checkpoint.done_count()} item-results already checkpointed")
 
@@ -170,7 +170,7 @@ def main() -> None:
         limit=78,
         fixture_path=str(FIXTURE_PATH),
         client=client,
-        model=os.environ.get("LME_ANSWER_MODEL", "gpt-4o"),
+        model=os.environ.get("LME_ANSWER_MODEL", "gpt-6-luna"),
         chat_base_url=os.environ.get("UPSTREAM_BASE_URL") or "https://api.openai.com/v1",
         api_key=judge_key,
         recall_limit=int(os.environ.get("LME_RECALL_LIMIT", "10")),

@@ -12,7 +12,7 @@
 #   recall_ab.sh main 30
 #   recall_ab.sh claude/menhir-chain-handoff-doc-7iuat2 30
 #   recall_ab.sh ../menhir-frontier 30
-# Env overrides: LME_ANSWER_MODEL (default gpt-4o), LONGMEMEVAL_VARIANT (default oracle —
+# Env overrides: LME_ANSWER_MODEL (default gpt-6-luna), LONGMEMEVAL_VARIANT (default oracle —
 #   MUST match the variant the graph was built with), SCORER (containment|llm-judge).
 set -euo pipefail
 
