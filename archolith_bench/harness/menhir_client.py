@@ -189,12 +189,7 @@ def _format_source_time_evidence(item: dict[str, Any]) -> str:
             continue
         valid_at = str(temporal_fact.get("valid_at") or "").strip()
         invalid_at = str(temporal_fact.get("invalid_at") or "").strip()
-        # Anchored event time, only when Menhir sends it (MENHIR_ANCHORED_TIME_RENDER); same
-        # rule as Menhir's context_builder._source_time_lines.
-        event_time = str(temporal_fact.get("event_time") or "").strip()
-        if event_time:
-            happened = f"{event_time} through {invalid_at}" if invalid_at else event_time
-        elif valid_at and invalid_at:
+        if valid_at and invalid_at:
             happened = f"{valid_at} through {invalid_at}"
         else:
             happened = valid_at or "unknown"
