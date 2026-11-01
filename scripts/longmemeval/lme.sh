@@ -105,6 +105,8 @@ case "$COMMAND" in
     MENHIR_URL="http://localhost:${LME_PORT_RQ}" \
       LME_BOLT="${LME_BOLT}" LME_NEO4J_PW="${LME_NEO4J_PW}" \
       MENHIR_MAIN="${MENHIR_MAIN}" \
+      MENHIR_SERVED_SRC="${MENHIR_SERVED_SRC:-${MENHIR_FRONTIER}}" \
+      LME_IR_OUT="${LME_IR_OUT:-${LME_RESULTS_DIR}/lme-gate/ir-$(date +%Y%m%dT%H%M%S)}" \
       LME_RUN_ID="${LME_RUN_ID:-}" \
       LME_GRAPH_FRESH="${LME_GRAPH_FRESH:-false}" \
       "${MENHIR_FRONTIER_PY}" "${_LONGMEMEVAL_DIR}/analysis/lib/retrieval_quality.py"
