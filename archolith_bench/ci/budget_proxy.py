@@ -18,6 +18,7 @@ Uses only stdlib + httpx (already a dependency). No FastAPI/uvicorn needed.
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 import threading
@@ -27,6 +28,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import httpx
+
+from archolith_bench.ci import prompt_transforms
 
 ALLOWED_PATHS = frozenset({"/v1/chat/completions", "/v1/embeddings"})
 ALLOWED_GET_PATHS = frozenset({"/v1/models"})
@@ -54,8 +57,21 @@ class BudgetState:
         price_output_per_1m: float = DEFAULT_PRICE_OUTPUT_PER_1M,
         on_killed: Callable[[], None] | None = None,
         body_overrides: dict | None = None,
+        body_log_file: Path | None = None,
+        body_log_schemas: frozenset[str] | None = None,
+        transforms: tuple[str, ...] = (),
+        schema_effort: dict[str, str] | None = None,
+        price_cache_read_per_1m: float | None = None,
     ) -> None:
         self.api_key = api_key
+        # A/B arms: named prompt rewrites and per-schema reasoning effort (prompt_transforms.py).
+        self.transforms = tuple(transforms)
+        self.schema_effort = dict(schema_effort or {})
+        # Cached prompt tokens are billed at this rate when set; otherwise at the full input rate.
+        self.price_cache_read_per_1m = price_cache_read_per_1m
+        # Opt-in: full request messages + response content for the listed schemas (None = all).
+        self.body_log_schemas = body_log_schemas
+        self._body_fp = body_log_file.open("a", encoding="utf-8") if body_log_file else None
         # Merged into every forwarded chat-completion body (e.g. {"reasoning": {"effort": "low"}}).
         self.body_overrides = dict(body_overrides or {})
         self.upstream = upstream.rstrip("/")
@@ -107,10 +123,12 @@ class BudgetState:
             self.calls += 1
             return None
 
-    def record_usage(self, input_tokens: int, output_tokens: int) -> None:
+    def record_usage(self, input_tokens: int, output_tokens: int, cached_tokens: int = 0) -> None:
         with self._lock:
+            cached = min(max(cached_tokens, 0), input_tokens) if self.price_cache_read_per_1m is not None else 0
             cost = (
-                input_tokens / 1_000_000 * self.price_input_per_1m
+                (input_tokens - cached) / 1_000_000 * self.price_input_per_1m
+                + cached / 1_000_000 * (self.price_cache_read_per_1m or 0.0)
                 + output_tokens / 1_000_000 * self.price_output_per_1m
             )
             self.usd += cost
@@ -121,6 +139,16 @@ class BudgetState:
         with self._lock:
             self._trace_fp.write(line)
             self._trace_fp.flush()
+
+    def write_body(self, entry: dict) -> None:
+        if self._body_fp is None:
+            return
+        if self.body_log_schemas is not None and entry.get("schema") not in self.body_log_schemas:
+            return
+        line = json.dumps(entry, ensure_ascii=False) + "\n"
+        with self._lock:
+            self._body_fp.write(line)
+            self._body_fp.flush()
 
     def write_budget(self) -> None:
         with self._lock:
@@ -155,6 +183,8 @@ class BudgetState:
 
     def close(self) -> None:
         self._trace_fp.close()
+        if self._body_fp is not None:
+            self._body_fp.close()
 
 
 class _ProxyHandler(BaseHTTPRequestHandler):
@@ -206,13 +236,30 @@ class _ProxyHandler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length", "0"))
         body = self.rfile.read(length) if length > 0 else b""
         self._call_meta = {}
+        self._req_messages = None
+        self._req_rest = None
         if path == "/v1/chat/completions" and body:
             try:
                 parsed = json.loads(body)
                 schema = ((parsed.get("response_format") or {}).get("json_schema") or {}).get("name")
-                self._call_meta = {"schema": schema or (parsed.get("response_format") or {}).get("type") or "text"}
+                schema = schema or (parsed.get("response_format") or {}).get("type") or "text"
+                self._call_meta = {"schema": schema}
+                # Body log keeps the ORIGINAL request (pre-transform) so any arm can be replayed offline.
+                original = copy.deepcopy(parsed)
+                self._req_messages = original.pop("messages", None)
+                self._req_rest = original
+                changed = False
                 if self.state.body_overrides:
                     parsed.update(self.state.body_overrides)
+                    changed = True
+                if self.state.transforms or self.state.schema_effort:
+                    applied = prompt_transforms.apply(
+                        parsed, schema, self.state.transforms, self.state.schema_effort
+                    )
+                    if applied:
+                        self._call_meta["applied"] = applied
+                        changed = True
+                if changed:
                     body = json.dumps(parsed).encode("utf-8")
             except (json.JSONDecodeError, AttributeError, TypeError):
                 pass
@@ -234,14 +281,15 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             return
 
         # Try to extract usage for cost accounting
-        in_tok = out_tok = reasoning_tok = 0
+        in_tok = out_tok = reasoning_tok = cached_tok = 0
         try:
             resp_json = json.loads(resp.content)
             usage = resp_json.get("usage", {})
             in_tok = int(usage.get("prompt_tokens") or usage.get("input_tokens") or 0)
             out_tok = int(usage.get("completion_tokens") or usage.get("output_tokens") or 0)
             reasoning_tok = int(((usage.get("completion_tokens_details") or {}).get("reasoning_tokens")) or 0)
-            self.state.record_usage(in_tok, out_tok)
+            cached_tok = int(((usage.get("prompt_tokens_details") or {}).get("cached_tokens")) or 0)
+            self.state.record_usage(in_tok, out_tok, cached_tok)
         except (json.JSONDecodeError, ValueError, TypeError, AttributeError):
             # The call was already reserved before forwarding it. Unknown usage
             # remains a zero-cost observation, but still consumes a call slot.
@@ -257,8 +305,17 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             "in_tok": in_tok,
             "out_tok": out_tok,
             "reasoning_tok": reasoning_tok,
+            "cached_tok": cached_tok,
         })
         self.state.write_budget()
+        if getattr(self, "_req_messages", None) is not None and self.state._body_fp is not None:
+            try:
+                content = json.loads(resp.content)["choices"][0]["message"].get("content")
+            except (json.JSONDecodeError, KeyError, IndexError, TypeError):
+                content = None
+            self.state.write_body({**self._call_meta, "status": resp.status_code,
+                                   "messages": self._req_messages, "request": self._req_rest,
+                                   "response": content})
 
         # Re-check caps after the call
         cap_reason = self.state.check_caps()
@@ -291,7 +348,15 @@ class BudgetProxy:
         max_seconds: float = 900.0,
         on_killed: Callable[[], None] | None = None,
         body_overrides: dict | None = None,
+        body_log_file: str | Path | None = None,
+        body_log_schemas: frozenset[str] | None = None,
+        transforms: tuple[str, ...] = (),
+        schema_effort: dict[str, str] | None = None,
+        price_cache_read_per_1m: float | None = None,
     ) -> None:
+        unknown = [t for t in transforms if t not in prompt_transforms.TRANSFORMS]
+        if unknown:
+            raise ValueError(f"unknown prompt transforms: {unknown}")
         self.state = BudgetState(
             api_key=api_key,
             upstream=upstream,
@@ -302,6 +367,11 @@ class BudgetProxy:
             max_seconds=max_seconds,
             on_killed=on_killed,
             body_overrides=body_overrides,
+            body_log_file=Path(body_log_file) if body_log_file else None,
+            body_log_schemas=body_log_schemas,
+            transforms=tuple(transforms),
+            schema_effort=schema_effort,
+            price_cache_read_per_1m=price_cache_read_per_1m,
         )
         self.port = port
         self._server: ThreadingHTTPServer | None = None

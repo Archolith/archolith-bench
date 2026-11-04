@@ -30,6 +30,14 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--out", type=Path, required=True)
     ap.add_argument("--reasoning-effort", default=None,
                     help="inject reasoning.effort into every chat request (e.g. low, none)")
+    ap.add_argument("--log-bodies", default=None,
+                    help="comma-separated response schemas to log in full to bodies.jsonl ('all' for every call)")
+    ap.add_argument("--transforms", default="",
+                    help="comma-separated prompt transforms for an A/B arm (see archolith_bench/ci/prompt_transforms.py)")
+    ap.add_argument("--schema-effort", default="",
+                    help="per-schema reasoning effort, e.g. 'EdgeDuplicate=none,text=none'")
+    ap.add_argument("--price-cache-read", type=float, default=None,
+                    help="USD per 1M cached prompt tokens (default: cached tokens billed at --price-input)")
     args = ap.parse_args(argv)
 
     key = os.getenv(args.key_env, "")
@@ -40,6 +48,7 @@ def main(argv: list[str] | None = None) -> int:
     os.environ["BENCH_PRICE_INPUT_PER_1M"] = str(args.price_input)
     os.environ["BENCH_PRICE_OUTPUT_PER_1M"] = str(args.price_output)
     from archolith_bench.ci.budget_proxy import BudgetProxy
+    from archolith_bench.ci.prompt_transforms import parse_schema_effort
 
     args.out.mkdir(parents=True, exist_ok=True)
     proxy = BudgetProxy(
@@ -52,10 +61,17 @@ def main(argv: list[str] | None = None) -> int:
         max_usd=args.max_usd,
         max_seconds=args.max_seconds,
         body_overrides={"reasoning": {"effort": args.reasoning_effort}} if args.reasoning_effort else None,
+        body_log_file=args.out / "bodies.jsonl" if args.log_bodies else None,
+        body_log_schemas=(None if args.log_bodies in (None, "all")
+                          else frozenset(x.strip() for x in args.log_bodies.split(","))),
+        transforms=tuple(t.strip() for t in args.transforms.split(",") if t.strip()),
+        schema_effort=parse_schema_effort(args.schema_effort),
+        price_cache_read_per_1m=args.price_cache_read,
     )
     proxy.start()
     print(f"budget proxy on {proxy.base_url}/v1 -> {args.upstream} cap=${args.max_usd} "
-          f"reasoning_effort={args.reasoning_effort or 'provider default'}", flush=True)
+          f"reasoning_effort={args.reasoning_effort or 'provider default'} "
+          f"transforms={args.transforms or '-'} schema_effort={args.schema_effort or '-'}", flush=True)
     reported = False
     try:
         while True:
