@@ -90,8 +90,9 @@ def default_scalar_state_cases() -> list[ScalarStateCase]:
             case_id="ss-measurement-height", outcome="view", expect_kind="measurement", expect_value=180.0,
             prompt="My height is 180 centimeters.", subject_needles=("height",),
         ),
+        # Menhir stores every duration in seconds (typed_scalar_rules._duration_value): 45 min = 2700.
         ScalarStateCase(
-            case_id="ss-duration-commute", outcome="view", expect_kind="duration", expect_value=45.0,
+            case_id="ss-duration-commute", outcome="view", expect_kind="duration", expect_value=2700.0,
             prompt="My commute takes 45 minutes.", subject_needles=("commute",),
         ),
         ScalarStateCase(
