@@ -125,6 +125,23 @@ for both shapes, scores ten fixed strata, and labels every result noncanonical a
 may make paid answer/judge calls and writes its registration, fixture, checkpoints, results, and
 provenance under `results/lme-ku-buildout/`.
 
+## Recall signal instruments
+
+These test whether a real cosine beats recall's rank scores
+(plan `menhir-recall-real-similarity-test-plan-2026-11-05`). They read batches from Menhir's
+`scripts/recall_lab_batch.py` and make no LLM calls. Run them on a throwaway graph copy.
+
+- `scripts/longmemeval/analysis/candidate_labels.py` labels every candidate, result and source
+  memory from `has_answer` turns. `--stats-only` prints whole-graph label coverage. A candidate
+  that cannot be traced gets a `None` label, never a negative. A swapped null uses the id
+  `<question_id>@<namespace>`.
+- `scripts/longmemeval/analysis/recall_summary_cosine.py` embeds entity summaries once and scores
+  them against the batch's pinned query vectors. It costs embeddings only and stops on any API
+  error.
+- `scripts/longmemeval/analysis/recall_signal_eval.py` reports H1-H4. Its thresholds, seed and
+  splits are pre-registered constants: changing one after opening Phase 3 data voids that
+  hypothesis. It needs the `recall-analysis` extra (numpy).
+
 ## menhir ScalarStateView instruments (live here, documented in menhir)
 
 `scripts/scalar_state_coverage.py` and its siblings (`run_scalar_state_e2e.sh`,

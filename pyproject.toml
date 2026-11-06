@@ -46,8 +46,10 @@ research-parser = [
     "spacy==3.8.14",
     "en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl#sha256=1932429db727d4bff3deed6b34cfc05df17794f4a52eeb26cf8928f7c1a0fb85",
 ]
+# Recall signal analysis (scripts/longmemeval/analysis/recall_signal_eval.py).
+recall-analysis = ["numpy>=1.26"]
 all = ["archolith-filter", "archolith-audit", "datasets>=2"]
-dev = ["pytest>=8", "ruff>=0.4"]
+dev = ["pytest>=8", "ruff>=0.4", "numpy>=1.26"]
 
 [project.urls]
 Homepage = "https://github.com/Archolith/archolith-bench"

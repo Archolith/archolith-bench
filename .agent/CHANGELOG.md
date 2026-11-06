@@ -1,5 +1,13 @@
 # archolith-bench Changelog
 
+## 2026-11-06 - Recall signal labeller and analysis
+
+Adds the instruments for Phase 2 of `menhir-recall-real-similarity-test-plan-2026-11-05`:
+`candidate_labels.py`, `recall_summary_cosine.py` and `recall_signal_eval.py` under
+`scripts/longmemeval/analysis/`. They label recall candidates from `has_answer` turns and test
+H1-H4 with pre-registered thresholds. `numpy` is a new `recall-analysis` extra and joins `dev`, so
+CI runs the tests. Nothing here changes a bench score or a run.
+
 ## 2026-09-30 - OpenAI flex client for non-live LLM calls (`archolith_bench/core/openai_flex.py`)
 
 Batch-style benchmark calls (answering, judging) now use OpenAI **flex
