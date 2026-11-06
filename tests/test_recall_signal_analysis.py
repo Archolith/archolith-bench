@@ -27,6 +27,37 @@ def _load(name: str):
 labels_mod = _load("candidate_labels")
 evals = _load("recall_signal_eval")
 summary_mod = _load("recall_summary_cosine")
+queries_mod = _load("recall_signal_queries")
+
+
+def _query_items():
+    return [
+        {"question_id": f"{qtype}{i}", "question_type": qtype, "question": f"{qtype} {i}?"}
+        for qtype in ("ku", "tr", "ms") for i in range(8)
+    ]
+
+
+def test_swapped_nulls_cross_types_and_namespaces_and_repeat_with_the_seed():
+    items = _query_items()
+    types = {i["question_id"]: i["question_type"] for i in items}
+    rows = queries_mod.swapped_rows(items)
+    assert rows == queries_mod.swapped_rows(items)
+    assert len({r["namespace"] for r in rows}) == len(items)
+    for row in rows:
+        asked = labels_mod.question_of(row["id"])
+        assert types[asked] != types[row["namespace"].removeprefix("lme-")]
+        assert labels_mod.query_kind(row["id"], None) == "swapped"
+
+
+def test_distractor_groups_cover_every_namespace_once_in_tens():
+    items = _query_items()
+    groups = queries_mod.merged_groups(items)
+    assert len(groups) == len(items)
+    sizes = sorted(list(groups.values()).count(g) for g in set(groups.values()))
+    assert sizes == [4, 10, 10]
+    rows = queries_mod.distractor_rows(items, groups)
+    assert {r["namespace"] for r in rows} == set(groups.values())
+    assert rows[0]["id"] == items[0]["question_id"]
 
 
 def _item(qid, qtype, turns):
