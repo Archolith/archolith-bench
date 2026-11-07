@@ -129,7 +129,8 @@ provenance under `results/lme-ku-buildout/`.
 
 These test whether a real cosine beats recall's rank scores
 (plan `menhir-recall-real-similarity-test-plan-2026-11-05`). They read batches from Menhir's
-`scripts/recall_lab_batch.py` and make no LLM calls. Run them on a throwaway graph copy.
+`scripts/recall_lab_batch.py`, which is not on Menhir main: use commit `cae1427d` from closed
+PR #513. Only `candidate_judge_labels.py` makes LLM calls. Run them on a throwaway graph copy.
 
 - `scripts/longmemeval/analysis/candidate_labels.py` labels every candidate, result and source
   memory from `has_answer` turns. `--stats-only` prints whole-graph label coverage. A candidate
