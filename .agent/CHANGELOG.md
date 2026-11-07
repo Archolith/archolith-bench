@@ -8,6 +8,9 @@ Adds the instruments for Phase 2 of `menhir-recall-real-similarity-test-plan-202
 H1-H4 with pre-registered thresholds. `numpy` is a new `recall-analysis` extra and joins `dev`, so
 CI runs the tests. Nothing here changes a bench score or a run.
 
+`candidate_judge_labels.py` replaces the heuristic label for the summary-cosine retest: the
+heuristic measured "mentioned in a gold turn" at 0.102 precision.
+
 ## 2026-09-30 - OpenAI flex client for non-live LLM calls (`archolith_bench/core/openai_flex.py`)
 
 Batch-style benchmark calls (answering, judging) now use OpenAI **flex

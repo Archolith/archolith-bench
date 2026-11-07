@@ -141,6 +141,10 @@ These test whether a real cosine beats recall's rank scores
 - `scripts/longmemeval/analysis/recall_signal_eval.py` reports H1-H4. Its thresholds, seed and
   splits are pre-registered constants: changing one after opening Phase 3 data voids that
   hypothesis. It needs the `recall-analysis` extra (numpy).
+- `scripts/longmemeval/analysis/candidate_judge_labels.py` judges every own-namespace entity of
+  real questions (`label`, paid, capped at $0.50, `--pilot N` prints cost only), then scores name
+  and summary cosine against RRF with the frozen analysis (`score`). The rule is pre-registered in
+  the plan. It needs a throwaway graph copy and `PYTHONPATH` set to the repo root.
 
 ## menhir ScalarStateView instruments (live here, documented in menhir)
 
