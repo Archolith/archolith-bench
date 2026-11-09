@@ -367,6 +367,16 @@ def _format_authority_record(record: dict[str, Any], *, drill_down: bool = False
         if support:
             lines.append("provenance:")
             lines.extend(f"- {item}" for item in support)
+    # Menhir #519: hedged same-slot values newer than the View (why it is advisory), as Menhir's
+    # own context builder renders them.
+    newer_approximate = record.get("newer_approximate")
+    if isinstance(newer_approximate, list):
+        for approx in newer_approximate:
+            if not isinstance(approx, dict) or approx.get("value") is None:
+                continue
+            quote = str(approx.get("quote") or "").strip()
+            approx_time = str(approx.get("valid_at") or "").strip() or "unknown"
+            lines.append(f'newer, approximate: about {approx["value"]} ("{quote}", {approx_time})')
     view_uuid = str(record.get("view_uuid") or "").strip()
     total = record.get("contributors_total")
     if (
