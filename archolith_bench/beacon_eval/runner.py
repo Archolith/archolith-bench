@@ -100,6 +100,11 @@ ANSWER_INSTRUCTIONS = (
 )
 
 _RATE_LIMIT = re.compile(r"\b429\b|rate[ _-]?limit|too many requests", re.IGNORECASE)
+# Flex capacity refusals are retried by OpenCode; they are not a quota or rate stop.
+_FLEX_CAPACITY = re.compile(
+    r"flex_unavailable|resource_unavailable|flex does not have sufficient resources",
+    re.IGNORECASE,
+)
 
 
 class RateLimited(RuntimeError):
@@ -911,7 +916,7 @@ class EventLog:
         self._scan(line)
 
     def _scan(self, text: str) -> None:
-        if _RATE_LIMIT.search(text):
+        if _RATE_LIMIT.search(text) and not _FLEX_CAPACITY.search(text):
             self.rate_limited = True
 
     def _add_usage(self, tokens: Any) -> None:

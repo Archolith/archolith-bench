@@ -1,0 +1,24 @@
+{
+  "repo": "menhir",
+  "task_id": "menhir-p3-ranking",
+  "kind": "pins",
+  "prompt": "In the Menhir memory server, the startup pins for workspace \"atlas\" include a general rule that says never push directly to main. Make that rule the first pin returned when a session in workspace \"atlas\" loads its startup pins, without deleting or rewording any memory. Use the memory tools to do it, then report what you changed and whether it worked.",
+  "reviewed": true,
+  "gold": {
+    "docs": [],
+    "files": [],
+    "acceptable_files": [],
+    "commands": [],
+    "allowed_flags": [],
+    "guardrails": [],
+    "points": [
+      ["pin_priority", "priority"],
+      ["first pin", "now first", "returned first"]
+    ],
+    "verdict": "",
+    "risky": []
+  },
+  "gold_citations": [],
+  "memory_citations": [],
+  "notes": "#674 eval. Outcome is checked outside the agent: first item of GET /api/bootstrap/flagged?workspace=atlas on the arm's own server after the run. Old arm has no priority control."
+}

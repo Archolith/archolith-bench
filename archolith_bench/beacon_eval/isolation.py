@@ -37,6 +37,10 @@ class IsolationError(RuntimeError):
     """The per-run config could not be built as specified."""
 
 
+#: Optional OpenAI service tier (e.g. "flex") written into the run's model options.
+SERVICE_TIER_ENV = "BEACON_EVAL_SERVICE_TIER"
+
+
 def default_config_source() -> Path:
     return Path.home() / ".config" / "opencode" / "opencode.json"
 
@@ -63,6 +67,18 @@ def minimal_config(
         raise IsolationError(f"provider {provider_id!r} is not defined in {source_config}")
     if "$schema" in real:
         config["$schema"] = real["$schema"]
+    service_tier = os.environ.get(SERVICE_TIER_ENV, "").strip()
+    if service_tier:
+        # OpenCode passes model options to the provider as providerOptions (serviceTier ->
+        # service_tier); a partial provider block merges with the built-in catalog.
+        model_id = model.split("/", 1)[1] if "/" in model else model
+        provider = dict(config.get("provider", {}).get(provider_id) or {})
+        models = dict(provider.get("models") or {})
+        entry = dict(models.get(model_id) or {})
+        entry["options"] = {**(entry.get("options") or {}), "serviceTier": service_tier}
+        models[model_id] = entry
+        provider["models"] = models
+        config["provider"] = {provider_id: provider}
     if mcp:
         config["mcp"] = mcp
     if disabled_tools:

@@ -1,0 +1,25 @@
+{
+  "repo": "menhir",
+  "task_id": "menhir-p1-truncation",
+  "kind": "pins",
+  "prompt": "You are starting a work session in workspace \"atlas\". Load your startup pins from the Menhir memory server for that workspace. Then answer: what rules apply to how a change gets onto the main branch? Say whether you are confident you have seen every startup pin, and why.",
+  "reviewed": true,
+  "gold": {
+    "docs": [],
+    "files": [],
+    "acceptable_files": [],
+    "commands": [],
+    "allowed_flags": [],
+    "guardrails": [],
+    "points": [
+      ["never push directly to main", "no direct push to main", "open a pull request"],
+      ["wait for green CI", "wait for CI", "CI must pass"],
+      ["more pins than returned", "list was truncated", "not every pin was returned", "flagged_total"]
+    ],
+    "verdict": "",
+    "risky": []
+  },
+  "gold_citations": [],
+  "memory_citations": [],
+  "notes": "#674 eval. 60 pins seeded (57 general, 3 workspace:atlas); even limit 50 drops the oldest general pins, including the main-branch rule. Old arm returns no truncation signal; new arm returns truncated/flagged_total."
+}

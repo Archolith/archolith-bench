@@ -31,7 +31,7 @@ from archolith_bench.beacon_eval.runner import (
 
 HERE = Path(__file__).parent
 #: --task-set name -> task folder under HERE.
-TASK_SETS = {"main": "tasks", "why": "why_tasks", "adr": "why_tasks_adr"}
+TASK_SETS = {"main": "tasks", "why": "why_tasks", "adr": "why_tasks_adr", "pins": "pins_tasks"}
 
 
 def add_parser(subparsers: argparse._SubParsersAction) -> None:

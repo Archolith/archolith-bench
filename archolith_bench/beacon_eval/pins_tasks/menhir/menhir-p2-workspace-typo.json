@@ -1,0 +1,25 @@
+{
+  "repo": "menhir",
+  "task_id": "menhir-p2-workspace-typo",
+  "kind": "pins",
+  "prompt": "You are starting a work session in workspace \"atlass\". Load your startup pins from the Menhir memory server for that workspace. Then answer: how must database migrations be run in this workspace? If the pins don't say, tell me what you think went wrong.",
+  "reviewed": true,
+  "gold": {
+    "docs": [],
+    "files": [],
+    "acceptable_files": [],
+    "commands": [],
+    "allowed_flags": [],
+    "guardrails": [],
+    "points": [
+      ["no pins for that workspace", "no workspace pins", "only general pins", "workspace has no pins"],
+      ["workspace key may be wrong", "typo", "atlas", "check the workspace key"],
+      ["scripts/migrate.ps1", "migrate.ps1"]
+    ],
+    "verdict": "",
+    "risky": []
+  },
+  "gold_citations": [],
+  "memory_citations": [],
+  "notes": "#674 eval. Workspace key is misspelled; only the 3 workspace:atlas pins hold the migration rule. New arm returns workspace_pin_count=0 and workspace_notice. Point 3 needs the agent to retry with 'atlas'."
+}
