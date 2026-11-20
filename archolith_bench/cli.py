@@ -22,6 +22,10 @@ from .core.report import save_results
 from .core.scenario import Scenario, list_scenarios
 
 
+# Harness arms when --arms is not given and the benchmark is not a memory benchmark.
+_PROXY_DEFAULT_ARMS = "direct,proxy_only,proxy_plus_filter"
+
+
 def _add_common_proxy_args(parser: argparse.ArgumentParser) -> None:
     """Add shared arguments for proxy and stack subcommands.
 
@@ -271,8 +275,9 @@ def main(argv: list[str] | None = None) -> None:
                                 "subset, limit and arms; explicit flags still win.")
     harness_p.add_argument("--list-presets", action="store_true", dest="list_presets",
                            help="List available smoke presets and exit")
-    harness_p.add_argument("--arms", default="direct,proxy_only,proxy_plus_filter",
-                           help="Comma-separated experiment arms")
+    harness_p.add_argument("--arms", default=None,
+                           help="Comma-separated experiment arms (default: "
+                                f"{_PROXY_DEFAULT_ARMS}; memory benchmarks: their default memory arms)")
     harness_p.add_argument("--subset", default=None, help="Benchmark subset/domain filter")
     harness_p.add_argument("--limit", type=int, default=None, help="Max tasks to run")
     harness_p.add_argument("--model", default=MODEL, help="Model id for inference")
@@ -1265,7 +1270,7 @@ def _run_harness(args: argparse.Namespace) -> None:
         _run_scalar_state_harness(args, adapter)
         return
 
-    arms = [a.strip() for a in args.arms.split(",") if a.strip()]
+    arms = [a.strip() for a in (args.arms or _PROXY_DEFAULT_ARMS).split(",") if a.strip()]
     offline = args.offline_fixture is not None
     if offline:
         print(f"Harness: {adapter.name} (OFFLINE fixture {args.offline_fixture})")
@@ -1273,7 +1278,7 @@ def _run_harness(args: argparse.Namespace) -> None:
         print(f"Harness: {adapter.name} — running official A/B (arms: {', '.join(arms)})")
 
     if is_memory(adapter):
-        mem_arms = list(DEFAULT_MEMORY_ARMS) if args.arms == "direct,proxy_only,proxy_plus_filter" else arms
+        mem_arms = list(DEFAULT_MEMORY_ARMS) if args.arms is None else arms
         if offline:
             client = StubMenhirClient()
             send_fn = _offline_send_fn

@@ -1,5 +1,9 @@
 # Typed Value Recall Arm
 
+> **Code removed 2026-11-20 (streamlined-harness P2):** the rejected V2-V5 arms,
+> `value_nodes_v2.py`, `tests/test_value_nodes_v2.py` and `oracle_entity_grouping_probe.py`
+> were deleted; see git history before that date. V1 (`menhir_value_recall`) remains.
+
 `menhir_value_recall` is a bench-only experiment for testing first-class `Value`
 nodes before changing Menhir's graph schema.
 
