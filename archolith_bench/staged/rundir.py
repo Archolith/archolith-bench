@@ -79,7 +79,11 @@ class RunDir:
     def write_report(self, report: dict) -> None:
         self.path.mkdir(parents=True, exist_ok=True)
         (self.path / "report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
-        lines = [f"# {self.run_id}", "", f"n: {report.get('n')}", f"accuracy: {report.get('accuracy')}", ""]
+        lines = [f"# {self.run_id}", "", f"n: {report.get('n')}", f"accuracy: {report.get('accuracy')}"]
+        if report.get("unofficial"):
+            u = report["unofficial"]
+            lines.append(f"unofficial (substance) judge: n={u['n']} accuracy={u['accuracy']}")
+        lines.append("")
         for qtype, row in sorted((report.get("per_type") or {}).items()):
             lines.append(f"- {qtype}: n={row['n']} accuracy={row['accuracy']}")
         (self.path / "report.md").write_text("\n".join(lines) + "\n", encoding="utf-8")

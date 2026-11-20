@@ -16,73 +16,21 @@ from collections.abc import Callable
 
 import httpx
 
+from .. import prompts as _prompts
 from ..core.api import send_chat
 
 # score_fn(item, response_text) -> bool
 ScoreFn = Callable[[dict, str], bool]
 
-_JUDGE_SYSTEM = (
-    "You are a strict grader for a question-answering benchmark. You are given a "
-    "question, the reference (gold) answer, and a model's response. Decide whether the "
-    "response is correct: it is correct if it conveys the gold answer (exact wording is "
-    "not required), and incorrect if it is wrong, contradicts the gold answer, or fails "
-    "to answer. Reply with a single word: 'yes' if correct, 'no' if incorrect."
-)
-
-_JUDGE_SYSTEM_ABSTENTION = (
-    "You are a strict grader for a question-answering benchmark. This question is "
-    "UNANSWERABLE from the available information, so the correct behavior is for the "
-    "model to decline or say it does not know. You are given the question and the "
-    "model's response. Reply with a single word: 'yes' if the response correctly "
-    "declines / says it cannot answer or lacks the information, 'no' if it instead "
-    "makes up or asserts an answer."
-)
-
+# Prompt text lives in archolith_bench/prompts/judge/.
+_JUDGE_SYSTEM = _prompts.load(_prompts.JUDGE_GENERIC)
+_JUDGE_SYSTEM_ABSTENTION = _prompts.load(_prompts.JUDGE_GENERIC_ABSTENTION)
 
 # LongMemEval's official judge prompts, verbatim from get_anscheck_prompt() in
 # xiaowu0162/LongMemEval src/evaluation/evaluate_qa.py (commit d6dc8b50a2d9). Each is sent as a
 # single user message; placeholders are question, answer (rubric / explanation), response.
-_LME_BASE = (
-    "I will give you a question, a correct answer, and a response from a model. Please answer yes "
-    "if the response contains the correct answer. Otherwise, answer no. If the response is equivalent "
-    "to the correct answer or contains all the intermediate steps to get the correct answer, you should "
-    "also answer yes. If the response only contains a subset of the information required by the "
-    "answer, answer no. "
-)
-_LME_QA_TAIL = (
-    "\n\nQuestion: {}\n\nCorrect Answer: {}\n\nModel Response: {}\n\n"
-    "Is the model response correct? Answer yes or no only."
-)
-_LME_JUDGE_TEMPLATES = {
-    "single-session-user": _LME_BASE + _LME_QA_TAIL,
-    "single-session-assistant": _LME_BASE + _LME_QA_TAIL,
-    "multi-session": _LME_BASE + _LME_QA_TAIL,
-    "temporal-reasoning": _LME_BASE + (
-        "In addition, do not penalize off-by-one errors for the number of days. If the question asks "
-        "for the number of days/weeks/months, etc., and the model makes off-by-one errors (e.g., "
-        "predicting 19 days when the answer is 18), the model's response is still correct. "
-    ) + _LME_QA_TAIL,
-    "knowledge-update": (
-        "I will give you a question, a correct answer, and a response from a model. Please answer yes "
-        "if the response contains the correct answer. Otherwise, answer no. If the response contains "
-        "some previous information along with an updated answer, the response should be considered as "
-        "correct as long as the updated answer is the required answer."
-    ) + _LME_QA_TAIL,
-    "single-session-preference": (
-        "I will give you a question, a rubric for desired personalized response, and a response from a "
-        "model. Please answer yes if the response satisfies the desired response. Otherwise, answer no. "
-        "The model does not need to reflect all the points in the rubric. The response is correct as "
-        "long as it recalls and utilizes the user's personal information correctly.\n\nQuestion: {}\n\n"
-        "Rubric: {}\n\nModel Response: {}\n\nIs the model response correct? Answer yes or no only."
-    ),
-}
-_LME_ABSTENTION_TEMPLATE = (
-    "I will give you an unanswerable question, an explanation, and a response from a model. Please "
-    "answer yes if the model correctly identifies the question as unanswerable. The model could say "
-    "that the information is incomplete, or some other information is given but the asked information "
-    "is not.\n\nQuestion: {}\n\nExplanation: {}\n\nModel Response: {}\n\nDoes the model correctly "
-    "identify the question as unanswerable? Answer yes or no only."
-)
+_LME_JUDGE_TEMPLATES = {t: _prompts.load(_prompts.lme_judge(t)) for t in _prompts.LME_QUESTION_TYPES}
+_LME_ABSTENTION_TEMPLATE = _prompts.load(_prompts.JUDGE_LME_ABSTENTION)
 
 
 def is_lme_abstention(item: dict) -> bool:
@@ -163,21 +111,7 @@ class LLMJudgeScorer:
             self._client.close()
 
 
-_UNOFFICIAL_JUDGE_SYSTEM = (
-    "You are grading a question-answering response in substance. It is correct if its "
-    "committed answer matches the gold answer. A lower bound phrased as 'at least N' "
-    "counts as matching when N equals the gold number. An amount phrased as approximate "
-    "or as a lower bound ('about', 'roughly', 'over' N) counts as matching when N equals "
-    "the gold amount; for a count of items, 'more than N' or 'over N' does not match a "
-    "gold of N. When the gold names specific items, the items the response counts must "
-    "be the same items (paraphrase is fine); a matching number made up of different "
-    "items is incorrect, while a matching number with no item list still matches. Extra "
-    "caveats, hedges, or mentions of excluded items do not make it wrong when the stated "
-    "answer matches the gold. It is incorrect if it commits to a different number or "
-    "answer, contradicts "
-    "the gold, or fails to answer. Reply with a single word: 'yes' if correct, 'no' if "
-    "incorrect."
-)
+_UNOFFICIAL_JUDGE_SYSTEM = _prompts.load(_prompts.JUDGE_UNOFFICIAL)
 
 
 def _unofficial_judge_messages(item: dict, response_text: str) -> list[dict]:

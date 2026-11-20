@@ -57,6 +57,9 @@ Issues = "https://github.com/Archolith/archolith-bench/issues"
 where = ["."]
 include = ["archolith_bench*"]
 
+[tool.setuptools.package-data]
+archolith_bench = ["prompts/**/*.txt"]
+
 [project.scripts]
 archolith-bench = "archolith_bench.cli:main"
 
