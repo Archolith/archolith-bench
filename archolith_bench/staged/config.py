@@ -83,6 +83,11 @@ def arm_from_dict(d: dict[str, Any]) -> ArmConfig:
     return ArmConfig(**kwargs)
 
 
+def arm_from_resolved(resolved: dict) -> ArmConfig:
+    """The ArmConfig recorded in a run's config.resolved.yaml."""
+    return ArmConfig(**resolved["arm"])
+
+
 def load_arm(path: str | Path) -> ArmConfig:
     """Load an arm YAML file."""
     data = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
@@ -109,6 +114,7 @@ def resolve(
     namespace_template: str,
     model: str | None,
     judge: dict,
+    prompt_files: dict[str, str] | None = None,
 ) -> dict:
     """Everything that determines a run's outputs, as a JSON-able dict."""
     return {
@@ -124,6 +130,8 @@ def resolve(
         "namespace_template": namespace_template,
         "model": model,
         "judge": judge,
+        # sha256 of every prompt file the run can send (answer + judges); see archolith_bench/prompts.
+        "prompt_files": prompt_files,
     }
 
 

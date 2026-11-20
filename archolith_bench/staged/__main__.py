@@ -1,10 +1,16 @@
-"""Minimal CLI: python -m archolith_bench.staged run --arm arms/x.yaml --fixture f.json."""
+"""Staged CLI.
+
+  python -m archolith_bench.staged run --arm arms/x.yaml --fixture f.json
+  python -m archolith_bench.staged rerun --run runs/<id> --from answer|judge
+  python -m archolith_bench.staged compare runs/<a> runs/<b>
+"""
 
 from __future__ import annotations
 
 import argparse
 import asyncio
 import hashlib
+import json
 import os
 import subprocess
 import sys
@@ -12,13 +18,21 @@ from pathlib import Path
 
 import httpx
 
-from ..core.api import API_KEY, MODEL, PROXY_URL, send_chat
+from .. import prompts
+from ..core.api import API_KEY, DIRECT_URL, MODEL, send_chat
 from ..harness.longmemeval import LongMemEvalMemoryAdapter
-from ..harness.scoring import LLMJudgeScorer
-from .config import load_arm, renderer_sha256, resolve, run_id
+from ..harness.scoring import LLMJudgeScorer, UnofficialJudgeScorer
+from .config import arm_from_resolved, load_arm, renderer_sha256, resolve, run_id
 from .menhir_system import MenhirSystem, load_backend_client
+from .ops import RERUN_STAGES, compare_runs, derive_run, format_compare, load_resolved
 from .pipeline import build_report, run_answer, run_judge, run_search
 from .rundir import RunDir
+
+
+def _add_judge_args(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--judge-model", default="gpt-6-luna")
+    p.add_argument("--no-unofficial-judge", action="store_true",
+                   help="skip the unofficial (substance) judge on official-wrong items")
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -35,8 +49,22 @@ def _parser() -> argparse.ArgumentParser:
     r.add_argument("--menhir-root", default=None)
     r.add_argument("--namespace-template", default="lme-{question_id}")
     r.add_argument("--model", default=MODEL)
-    r.add_argument("--judge-model", default="gpt-6-luna")
     r.add_argument("--menhir-commit", default=None)
+    _add_judge_args(r)
+
+    rr = sub.add_parser("rerun", help="rerun a saved run from answer or judge; never calls Menhir")
+    rr.add_argument("--run", required=True, help="source run directory")
+    rr.add_argument("--from", dest="from_stage", required=True, choices=RERUN_STAGES)
+    rr.add_argument("--runs-dir", default=None, help="default: the source run's parent directory")
+    rr.add_argument("--fixture", default=None, help="default: the fixture path recorded in the run")
+    rr.add_argument("--model", default=None, help="answer model (from answer only; default: the run's)")
+    rr.add_argument("--tag", default=None, help="force a fresh derived run when settings are unchanged")
+    _add_judge_args(rr)
+
+    c = sub.add_parser("compare", help="accuracy and per-item flips between two runs")
+    c.add_argument("run_a")
+    c.add_argument("run_b")
+    c.add_argument("--json", dest="json_out", default=None, help="also write the comparison as JSON")
     return p
 
 
@@ -54,8 +82,42 @@ def _menhir_commit(root: str | None) -> str | None:
     return f"{head}+dirty" if dirty else head
 
 
-def main(argv: list[str] | None = None) -> int:
-    args = _parser().parse_args(argv)
+def _judge_config(args: argparse.Namespace) -> dict:
+    return {"scorer": "llm-judge", "model": args.judge_model, "unofficial": not args.no_unofficial_judge}
+
+
+def _judge(rundir: RunDir, items: list[dict], args: argparse.Namespace) -> int:
+    judge_key = os.getenv("OPENAI_API_KEY", "")
+    if not judge_key:
+        print("ERROR: judge stage needs OPENAI_API_KEY", file=sys.stderr)
+        return 2
+    base_url = os.getenv("UPSTREAM_BASE_URL") or "https://api.openai.com/v1"
+    scorer = LLMJudgeScorer(base_url=base_url, api_key=judge_key, model=args.judge_model)
+    unofficial = None
+    if not args.no_unofficial_judge:
+        unofficial = UnofficialJudgeScorer(base_url=base_url, api_key=judge_key, model=args.judge_model)
+    try:
+        by_id = {str(it.get("question_id") or f"item-{i}"): it for i, it in enumerate(items)}
+        run_judge(rundir, by_id, score_fn=scorer, unofficial_fn=unofficial)
+    finally:
+        scorer.close()
+        if unofficial is not None:
+            unofficial.close()
+    build_report(rundir)
+    return 0
+
+
+def _answer(rundir, arm, adapter, model: str) -> None:  # noqa: ANN001
+    with httpx.Client(timeout=180) as chat_client:
+        run_answer(
+            rundir, arm, adapter,
+            send_fn=send_chat, chat_client=chat_client,
+            # Same endpoint as the memory arms in cli.py: upstream directly, not the proxy.
+            chat_base_url=DIRECT_URL, api_key=API_KEY, model=model,
+        )
+
+
+def _cmd_run(args: argparse.Namespace) -> int:
     stages = {s.strip() for s in args.stages.split(",") if s.strip()}
     arm = load_arm(args.arm)
     adapter = LongMemEvalMemoryAdapter()
@@ -72,7 +134,8 @@ def main(argv: list[str] | None = None) -> int:
         menhir_commit=args.menhir_commit or _menhir_commit(args.menhir_root),
         namespace_template=args.namespace_template,
         model=model,
-        judge={"scorer": "llm-judge", "model": args.judge_model},
+        judge=_judge_config(args),
+        prompt_files=prompts.hashes(prompts.LONGMEMEVAL_RUN_PROMPTS),
     )
     rundir = RunDir(Path(args.runs_dir), run_id(resolved))
     rundir.write_config(resolved)
@@ -88,30 +151,58 @@ def main(argv: list[str] | None = None) -> int:
             run_search(rundir, arm, items, adapter, system, namespace_template=args.namespace_template)
         )
     if "answer" in stages:
-        with httpx.Client(timeout=180) as chat_client:
-            run_answer(
-                rundir, arm, adapter,
-                send_fn=send_chat, chat_client=chat_client,
-                chat_base_url=PROXY_URL, api_key=API_KEY, model=model,
-            )
+        _answer(rundir, arm, adapter, model)
     if "judge" in stages:
-        judge_key = os.getenv("OPENAI_API_KEY", "")
-        if not judge_key:
-            print("ERROR: judge stage needs OPENAI_API_KEY", file=sys.stderr)
-            return 2
-        scorer = LLMJudgeScorer(
-            base_url=os.getenv("UPSTREAM_BASE_URL") or "https://api.openai.com/v1",
-            api_key=judge_key,
-            model=args.judge_model,
-        )
-        try:
-            by_id = {str(it.get("question_id") or f"item-{i}"): it for i, it in enumerate(items)}
-            run_judge(rundir, by_id, score_fn=scorer)
-        finally:
-            scorer.close()
-        build_report(rundir)
+        rc = _judge(rundir, items, args)
+        if rc:
+            return rc
     print(rundir.path)
     return 0
+
+
+def _cmd_rerun(args: argparse.Namespace) -> int:
+    src = Path(args.run)
+    resolved = load_resolved(src)
+    adapter = LongMemEvalMemoryAdapter()
+    fixture = args.fixture or resolved["fixture"]["path"]
+    fixture_sha = hashlib.sha256(Path(fixture).read_bytes()).hexdigest()
+    if fixture_sha != resolved["fixture"]["sha256"]:
+        print(f"ERROR: fixture {fixture} does not match the run's fixture sha256", file=sys.stderr)
+        return 2
+    model = args.model or resolved.get("model")
+    rundir = derive_run(
+        src, Path(args.runs_dir) if args.runs_dir else src.parent, args.from_stage,
+        prompt_files=prompts.hashes(prompts.LONGMEMEVAL_RUN_PROMPTS),
+        judge=_judge_config(args),
+        model=model,
+        answer_prompt_fingerprint=adapter.prompt_fingerprint,
+        tag=args.tag,
+    )
+    if args.from_stage == "answer":
+        _answer(rundir, arm_from_resolved(resolved), adapter, model)
+    items = adapter.load_items(None, None, fixture)
+    rc = _judge(rundir, items, args)
+    if rc:
+        return rc
+    print(rundir.path)
+    return 0
+
+
+def _cmd_compare(args: argparse.Namespace) -> int:
+    result = compare_runs(Path(args.run_a), Path(args.run_b))
+    print(format_compare(result))
+    if args.json_out:
+        Path(args.json_out).write_text(json.dumps(result, indent=2), encoding="utf-8")
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = _parser().parse_args(argv)
+    if args.cmd == "run":
+        return _cmd_run(args)
+    if args.cmd == "rerun":
+        return _cmd_rerun(args)
+    return _cmd_compare(args)
 
 
 if __name__ == "__main__":

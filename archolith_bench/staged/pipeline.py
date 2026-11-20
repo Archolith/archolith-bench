@@ -122,8 +122,19 @@ def run_answer(
         )
 
 
-def run_judge(rundir: RunDir, items_by_id: dict[str, dict], *, score_fn) -> None:  # noqa: ANN001
-    """Judge every answered item not yet judged."""
+def run_judge(
+    rundir: RunDir,
+    items_by_id: dict[str, dict],
+    *,
+    score_fn,  # noqa: ANN001
+    unofficial_fn=None,  # noqa: ANN001
+) -> None:
+    """Judge every answered item not yet judged.
+
+    With ``unofficial_fn``, official-wrong items also get the unofficial substance judge, as in
+    memory_ab: it is reported separately, and its failure leaves the item unjudged rather than
+    blocking the official label.
+    """
     out = rundir.stage("judged")
     done = out.done_ids()
     types = {r["item_id"]: r.get("question_type") for r in rundir.stage("search").records()}
@@ -131,29 +142,50 @@ def run_judge(rundir: RunDir, items_by_id: dict[str, dict], *, score_fn) -> None
         item_id = rec["item_id"]
         if item_id in done:
             continue
-        correct = bool(score_fn(items_by_id[item_id], rec["response_text"]))
-        out.append(
-            {
-                "item_id": item_id,
-                "correct": correct,
-                "question_type": types.get(item_id),
-                "judge_usage": dict(getattr(score_fn, "last_usage", {}) or {}),
-            }
-        )
+        item = items_by_id[item_id]
+        correct = bool(score_fn(item, rec["response_text"]))
+        row = {
+            "item_id": item_id,
+            "correct": correct,
+            "question_type": types.get(item_id),
+            "judge_usage": dict(getattr(score_fn, "last_usage", {}) or {}),
+        }
+        if unofficial_fn is not None:
+            unofficial: bool | None = True if correct else None
+            usage: dict = {}
+            if not correct:
+                try:
+                    unofficial = bool(unofficial_fn(item, rec["response_text"]))
+                    usage = dict(getattr(unofficial_fn, "last_usage", {}) or {})
+                except Exception as exc:  # noqa: BLE001
+                    print(f"  [unofficial judge] {item_id}: failed ({exc}); left unjudged")
+            row["unofficial_correct"] = unofficial
+            row["unofficial_usage"] = usage
+        out.append(row)
 
 
-def build_report(rundir: RunDir) -> dict:
-    """Accuracy overall and per question type; written to report.json/.md."""
-    rows = rundir.stage("judged").records()
+def accuracy_summary(rows: list[dict]) -> dict:
+    """Accuracy overall and per question type, plus the unofficial judge where it ran."""
     per: dict[str, list[bool]] = {}
     for r in rows:
         per.setdefault(str(r.get("question_type")), []).append(bool(r["correct"]))
     n = len(rows)
-    report = {
-        "run_id": rundir.run_id,
+    out: dict[str, Any] = {
         "n": n,
         "accuracy": (sum(bool(r["correct"]) for r in rows) / n) if n else 0.0,
         "per_type": {t: {"n": len(v), "accuracy": sum(v) / len(v)} for t, v in per.items()},
     }
+    judged = [r for r in rows if r.get("unofficial_correct") is not None]
+    if judged:
+        out["unofficial"] = {
+            "n": len(judged),
+            "accuracy": sum(bool(r["unofficial_correct"]) for r in judged) / len(judged),
+        }
+    return out
+
+
+def build_report(rundir: RunDir) -> dict:
+    """Accuracy overall and per question type; written to report.json/.md."""
+    report = {"run_id": rundir.run_id, **accuracy_summary(rundir.stage("judged").records())}
     rundir.write_report(report)
     return report
