@@ -87,15 +87,9 @@ class _Adapter:
 
 @pytest.mark.parametrize("fn, kwargs", [
     (memory_ab._value_augmented_recall, {}),
-    (memory_ab._value_augmented_recall_v2, {"emit_history": False}),
-    (memory_ab._value_augmented_recall_v3, {"suppress": True}),
-    (memory_ab._value_augmented_recall_v4, {}),
-    (memory_ab._value_augmented_recall_v5, {}),
 ])
 def test_value_arms_keep_facets_outside_the_limit(monkeypatch, fn, kwargs) -> None:
     monkeypatch.setattr(memory_ab.ValueGraph, "from_item", classmethod(lambda cls, *a, **k: _Graph()))
-    monkeypatch.setattr(memory_ab.SupersededValueGraph, "from_item",
-                        classmethod(lambda cls, *a, **k: _Graph()))
     recalled = RecallSnippets(["verdict", "FACET fact", "r1", "r2", "r3"], ["FACET fact"])
     out = fn(_Adapter(), {}, recalled, "q", 4, "t1", **kwargs).split("\n")
     # recall_limit 4 // 3 gives one value snippet; the facet is extra.

@@ -38,7 +38,6 @@ from .drill_down import (
 from .menhir_client import COUNTED_AUTHORITY_MAX, VERB_FACET_MAX, HttpMenhirClient
 from .targets import PROD_NAME_MARKERS, TargetRefused, assert_allowed_target
 from .value_nodes import ValueGraph
-from .value_nodes_v2 import SupersededValueGraph
 
 # Arms: a no-memory floor vs memory-recall arms.
 NO_MEMORY = "no_memory"
@@ -50,36 +49,6 @@ SINGLE_RECALL = "menhir_recall"
 # but not the other; per-entity queries retrieve both.
 AGENTIC_RECALL = "menhir_agentic_recall"
 VALUE_RECALL = "menhir_value_recall"
-# Supersession-aware value arms (v2). EXPERIMENTAL - REJECTED (2026-07-18): did not beat
-# v1 (0/5 targeted misses recovered); kept only as documented negative evidence and never
-# included in DEFAULT_MEMORY_ARMS or any default config. Opt-in only via explicit --arms.
-# Pre-registered as two separate arms so the current-only vs current+history emission choice
-# was reported across all items, not selected post-hoc. See value_nodes_v2.SupersededValueGraph.
-VALUE_RECALL_V2_CURRENT = "menhir_value_recall_v2_current"
-VALUE_RECALL_V2_HISTORY = "menhir_value_recall_v2_history"
-# v3 authoritative-composition experiment (EXPERIMENTAL; opt-in only). Simulates what an
-# authoritative typed View would do during recall composition, in the bench:
-#   _v3_coarse        = coarse (near-oracle) grouping + current-only typed snippets. Isolates
-#                       the grouping ceiling (if clustering were perfect, does supersession help?).
-#   _v3_authoritative = coarse grouping + current-only + SUPPRESS untyped Menhir snippets that
-#                       carry a superseded value (the full "typed value is authoritative" test).
-VALUE_RECALL_V3_COARSE = "menhir_value_recall_v3_coarse"
-VALUE_RECALL_V3_AUTHORITATIVE = "menhir_value_recall_v3_authoritative"
-# v4 advisory composition (EXPERIMENTAL; opt-in only). The v3 result showed authoritative
-# single-pick + suppression nets negative because every regression came from DELETING the
-# correct candidate. v4 instead ADVISES: coarse grouping to find the same candidate set, but
-# keep every candidate (additive, so answer-support >= v1), annotate each with its cluster
-# role (current/earlier/superseded when an explicit correction marker is present; otherwise
-# "candidate"), and hard-drop ONLY an author-rejected value. The answer LLM makes the final
-# pick. Determinism is reserved for author-stated corrections; everything else is a hint.
-VALUE_RECALL_V4_ADVISORY = "menhir_value_recall_v4_advisory"
-# v5 derivation / "assumptions" arm (EXPERIMENTAL; opt-in only). Advisory base (v4) plus a
-# deterministic delta fold: when a single stated count anchor and signed increment/decrement
-# events resolve to an integer-consistent value that is never stated literally (69fee5aa:
-# "37 coins" + "added a new coin" -> 38), surface it as a labeled DERIVED hint. Never
-# authoritative, never deletes a stated value; gated hard toward silence to avoid confident-
-# wrong arithmetic. See value_nodes_v2.SupersededValueGraph.derived_recall.
-VALUE_RECALL_V5_DERIVED = "menhir_value_recall_v5_derived"
 DEFAULT_MEMORY_ARMS = (NO_MEMORY, SINGLE_RECALL)  # v2/v3/v4/v5 arms intentionally excluded
 
 # Every arm the dispatcher actually understands. `_value_context_for_arm` ends in
@@ -92,12 +61,6 @@ VALID_MEMORY_ARMS: frozenset[str] = frozenset({
     SINGLE_RECALL,
     AGENTIC_RECALL,
     VALUE_RECALL,
-    VALUE_RECALL_V2_CURRENT,
-    VALUE_RECALL_V2_HISTORY,
-    VALUE_RECALL_V3_COARSE,
-    VALUE_RECALL_V3_AUTHORITATIVE,
-    VALUE_RECALL_V4_ADVISORY,
-    VALUE_RECALL_V5_DERIVED,
 })
 
 
@@ -248,104 +211,6 @@ def _value_augmented_recall(
     return "\n".join(_merge_within_limit([*value_snippets, *recalled], recall_limit, extras))
 
 
-def _value_augmented_recall_v2(
-    adapter: "MemoryQAAdapter",
-    item: dict,
-    recalled: list[str],
-    question: str,
-    recall_limit: int,
-    task_id: str,
-    *,
-    emit_history: bool,
-) -> str:
-    """v2 value augmentation: supersession-aware CURRENT selection, same total top-k.
-
-    Identical merge/cap contract as ``_value_augmented_recall`` (value snippets first,
-    ordinary recall backfills, never exceeding recall_limit). The only difference is the
-    sidecar graph type (SupersededValueGraph) and the ``emit_history`` emission mode.
-    """
-    graph = SupersededValueGraph.from_item(f"value2-{task_id}", item, adapter.sessions(item))
-    value_limit = min(4, max(1, recall_limit // 3))
-    value_snippets = graph.recall(question, limit=value_limit, emit_history=emit_history)
-    extras = getattr(recalled, "extras", ())
-    return "\n".join(_merge_within_limit([*value_snippets, *recalled], recall_limit, extras))
-
-
-def _snippet_has_stale(snippet: str, stale: set[str]) -> bool:
-    """True if the untyped snippet contains a superseded value token (word-bounded)."""
-    low = snippet.lower()
-    for value in stale:
-        if value and re.search(rf"(?<!\w){re.escape(value)}(?!\w)", low):
-            return True
-    return False
-
-
-def _value_augmented_recall_v3(
-    adapter: "MemoryQAAdapter",
-    item: dict,
-    recalled: list[str],
-    question: str,
-    recall_limit: int,
-    task_id: str,
-    *,
-    suppress: bool,
-) -> str:
-    """v3 authoritative composition: coarse (near-oracle) grouping, current-only typed
-    snippets, and (when ``suppress``) drop untyped Menhir snippets that reintroduce a
-    superseded value. Same total top-k cap as v1/v2."""
-    graph = SupersededValueGraph.from_item(
-        f"value3-{task_id}", item, adapter.sessions(item), grouping="coarse"
-    )
-    value_limit = min(4, max(1, recall_limit // 3))
-    value_snippets = graph.recall(question, limit=value_limit, emit_history=False)
-    backfill = recalled
-    if suppress:
-        stale = graph.stale_value_strings(question)
-        backfill = [s for s in recalled if not _snippet_has_stale(s, stale)]
-    extras = getattr(recalled, "extras", ())
-    return "\n".join(_merge_within_limit([*value_snippets, *backfill], recall_limit, extras))
-
-
-def _value_augmented_recall_v4(
-    adapter: "MemoryQAAdapter",
-    item: dict,
-    recalled: list[str],
-    question: str,
-    recall_limit: int,
-    task_id: str,
-) -> str:
-    """v4 advisory composition: coarse grouping to find the candidate set, then additive
-    (never drops a candidate) recall with per-cluster advisory role labels; only an
-    author-rejected value (explicit correction marker) is suppressed. The untyped Menhir
-    backfill is left intact - advisory never suppresses untyped recall. Same total top-k."""
-    graph = SupersededValueGraph.from_item(
-        f"value4-{task_id}", item, adapter.sessions(item), grouping="coarse"
-    )
-    value_limit = min(4, max(1, recall_limit // 3))
-    value_snippets = graph.advisory_recall(question, limit=value_limit)
-    extras = getattr(recalled, "extras", ())
-    return "\n".join(_merge_within_limit([*value_snippets, *recalled], recall_limit, extras))
-
-
-def _value_augmented_recall_v5(
-    adapter: "MemoryQAAdapter",
-    item: dict,
-    recalled: list[str],
-    question: str,
-    recall_limit: int,
-    task_id: str,
-) -> str:
-    """v5 derivation: v4 advisory typed context plus a deterministic delta-fold derived hint,
-    then untyped backfill. Same merge/cap contract as v1-v4; untyped recall left intact."""
-    graph = SupersededValueGraph.from_item(
-        f"value5-{task_id}", item, adapter.sessions(item), grouping="coarse"
-    )
-    value_limit = min(4, max(1, recall_limit // 3))
-    value_snippets = graph.derived_recall(question, limit=value_limit)
-    extras = getattr(recalled, "extras", ())
-    return "\n".join(_merge_within_limit([*value_snippets, *recalled], recall_limit, extras))
-
-
 def _value_context_for_arm(
     arm: str,
     adapter: "MemoryQAAdapter",
@@ -358,30 +223,6 @@ def _value_context_for_arm(
     """Dispatch the memory context for value/plain arms (shared by both recall paths)."""
     if arm == VALUE_RECALL:
         return _value_augmented_recall(adapter, item, recalled, question, recall_limit, task_id)
-    if arm == VALUE_RECALL_V2_CURRENT:
-        return _value_augmented_recall_v2(
-            adapter, item, recalled, question, recall_limit, task_id, emit_history=False
-        )
-    if arm == VALUE_RECALL_V2_HISTORY:
-        return _value_augmented_recall_v2(
-            adapter, item, recalled, question, recall_limit, task_id, emit_history=True
-        )
-    if arm == VALUE_RECALL_V3_COARSE:
-        return _value_augmented_recall_v3(
-            adapter, item, recalled, question, recall_limit, task_id, suppress=False
-        )
-    if arm == VALUE_RECALL_V3_AUTHORITATIVE:
-        return _value_augmented_recall_v3(
-            adapter, item, recalled, question, recall_limit, task_id, suppress=True
-        )
-    if arm == VALUE_RECALL_V4_ADVISORY:
-        return _value_augmented_recall_v4(
-            adapter, item, recalled, question, recall_limit, task_id
-        )
-    if arm == VALUE_RECALL_V5_DERIVED:
-        return _value_augmented_recall_v5(
-            adapter, item, recalled, question, recall_limit, task_id
-        )
     return "\n".join(recalled)
 
 

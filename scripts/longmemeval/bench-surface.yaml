@@ -159,6 +159,11 @@ stages:
         glob: "archolith_bench/harness/menhir_client.py"
       - repo: bench
         glob: "archolith_bench/harness/scoring.py"
+      # Staged pipeline (python -m archolith_bench.staged): search/answer/judge stages and arm YAMLs.
+      - repo: bench
+        glob: "archolith_bench/staged/*.py"
+      - repo: bench
+        glob: "arms/*.yaml"
 
   harness:
     description: >
