@@ -1,0 +1,3 @@
+name: no_memory
+context: none
+answer: {prompt: "builtin:longmemeval-memory", model: null}

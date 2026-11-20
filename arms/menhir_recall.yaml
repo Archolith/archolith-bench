@@ -1,0 +1,5 @@
+name: menhir_recall
+context: legacy
+recall: {limit: 20}
+render: {source_memories: true, counted_authority_only: false, drill_down: false, counted_verdict_limit: null}
+answer: {prompt: "builtin:longmemeval-memory", model: null}
