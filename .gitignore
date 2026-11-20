@@ -7,6 +7,8 @@
 # `/results/**` rather than `results/` on purpose: a trailing-slash ignore makes git skip the
 # directory entirely, so no `!` exception inside it can ever be reached.
 /results/**
+# Staged-pipeline run dirs (python -m archolith_bench.staged run --runs-dir runs).
+/runs/
 !/results/lme-ku-buildout/
 !/results/lme-ku-buildout/LEDGER.md
 !/results/lme-ku-buildout/ledger.csv

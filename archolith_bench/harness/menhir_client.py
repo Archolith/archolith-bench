@@ -542,6 +542,159 @@ class StubMenhirClient:
         self._groups.pop(group_id, None)
 
 
+def effective_counted_verdict_limit(counted_verdict_limit: int | None) -> int:
+    """How many counted verdicts are requested and rendered under ``counted_authority_only``."""
+    if counted_verdict_limit is None:
+        return COUNTED_AUTHORITY_MAX
+    return max(0, min(COUNTED_AUTHORITY_MAX, counted_verdict_limit))
+
+
+def render_recall_snippets(
+    data: Any,
+    limit: int,
+    *,
+    drill_down: bool = False,
+    counted_authority_only: bool = False,
+    source_memories: bool = False,
+    counted_verdict_limit: int | None = None,
+) -> list[str]:
+    """Today's LME context rendering of one Menhir recall response (the legacy context renderer).
+
+    A pure function of the response and these settings, no I/O. ``HttpMenhirClient.recall`` and
+    the staged pipeline (``archolith_bench.staged``) both call it, so there is one copy. The
+    memory context is ``"\n".join`` of the result. Byte-identity with the pre-extraction client
+    is pinned by ``tests/test_legacy_recall_render_golden.py``.
+    """
+    effective_verdict_limit = (
+        effective_counted_verdict_limit(counted_verdict_limit)
+        if counted_authority_only
+        else COUNTED_AUTHORITY_MAX
+    )
+    # Extract list of items (top-level list or nested in a known key)
+    items: list[Any] = []
+    if isinstance(data, list):
+        items = data
+    elif isinstance(data, dict):
+        for key in ("results", "memories", "snippets"):
+            if key in data and isinstance(data[key], list):
+                items = data[key]
+                break
+
+    authority_records: list[dict[str, Any]] = []
+    event_authority_records: list[dict[str, Any]] = []
+    if isinstance(data, dict):
+        raw_authority = data.get("authority_layer")
+        if isinstance(raw_authority, dict):
+            authority_records = [raw_authority]
+        elif isinstance(raw_authority, list):
+            authority_records = [record for record in raw_authority if isinstance(record, dict)]
+
+        raw_event_authority = data.get("event_authority_layer")
+        if isinstance(raw_event_authority, dict):
+            event_authority_records = [raw_event_authority]
+        elif isinstance(raw_event_authority, list):
+            event_authority_records = [
+                record for record in raw_event_authority if isinstance(record, dict)
+            ]
+
+    counted_records: list[dict[str, Any]] = []
+    if counted_authority_only:
+        counted_records = [r for r in authority_records if is_counted_advisory(r)]
+        authority_records = [r for r in authority_records if not is_counted_advisory(r)]
+    counted_view_ids = {
+        str(record["view_uuid"]) for record in counted_records if record.get("view_uuid")
+    }
+
+    has_authority = bool(authority_records) or bool(event_authority_records)
+    event_blocked = any(
+        str(record.get("status") or "").strip().lower() == "advisory"
+        and str(record.get("gate") or "").strip().lower() in _BLOCKING_EVENT_GATES
+        for record in event_authority_records
+    )
+
+    authority_view_ids = {
+        str(record["view_uuid"])
+        for record in authority_records
+        if record.get("view_uuid")
+    }
+
+    if event_blocked:
+        # A blocking selection-failure leaves no authoritative event to rank the ordinary
+        # items against, so emit only the rendered event advisories. Current-state scalar
+        # authority is suppressed too: it can mislead a historical-before query whose event
+        # anchor is unresolved.
+        return [
+            rendered
+            for record in event_authority_records
+            if str(record.get("status") or "").strip().lower() == "advisory"
+            and str(record.get("gate") or "").strip().lower() in _BLOCKING_EVENT_GATES
+            if (rendered := _format_event_authority_record(record))
+        ][:limit]
+
+    snippets: list[str] = []
+    for record in authority_records:
+        rendered = _format_authority_record(record, drill_down=drill_down)
+        if rendered:
+            snippets.append(rendered)
+
+    for record in event_authority_records:
+        rendered = _format_event_authority_record(record)
+        if rendered:
+            snippets.append(rendered)
+
+    # Menhir's deterministic query hint (flag-gated server-side; absent when off).
+    query_hint = data.get("query_hint") if isinstance(data, dict) else None
+    if isinstance(query_hint, str) and query_hint.strip():
+        snippets.append(f"[QUERY NOTE] {query_hint.strip()}")
+
+    n_head = len(snippets)
+    facet_snippets: list[str] = []
+    for item in items:
+        if isinstance(item, str):
+            if item.strip():
+                if has_authority:
+                    snippets.append(f"[RELATED MEMORY | non-authoritative] {item.strip()}")
+                else:
+                    snippets.append(item)
+        elif isinstance(item, dict):
+            if has_authority and str(item.get("uuid") or "") in authority_view_ids:
+                continue
+            if str(item.get("uuid") or "") in counted_view_ids:
+                continue  # rendered as its verdict after the memories
+            text = _recall_item_text(item)
+            if not text:
+                continue
+            if has_authority:
+                memory_type = str(item.get("memory_type") or "memory").strip().lower()
+                if item.get("is_superseded_view") is True:
+                    prefix = f"[SUPERSEDED {memory_type} MEMORY | historical only]"
+                elif item.get("is_scalar_authority") is True:
+                    prefix = f"[CURRENT {memory_type} MEMORY | authoritative]"
+                else:
+                    prefix = f"[RELATED {memory_type} MEMORY | non-authoritative]"
+                text = f"{prefix} {text}"
+            if is_verb_facet(item):
+                facet_snippets.append(text)
+            else:
+                snippets.append(text)
+
+    placed = place_verb_facets(snippets, n_head, facet_snippets, limit)
+    counted = [
+        rendered
+        for record in counted_records[:effective_verdict_limit]
+        if (rendered := _format_authority_record(record, drill_down=drill_down))
+    ]
+    sources = []
+    if source_memories and isinstance(data, dict):
+        block = format_source_memories(data.get("source_memories"))
+        if block:
+            sources.append(block)
+    tail = [*counted, *sources]
+    if not tail:
+        return placed
+    return RecallSnippets([*placed, *tail], [*placed.extras, *tail], counted, sources)
+
+
 class HttpMenhirClient:
     """HTTP client for a real menhir instance (OpenAI-compatible style)."""
 
@@ -806,11 +959,8 @@ class HttpMenhirClient:
             # It is required for changed/previous/later questions and does not add stale candidates.
             "include_invalidated": True,
         }
-        effective_verdict_limit = COUNTED_AUTHORITY_MAX
         if self._counted_authority_only:
-            if counted_verdict_limit is not None:
-                effective_verdict_limit = max(0, min(COUNTED_AUTHORITY_MAX, counted_verdict_limit))
-            payload["counted_verdict_limit"] = effective_verdict_limit
+            payload["counted_verdict_limit"] = effective_counted_verdict_limit(counted_verdict_limit)
         self.last_recall_trace = None
         if self._recall_trace:
             payload["trace"] = True
@@ -820,129 +970,14 @@ class HttpMenhirClient:
         if self._recall_trace:
             self.last_recall_trace = _compact_recall_trace(data, limit)
 
-        # Extract list of items (top-level list or nested in a known key)
-        items: list[Any] = []
-        if isinstance(data, list):
-            items = data
-        elif isinstance(data, dict):
-            for key in ("results", "memories", "snippets"):
-                if key in data and isinstance(data[key], list):
-                    items = data[key]
-                    break
-
-        authority_records: list[dict[str, Any]] = []
-        event_authority_records: list[dict[str, Any]] = []
-        if isinstance(data, dict):
-            raw_authority = data.get("authority_layer")
-            if isinstance(raw_authority, dict):
-                authority_records = [raw_authority]
-            elif isinstance(raw_authority, list):
-                authority_records = [record for record in raw_authority if isinstance(record, dict)]
-
-            raw_event_authority = data.get("event_authority_layer")
-            if isinstance(raw_event_authority, dict):
-                event_authority_records = [raw_event_authority]
-            elif isinstance(raw_event_authority, list):
-                event_authority_records = [
-                    record for record in raw_event_authority if isinstance(record, dict)
-                ]
-
-        counted_records: list[dict[str, Any]] = []
-        if self._counted_authority_only:
-            counted_records = [r for r in authority_records if is_counted_advisory(r)]
-            authority_records = [r for r in authority_records if not is_counted_advisory(r)]
-        counted_view_ids = {
-            str(record["view_uuid"]) for record in counted_records if record.get("view_uuid")
-        }
-
-        has_authority = bool(authority_records) or bool(event_authority_records)
-        event_blocked = any(
-            str(record.get("status") or "").strip().lower() == "advisory"
-            and str(record.get("gate") or "").strip().lower() in _BLOCKING_EVENT_GATES
-            for record in event_authority_records
+        return render_recall_snippets(
+            data,
+            limit,
+            drill_down=self._drill_down,
+            counted_authority_only=self._counted_authority_only,
+            source_memories=self._source_memories,
+            counted_verdict_limit=counted_verdict_limit,
         )
-
-        authority_view_ids = {
-            str(record["view_uuid"])
-            for record in authority_records
-            if record.get("view_uuid")
-        }
-
-        if event_blocked:
-            # A blocking selection-failure leaves no authoritative event to rank the ordinary
-            # items against, so emit only the rendered event advisories. Current-state scalar
-            # authority is suppressed too: it can mislead a historical-before query whose event
-            # anchor is unresolved.
-            return [
-                rendered
-                for record in event_authority_records
-                if str(record.get("status") or "").strip().lower() == "advisory"
-                and str(record.get("gate") or "").strip().lower() in _BLOCKING_EVENT_GATES
-                if (rendered := _format_event_authority_record(record))
-            ][:limit]
-
-        snippets: list[str] = []
-        for record in authority_records:
-            rendered = _format_authority_record(record, drill_down=self._drill_down)
-            if rendered:
-                snippets.append(rendered)
-
-        for record in event_authority_records:
-            rendered = _format_event_authority_record(record)
-            if rendered:
-                snippets.append(rendered)
-
-        # Menhir's deterministic query hint (flag-gated server-side; absent when off).
-        query_hint = data.get("query_hint") if isinstance(data, dict) else None
-        if isinstance(query_hint, str) and query_hint.strip():
-            snippets.append(f"[QUERY NOTE] {query_hint.strip()}")
-
-        n_head = len(snippets)
-        facet_snippets: list[str] = []
-        for item in items:
-            if isinstance(item, str):
-                if item.strip():
-                    if has_authority:
-                        snippets.append(f"[RELATED MEMORY | non-authoritative] {item.strip()}")
-                    else:
-                        snippets.append(item)
-            elif isinstance(item, dict):
-                if has_authority and str(item.get("uuid") or "") in authority_view_ids:
-                    continue
-                if str(item.get("uuid") or "") in counted_view_ids:
-                    continue  # rendered as its verdict after the memories
-                text = _recall_item_text(item)
-                if not text:
-                    continue
-                if has_authority:
-                    memory_type = str(item.get("memory_type") or "memory").strip().lower()
-                    if item.get("is_superseded_view") is True:
-                        prefix = f"[SUPERSEDED {memory_type} MEMORY | historical only]"
-                    elif item.get("is_scalar_authority") is True:
-                        prefix = f"[CURRENT {memory_type} MEMORY | authoritative]"
-                    else:
-                        prefix = f"[RELATED {memory_type} MEMORY | non-authoritative]"
-                    text = f"{prefix} {text}"
-                if is_verb_facet(item):
-                    facet_snippets.append(text)
-                else:
-                    snippets.append(text)
-
-        placed = place_verb_facets(snippets, n_head, facet_snippets, limit)
-        counted = [
-            rendered
-            for record in counted_records[:effective_verdict_limit]
-            if (rendered := _format_authority_record(record, drill_down=self._drill_down))
-        ]
-        sources = []
-        if self._source_memories and isinstance(data, dict):
-            block = format_source_memories(data.get("source_memories"))
-            if block:
-                sources.append(block)
-        tail = [*counted, *sources]
-        if not tail:
-            return placed
-        return RecallSnippets([*placed, *tail], [*placed.extras, *tail], counted, sources)
 
     def get_scalar_view_items(
         self, namespace: str, view_uuid: str, *, offset: int = 0, limit: int = 20
