@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # LongMemEval framework configuration — centralized, environment-overridable.
 # Source this in every script; all values use ${VAR:-default} for override.
+# python -m archolith_bench.build does not source it: archolith_bench/build/settings.py restates the
+# lines the build pipeline reads, and tests/test_build_settings.py checks the two agree. Change both.
 #
 # Usage:
 #   source "$(dirname "${BASH_SOURCE[0]}")/config.sh"
 #   echo "Build port: $LME_PORT_BUILD"
-#   LME_ANSWER_MODEL=gpt-4-turbo ./recall_ab.sh main 30
 
 # ---- Paths (derived from script location, not hardcoded absolutes) ----
 # All path derivations should use git rev-parse --show-toplevel where possible.
@@ -18,7 +19,7 @@ ARCH_DIR="${ARCH_DIR:-${BENCH_DIR%/*}}"  # parent of archolith-bench
 MENHIR_MAIN="${MENHIR_MAIN:-${ARCH_DIR}/menhir}"
 # menhir-frontier merged into main (2026-07); that checkout no longer exists. Default
 # MENHIR_FRONTIER to MENHIR_MAIN so every consuming script (build_graph.sh, lme.sh
-# backfill-dates/presence/ir-gate, retry.sh, analysis/*) works without a manual override.
+# backfill-dates, analysis/*) works without a manual override.
 # Still overridable if a real frontier fork ever returns.
 MENHIR_FRONTIER="${MENHIR_FRONTIER:-${MENHIR_MAIN}}"
 
@@ -52,9 +53,6 @@ lme_container_running() {
 
 # ---- Menhir serve ports (one per workflow) ----
 LME_PORT_BUILD="${LME_PORT_BUILD:-8102}"               # build_graph.sh
-LME_PORT_RECALL="${LME_PORT_RECALL:-8103}"             # recall_ab.sh (shared persistent graph)
-LME_PORT_BUILDOUT_MAIN="${LME_PORT_BUILDOUT_MAIN:-8105}"       # buildout_ab.sh (main branch, fresh graph)
-LME_PORT_BUILDOUT_FRONTIER="${LME_PORT_BUILDOUT_FRONTIER:-8106}" # buildout_ab.sh (frontier, fresh graph)
 
 # ---- Analysis ports (answer matrix, MSC sweep, retrieval quality) ----
 LME_PORT_MATRIX="${LME_PORT_MATRIX:-8112}"             # analysis/answer_matrix.sh
@@ -86,7 +84,7 @@ LME_SCORER="${LME_SCORER:-llm-judge}"
 LME_OPENAI_SERVICE_TIER="${LME_OPENAI_SERVICE_TIER:-flex}"
 export BENCHMARK_SERVICE_TIER="${BENCHMARK_SERVICE_TIER:-${LME_OPENAI_SERVICE_TIER}}"
 # Every wrapper that serves Menhir sources this file, so the recall/analysis serves get the same
-# tier as the build. build_graph.sh and retry.sh still export it explicitly (provenance parity).
+# tier as the build. The build pipeline (and its --retry-failed mode) still exports it explicitly (provenance parity).
 export MENHIR_OPENAI_SERVICE_TIER="${MENHIR_OPENAI_SERVICE_TIER:-${LME_OPENAI_SERVICE_TIER}}"
 
 # ---- Anchored time (ingest-time; part of the graph's identity) ----
@@ -229,7 +227,7 @@ LME_RESULTS_DIR="${LME_RESULTS_DIR:-${BENCH_DIR}/results/lme-ingest}"
 # with the canonical persistent graph's manifest.json, and a later full build against
 # the real graph does not see the smoke items as "already done" (or vice versa).
 # Default container name keeps the original unscoped filename for backward compat with
-# existing manifests/status.sh history.
+# existing manifests.
 if [ "${LME_NEO4J_NAME}" = "menhir-lme-neo4j" ]; then
   LME_MANIFEST_PATH="${LME_MANIFEST_PATH:-${LME_RESULTS_DIR}/manifest.json}"
 else

@@ -4,6 +4,10 @@
 # Neo4j stays up after; only the temp menhir (used for ingestion) is stopped.
 # Usage: build_graph.sh [limit]
 #
+# python -m archolith_bench.build no longer runs this: it resolves the same settings in Python
+# (archolith_bench/build/settings.py). This wrapper stays for the KU buildout (moving to the fixtures
+# repo, plan P8) and the date/suburbs smokes.
+#
 # The build itself (checks, Neo4j, provenance, Menhir serve, ingest, promotion) runs in
 # archolith_bench/build/pipeline.py. This wrapper resolves config.sh and passes its settings on
 # stdin: config.sh exports only a few of them, and children such as ingest.py take defaults from

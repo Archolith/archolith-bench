@@ -84,15 +84,6 @@ def test_reads_the_registry_without_importing_menhir(tmp_path: Path) -> None:
     assert _check(tree, MENHIR_FRONTIER_SOURCE_MEMORIES="1").returncode == 1
 
 
-def test_retry_checks_after_its_exports_and_before_serving() -> None:
-    text = (LME / "retry.sh").read_text(encoding="utf-8")
-    check = text.index('lib/retired_flags.py" check "${MENHIR_FRONTIER}"')
-    assert check < text.index('"${MENHIR_FRONTIER_BIN}" serve')
-    last_menhir_export = max(i for i, line in enumerate(text.splitlines())
-                             if line.startswith("export MENHIR_"))
-    assert text[:check].count("\n") > last_menhir_export
-
-
 def test_build_checks_with_the_full_menhir_env_and_before_serving(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from archolith_bench.build import pipeline

@@ -201,7 +201,7 @@ class _Run:
     def __init__(self):
         self.calls = []
 
-    def __call__(self, cmd, env=None, cwd=None):
+    def __call__(self, cmd, env=None, cwd=None, input=None):
         self.calls.append((cmd, env, cwd))
 
         class R:
@@ -213,7 +213,6 @@ class _Run:
 def _run_main(monkeypatch, argv, environ):
     runner = _Run()
     monkeypatch.setattr(build_cli.subprocess, "run", runner)
-    monkeypatch.setattr(build_cli.shutil, "which", lambda name: "/usr/bin/bash")
     rc = build_cli.main(argv, environ)
     return rc, runner
 
@@ -224,7 +223,7 @@ def test_run_control_flags_set_env_without_changing_build_id(monkeypatch, tmp_pa
     assert rc == 7
     rid1 = yaml.safe_load((tmp_path / "r" / "build.resolved.yaml").read_text(encoding="utf-8"))["build_id"]
     cmd, env, _ = run1.calls[0]
-    assert cmd[-1] == "30" and cmd[-2].endswith("scripts/longmemeval/build_graph.sh")
+    assert cmd[-1] == "30" and cmd[-2].endswith("archolith_bench/build/pipeline.py")
     assert env["LME_RESULTS_DIR"] == (tmp_path / "r").resolve().as_posix()
     assert "LME_RESUME" not in env
 

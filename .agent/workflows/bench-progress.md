@@ -86,7 +86,7 @@ results = run_ladder(conditions, items, run_one, label="ladder")
 3. Call `advance(detail=...)` once per completed unit; `close()` (or a `with` block /
    `track`) at the end.
 4. Run the script **without** a `tail` pipe. Add `logfile="results/<run>.progress.log"`
-   if you want a durable trail (mirrors `scripts/longmemeval/status.sh watch`).
+   if you want a durable trail (mirrors `build --check --watch`).
 
 ## API reference
 

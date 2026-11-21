@@ -1,13 +1,14 @@
 """LongMemEval graph build: checks, Neo4j, provenance, Menhir serve, ingest and post-steps.
 
-Moved out of build_graph.sh (P4b step 5). build_graph.sh still sources config.sh, then hands every
-LME_*/MENHIR_*/BENCH_* shell variable over on stdin. os.environ stays exactly the set the shell
-exported: children (ingest.py takes argparse defaults from it) see what they saw before.
+Moved out of build_graph.sh (P4b step 5). Two callers hand it every LME_*/MENHIR_*/BENCH_* setting
+on stdin: ``python -m archolith_bench.build``, which resolves them in Python (settings.py), and
+build_graph.sh, which sources config.sh (the KU buildout and the smokes). os.environ stays exactly
+the set config.sh exported: children (ingest.py takes argparse defaults from it) see what they saw before.
 
-Usage (from build_graph.sh only): <NUL-separated name/value pairs on stdin> pipeline.py <limit>
+Usage: <NUL-separated name/value pairs on stdin> pipeline.py <limit>
 
 The settings Menhir, the attempt record and the ingest phase receive are tables of the shell
-expressions build_graph.sh used, so tests can compare them with retry.sh line for line.
+expressions build_graph.sh used. LME_RETRY_FAILED=1 (build --retry-failed) runs retry_failed instead of a build.
 """
 
 from __future__ import annotations
@@ -21,6 +22,8 @@ import sys
 import tempfile
 import time
 import urllib.request
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -75,7 +78,7 @@ def read_settings(stream, environ: dict[str, str]) -> dict[str, str]:
         data = data.encode("utf-8", "surrogateescape")
     parts = data.split(b"\0")
     if not data or len(parts) % 2 != 1 or parts[-1] != b"":
-        raise Die("no settings on stdin; run scripts/longmemeval/build_graph.sh, not this module")
+        raise Die("no settings on stdin; run python -m archolith_bench.build, not this module")
     s = dict(environ)
     for i in range(0, len(parts) - 1, 2):
         s[parts[i].decode("utf-8")] = native(parts[i + 1].decode("utf-8", "surrogateescape"))
@@ -107,7 +110,6 @@ MENHIR_ENV: tuple[tuple[str, str], ...] = (
     ("LME_STORE_ONLY_CONTEXT", "${LME_STORE_ONLY_CONTEXT}"),
     ("LME_ASSISTANT_STORE_ONLY", "${LME_ASSISTANT_STORE_ONLY}"),
     ("MENHIR_MAX_LLM_CALLS_PER_JOB", "${LME_MAX_LLM_CALLS_PER_JOB}"),
-    # retry.sh exports the same values (tests/test_lme_retry_parity.py).
     ("MENHIR_ANCHORED_TIME_RESOLVER", "${LME_ANCHORED_TIME_RESOLVER}"),
     ("MENHIR_ANCHORED_TIME_MODEL", "${LME_ANCHORED_TIME_MODEL}"),
     ("MENHIR_ANCHORED_TIME_ATTACH_MODEL", "${LME_ANCHORED_TIME_ATTACH_MODEL}"),
@@ -161,7 +163,7 @@ _EMBED_ENV: tuple[tuple[str, str], ...] = (
 )
 
 # The attempt record ``run_provenance.py begin`` checks. "int" and "bool" render unquoted, as the
-# heredoc did; retry.sh must render RETRY_BEHAVIOR_KEYS the same way.
+# heredoc did. RETRY_RECORD_KEYS is the subset ``check-retry`` compares.
 ATTEMPT_RECORD: tuple[tuple[str, str, str], ...] = (
     ("container", "${LME_NEO4J_NAME}", "str"),
     ("volume", "${LME_NEO4J_VOL}", "str"),
@@ -205,6 +207,13 @@ ATTEMPT_RECORD: tuple[tuple[str, str, str], ...] = (
     ("writer_model", "${WRITER_MODEL_RECORD}", "str"),
     ("writer_granularity", "${WRITER_GRANULARITY_RECORD}", "str"),
     ("writer_prompt_sha", "${WRITER_PROMPT_SHA}", "str"),
+)
+
+# run_provenance.RETRY_BEHAVIOR_KEYS + COMMIT_KEYS + surface_digest (tests/test_lme_retry_parity.py).
+RETRY_RECORD_KEYS = (
+    "container", "scalar_state_enabled", "counter_state_enabled", "event_history_enabled",
+    "canonical_self_binding_mode", "extract_model", "anchored_time_resolver_enabled",
+    "anchored_time_model", "anchored_time_attach_model", "menhir_commit", "bench_commit", "surface_digest",
 )
 
 # ``phase-start --phase ingest-graph`` settings, after the optional fixture settings.
@@ -363,22 +372,22 @@ def neo4j_run_args(s: dict[str, str]) -> list[str]:
     ]
 
 
+def _record_value(key: str, expr: str, kind: str, s: dict[str, str]) -> object:
+    value = expand(expr, s)
+    if kind == "int":
+        try:
+            return int(value)
+        except ValueError as exc:
+            raise Die(f"attempt record: {key}={value!r} is not an integer") from exc
+    if kind == "bool":
+        if value not in ("true", "false"):
+            raise Die(f"attempt record: {key}={value!r} is not true/false")
+        return value == "true"
+    return value
+
+
 def attempt_record(s: dict[str, str]) -> dict[str, object]:
-    record: dict[str, object] = {}
-    for key, expr, kind in ATTEMPT_RECORD:
-        value = expand(expr, s)
-        if kind == "int":
-            try:
-                record[key] = int(value)
-            except ValueError as exc:
-                raise Die(f"attempt record: {key}={value!r} is not an integer") from exc
-        elif kind == "bool":
-            if value not in ("true", "false"):
-                raise Die(f"attempt record: {key}={value!r} is not true/false")
-            record[key] = value == "true"
-        else:
-            record[key] = value
-    return record
+    return {key: _record_value(key, expr, kind, s) for key, expr, kind in ATTEMPT_RECORD}
 
 
 def phase_start_settings(s: dict[str, str]) -> list[str]:
@@ -589,8 +598,7 @@ def run(s: dict[str, str], limit: str, base: dict[str, str]) -> int:
     surface_tool = (LIB / "bench_surface.py").as_posix()
     # Fingerprinted before the attempt record so `begin` can treat the digest as identity; empty
     # on failure, which run_provenance.py reads as absent.
-    rc, digest = _out([py, surface_tool, "fingerprint", "--digest-only"], env=base)
-    s["GRAPH_SURFACE_DIGEST"] = digest if rc == 0 else ""
+    menhir_facts, bench_facts = code_facts(s, base)
     s["WRITER_PROMPT_SHA"] = s["WRITER_MODEL_RECORD"] = s["WRITER_GRANULARITY_RECORD"] = ""
     if s["LME_SEGMENTATION"] == "adaptive-writer":
         s["WRITER_MODEL_RECORD"] = s["LME_WRITER_MODEL"]
@@ -599,12 +607,6 @@ def run(s: dict[str, str], limit: str, base: dict[str, str]) -> int:
         if rc != 0 or not sha:
             raise Die("could not compute writer prompt sha")
         s["WRITER_PROMPT_SHA"] = sha
-    menhir_facts = git_facts(s["MENHIR_MAIN"], base, ["src/**/*.py", "scripts/**/*.py", "src/**/*.sh", "scripts/**/*.sh"])
-    bench_facts = git_facts(s["BENCH_DIR"], base, ["scripts/**/*.py", "archolith_bench/**/*.py", "scripts/**/*.sh"])
-    s["MENHIR_COMMIT"], s["BENCH_COMMIT"] = menhir_facts[0], bench_facts[0]
-    s["MENHIR_DIRTY"] = "true" if menhir_facts[1] else "false"
-    s["BENCH_DIRTY"] = "true" if bench_facts[1] else "false"
-    s["MENHIR_UNTRACKED_COUNT"], s["BENCH_UNTRACKED_COUNT"] = str(menhir_facts[2]), str(bench_facts[2])
     s["STARTED_AT"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     attempt = results / f".graph-attempt-{name}.json"
     attempt.write_text(json.dumps(attempt_record(s), indent=2) + "\n", encoding="utf-8", newline="\n")
@@ -621,7 +623,82 @@ def run(s: dict[str, str], limit: str, base: dict[str, str]) -> int:
           *phase_start_settings(s)], env=base)
     log(f"graph provenance recorded: {provenance} (graph_fresh={s['GRAPH_FRESH']})")
 
-    # ---- untracked-file preflight ----
+    untracked_preflight(s, menhir_facts, bench_facts)
+
+    with ingest_menhir(s, base, results) as env:
+        log(f"menhir healthy. ingesting {s['LIMIT']} items...")
+        _run([py, (LIB / "ingest.py").as_posix(), *ingest_args(s)], env={**env, "MENHIR_FRONTIER": s["MENHIR_FRONTIER"]})
+        post_ingest(s, env, provenance)
+    log(f"build complete. Neo4j {name} (bolt {s['LME_BOLT']}) holds the data; manifest at {s['LME_MANIFEST_PATH']}.")
+    return 0
+
+
+def retry_record(s: dict[str, str]) -> dict[str, object]:
+    """The attempt-record values ``run_provenance.py check-retry`` compares, rendered the same way."""
+    return {key: _record_value(key, expr, kind, s) for key, expr, kind in ATTEMPT_RECORD if key in RETRY_RECORD_KEYS}
+
+
+def retry_failed(s: dict[str, str], limit: str, base: dict[str, str]) -> int:
+    """Re-enrich this build's FAILED episodes with the build's own settings and serve."""
+    py = s["BENCH_PY"]
+    validate(s, limit)
+    s["OPENAI_KEY"] = openai_key(s, base)
+    s["MENHIR_PORT"] = s["LME_PORT_BUILD"]
+    s["MENHIR_URL"] = expand("http://localhost:${MENHIR_PORT}", s)
+    name = s["LME_NEO4J_NAME"]
+    # A retry works on an existing graph: it never creates, starts or resets one.
+    if not container_running(name, base):
+        raise Die(f"{name} is not running; a retry never creates or starts the graph (docker start {name})")
+    if not wait_http(expand("http://localhost:${LME_HTTP}", s), 60):
+        raise Die("Neo4j not ready")
+    results = Path(s["LME_RESULTS_DIR"])
+    provenance = (results / f"graph-provenance-{name}.json").as_posix()
+    tool = (LIB / "run_provenance.py").as_posix()
+    menhir_facts, bench_facts = code_facts(s, base)
+    untracked_preflight(s, menhir_facts, bench_facts)
+
+    # ---- provenance: refuse a retry that would mix configurations, before Menhir starts ----
+    record = results / f".graph-retry-{name}.json"
+    record.write_text(json.dumps(retry_record(s), indent=2) + "\n", encoding="utf-8", newline="\n")
+    check = [py, tool, "check-retry", provenance, record.as_posix()]
+    if s.get("LME_NONCANONICAL") == "1":
+        check.append("--noncanonical")
+    refused = subprocess.run(check, env=base).returncode != 0
+    record.unlink(missing_ok=True)
+    if refused:
+        raise Die("graph provenance refused this retry (settings, commit, or surface mismatch); see above")
+
+    timeout = s.get("LME_RETRY_DRAIN_TIMEOUT") or "86400"
+    _run([py, tool, "phase-start", provenance, "--phase", "retry-failed",
+          "--setting", f"drain_timeout={timeout}",
+          "--setting", f"ingest_concurrency={s['LME_INGEST_CONCURRENCY']}",
+          "--setting", f"max_llm_calls_per_job={s['LME_MAX_LLM_CALLS_PER_JOB']}",
+          "--setting", f"openai_service_tier={s['LME_OPENAI_SERVICE_TIER']}",
+          "--setting", f"noncanonical={s.get('LME_NONCANONICAL') or '0'}"], env=base)
+    with ingest_menhir(s, base, results) as env:
+        log("menhir healthy. resetting and draining FAILED episodes...")
+        _run([py, (LIB / "retry_failed.py").as_posix(), s["LME_MANIFEST_PATH"], s["MENHIR_URL"],
+              "--drain-timeout", timeout], env=env)
+        # Success path only: a failed retry leaves the phase `started`, which the next begin marks interrupted.
+        _run([py, tool, "phase-end", provenance, "--phase", "retry-failed", "--status", "completed"], env=env)
+    log("retry pass complete.")
+    return 0
+
+
+def code_facts(s: dict[str, str], base: dict[str, str]) -> tuple[tuple, tuple]:
+    """Surface digest and both repos' git facts, recorded into ``s``."""
+    rc, digest = _out([s["BENCH_PY"], (LIB / "bench_surface.py").as_posix(), "fingerprint", "--digest-only"], env=base)
+    s["GRAPH_SURFACE_DIGEST"] = digest if rc == 0 else ""
+    menhir_facts = git_facts(s["MENHIR_MAIN"], base, ["src/**/*.py", "scripts/**/*.py", "src/**/*.sh", "scripts/**/*.sh"])
+    bench_facts = git_facts(s["BENCH_DIR"], base, ["scripts/**/*.py", "archolith_bench/**/*.py", "scripts/**/*.sh"])
+    s["MENHIR_COMMIT"], s["BENCH_COMMIT"] = menhir_facts[0], bench_facts[0]
+    s["MENHIR_DIRTY"] = "true" if menhir_facts[1] else "false"
+    s["BENCH_DIRTY"] = "true" if bench_facts[1] else "false"
+    s["MENHIR_UNTRACKED_COUNT"], s["BENCH_UNTRACKED_COUNT"] = str(menhir_facts[2]), str(bench_facts[2])
+    return menhir_facts, bench_facts
+
+
+def untracked_preflight(s: dict[str, str], menhir_facts: tuple, bench_facts: tuple) -> None:
     # Untracked source can shadow committed modules, so the commit hash would not name the code
     # that ran. Source extensions only: a stray results JSON cannot shadow anything.
     if menhir_facts[3] or bench_facts[3]:
@@ -635,7 +712,11 @@ def run(s: dict[str, str], limit: str, base: dict[str, str]) -> int:
                       "Commit them, remove them, or set LME_NONCANONICAL=1.")
         log("continuing (LME_NONCANONICAL=1)")
 
-    # ---- ingest Menhir (stopped on exit; Neo4j persists) ----
+
+@contextmanager
+def ingest_menhir(s: dict[str, str], base: dict[str, str], results: Path) -> Iterator[dict[str, str]]:
+    """Serve the build's Menhir (MENHIR_FRONTIER, menhir_env) until the block exits; Neo4j persists."""
+    py = s["BENCH_PY"]
     with tempfile.NamedTemporaryFile(prefix="lme-empty-env-", delete=False) as handle:
         s["EMPTY_ENV"] = handle.name
     s["RESULTS_DIR_NAME"] = results.name
@@ -662,16 +743,12 @@ def run(s: dict[str, str], limit: str, base: dict[str, str]) -> int:
             raise Die("menhir not healthy")
         if serve.poll() is not None:
             raise Die(f"our menhir exited, yet {s['MENHIR_URL']} answers; refusing")
-        log(f"menhir healthy. ingesting {s['LIMIT']} items...")
-        _run([py, (LIB / "ingest.py").as_posix(), *ingest_args(s)], env={**env, "MENHIR_FRONTIER": s["MENHIR_FRONTIER"]})
-        post_ingest(s, env, provenance)
+        yield env
     finally:
         if serve is not None:
-            log(f"stopping ingest menhir (Neo4j {name} stays up)...")
+            log(f"stopping ingest menhir (Neo4j {s['LME_NEO4J_NAME']} stays up)...")
             stop(serve)
         Path(s["EMPTY_ENV"]).unlink(missing_ok=True)
-    log(f"build complete. Neo4j {name} (bolt {s['LME_BOLT']}) holds the data; manifest at {s['LME_MANIFEST_PATH']}.")
-    return 0
 
 
 def post_ingest(s: dict[str, str], env: dict[str, str], provenance: str) -> None:
@@ -695,9 +772,10 @@ def post_ingest(s: dict[str, str], env: dict[str, str], provenance: str) -> None
             raise Die(problem)
         print("scalar ingest validation: PASS", flush=True)
 
-    # Freshly extracted nodes are SESSION-scoped and invisible to build_context / plain recall
-    # (promote_persistent.sh has the rationale); promote this manifest's namespaces while the
-    # ingest Menhir still serves.
+    # Freshly extracted nodes are SESSION-scoped, and recall drops SESSION nodes unless asked to
+    # include them, so build_context and plain recall would see nothing. Consolidation would promote
+    # them but is off in benchmark mode and deletes one-off facts. Promote this manifest's namespaces
+    # (idempotent, deletes nothing) while the ingest Menhir still serves.
     log("ingest complete. promoting SESSION -> PERSISTENT (regular memories)...")
     _run([py, (LIB / "promote.py").as_posix(), s["LME_MANIFEST_PATH"], s["MENHIR_URL"]], env=env)
 
@@ -746,6 +824,8 @@ def main(argv: list[str] | None = None) -> int:
     base = dict(os.environ)
     try:
         settings = read_settings(sys.stdin.buffer, base)
+        if settings.get("LME_RETRY_FAILED") == "1":
+            return retry_failed(settings, argv[0], base)
         return run(settings, argv[0], base)
     except Die as exc:
         print(f"[lme-build] ERROR: {exc.message}", file=sys.stderr, flush=True)

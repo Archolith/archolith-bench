@@ -124,15 +124,16 @@ Memory-specific A/B testing for menhir's recall and ingest, consolidated under
 Quickstart:
 ```bash
 ./scripts/longmemeval/lme.sh -h                 # all commands
-./scripts/longmemeval/lme.sh status             # read-only graph/queue state
-./scripts/longmemeval/lme.sh build 500          # persistent graph (~1 day for oracle)
-./scripts/longmemeval/lme.sh recall-ab main 30  # recall-only A/B against that graph
-./scripts/longmemeval/lme.sh matrix             # analysis: accuracy × config × question-type
+python -m archolith_bench.build --build builds/default.yaml --check  # read-only progress
+python -m archolith_bench.build --build builds/default.yaml  # persistent graph (~1 day for oracle)
+python -m archolith_bench.staged run --arm arms/menhir_recall.yaml --fixture <f.json> \
+  --serve <menhir tree> --graph builds/default.yaml  # recall-only run against that graph
+./scripts/longmemeval/analysis/answer_matrix.sh # analysis: accuracy × config × question-type
 ```
 
 **⚠️ Stratification (load-bearing):** the dataset is grouped by `question_type`, so a bare
 `--limit N` samples only `temporal-reasoning` (the hardest type) — a fair run MUST sweep all 6
-types via `--subset`. The `matrix`/`msc` verbs already do; see the runbook's
+types via `--subset`. `analysis/answer_matrix.sh` and `analysis/msc_sweep.sh` already do; see the runbook's
 Stratification section. Every value in `config.sh` is env-overridable; nothing is hardcoded in
 the scripts. OpenAI key is read at runtime from `menhir/.env`, never committed.
 

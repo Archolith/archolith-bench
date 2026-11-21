@@ -1,6 +1,7 @@
 """Staged CLI.
 
   python -m archolith_bench.staged run --arm arms/x.yaml --fixture f.json
+  python -m archolith_bench.staged run --arm arms/x.yaml --fixture f.json --serve ../menhir --graph builds/x.yaml
   python -m archolith_bench.staged rerun --run runs/<id> --from answer|judge
   python -m archolith_bench.staged compare runs/<a> runs/<b>
 """
@@ -17,16 +18,19 @@ import sys
 from pathlib import Path
 
 import httpx
+import yaml
 
 from .. import prompts
 from ..core.api import API_KEY, DIRECT_URL, MODEL, send_chat
 from ..harness.longmemeval import LongMemEvalMemoryAdapter
+from ..harness.memory_ab import assert_not_production
 from ..harness.scoring import LLMJudgeScorer, UnofficialJudgeScorer
 from .config import arm_from_resolved, load_arm, renderer_sha256, resolve, run_id
 from .menhir_system import MenhirSystem, load_backend_client
 from .ops import RERUN_STAGES, compare_runs, derive_run, format_compare, load_resolved
 from .pipeline import build_report, run_answer, run_judge, run_search
 from .rundir import RunDir
+from .serve import ServeError, graph_settings, served_menhir
 
 
 def _add_judge_args(p: argparse.ArgumentParser) -> None:
@@ -50,6 +54,14 @@ def _parser() -> argparse.ArgumentParser:
     r.add_argument("--namespace-template", default="lme-{question_id}")
     r.add_argument("--model", default=MODEL)
     r.add_argument("--menhir-commit", default=None)
+    r.add_argument("--serve", default=None, metavar="MENHIR_TREE",
+                   help="serve this Menhir checkout over the --graph build's Neo4j for the search stage "
+                        "(replaces --menhir-url/--menhir-root)")
+    r.add_argument("--graph", default=None, metavar="BUILD_YAML",
+                   help="build YAML whose graph --serve reads (bolt port, embedder)")
+    r.add_argument("--serve-port", type=int, default=8098, help="loopback port; must be on the throwaway allow-list")
+    r.add_argument("--menhir-bin", default=os.environ.get("MENHIR_MAIN_BIN"),
+                   help="menhir executable when the tree has no .venv (default: $MENHIR_MAIN_BIN)")
     _add_judge_args(r)
 
     rr = sub.add_parser("rerun", help="rerun a saved run from answer or judge; never calls Menhir")
@@ -117,8 +129,25 @@ def _answer(rundir, arm, adapter, model: str) -> None:  # noqa: ANN001
         )
 
 
+def _search(rundir, arm, items, adapter, args, menhir_url) -> None:  # noqa: ANN001
+    system = None
+    if arm.context != "none":
+        system = MenhirSystem(load_backend_client(Path(args.menhir_root), menhir_url))
+    asyncio.run(run_search(rundir, arm, items, adapter, system, namespace_template=args.namespace_template))
+
+
 def _cmd_run(args: argparse.Namespace) -> int:
     stages = {s.strip() for s in args.stages.split(",") if s.strip()}
+    if args.serve:
+        if args.menhir_url or args.menhir_root:
+            print("ERROR: --serve replaces --menhir-url/--menhir-root; pass one or the other", file=sys.stderr)
+            return 2
+        if not args.graph:
+            print("ERROR: --serve needs --graph <build yaml> naming the built graph", file=sys.stderr)
+            return 2
+        # The client refuses a non-allow-listed port; refuse before serving, not after.
+        assert_not_production(f"http://127.0.0.1:{args.serve_port}")
+        args.menhir_root = str(Path(args.serve).resolve())
     arm = load_arm(args.arm)
     adapter = LongMemEvalMemoryAdapter()
     items = adapter.load_items(args.subset, args.limit, args.fixture)
@@ -141,15 +170,26 @@ def _cmd_run(args: argparse.Namespace) -> int:
     rundir.write_config(resolved)
 
     if "search" in stages:
-        system = None
-        if arm.context != "none":
-            if not args.menhir_url or not args.menhir_root:
-                print("ERROR: --menhir-url and --menhir-root are required for this arm", file=sys.stderr)
+        if arm.context != "none" and args.serve:
+            try:
+                graph = graph_settings(args.graph, dict(os.environ))
+            except (ValueError, OSError, yaml.YAMLError) as exc:
+                print(f"ERROR: --graph {args.graph}: {exc}", file=sys.stderr)
                 return 2
-            system = MenhirSystem(load_backend_client(Path(args.menhir_root), args.menhir_url))
-        asyncio.run(
-            run_search(rundir, arm, items, adapter, system, namespace_template=args.namespace_template)
-        )
+            try:
+                with served_menhir(Path(args.menhir_root), port=args.serve_port, graph=graph,
+                                   openai_key=os.getenv("OPENAI_API_KEY", ""), out_dir=rundir.path,
+                                   menhir_bin=args.menhir_bin) as url:
+                    _search(rundir, arm, items, adapter, args, url)
+            except ServeError as exc:
+                print(f"ERROR: {exc}", file=sys.stderr)
+                return 2
+        else:
+            if arm.context != "none" and (not args.menhir_url or not args.menhir_root):
+                print("ERROR: --menhir-url and --menhir-root (or --serve) are required for this arm",
+                      file=sys.stderr)
+                return 2
+            _search(rundir, arm, items, adapter, args, args.menhir_url)
     if "answer" in stages:
         _answer(rundir, arm, adapter, model)
     if "judge" in stages:
