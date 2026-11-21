@@ -16,6 +16,7 @@ BUILDS = ROOT / "builds"
 LME_DIR = ROOT / "scripts" / "longmemeval"
 CONFIG_SH = (LME_DIR / "config.sh").read_text(encoding="utf-8")
 BUILD_SH = (LME_DIR / "build_graph.sh").read_text(encoding="utf-8")
+PIPELINE_SRC = (ROOT / "archolith_bench" / "build" / "pipeline.py").read_text(encoding="utf-8")
 
 _DEFAULT_RE = re.compile(r'^(LME_[A-Z0-9_]+)="\$\{\1:-(.*?)\}"', re.MULTILINE)
 SH_DEFAULTS = dict(_DEFAULT_RE.findall(CONFIG_SH))
@@ -29,7 +30,7 @@ NON_LITERAL = {
     "LME_CANONICAL_SELF_BINDING_MODE": "off",
     # config.sh: "not-needed" placeholder. null leaves it unset; the openai path never reads it.
     "LME_EXTRACT_API_KEY": None,
-    # Read only in build_graph.sh as ${VAR:-}, never defaulted in config.sh: absent = null.
+    # Read only in pipeline.py as ${VAR:-}, never defaulted in config.sh: absent = null.
     "LME_FIXTURE_PATH": None,
     "LME_FIXTURE_COUNT": None,
     "LME_FIXTURE_SHA256": None,
@@ -59,7 +60,7 @@ def test_every_var_is_distinct_and_appears_in_scripts():
     assert len(variables) == len(set(variables))
     assert [f.path for f in bc.SCHEMA if f.var is None] == ["dataset.limit"]
     for var in variables:
-        assert var in BUILD_SH or var in CONFIG_SH, var
+        assert var in PIPELINE_SRC or var in CONFIG_SH, var
 
 
 def test_derived_and_run_control_vars_not_in_schema():

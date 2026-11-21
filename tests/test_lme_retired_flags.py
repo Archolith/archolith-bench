@@ -84,17 +84,27 @@ def test_reads_the_registry_without_importing_menhir(tmp_path: Path) -> None:
     assert _check(tree, MENHIR_FRONTIER_SOURCE_MEMORIES="1").returncode == 1
 
 
-@pytest.mark.parametrize("script, serve", [
-    ("build_graph.sh", '"${MENHIR_FRONTIER_BIN}" serve'),
-    ("retry.sh", '"${MENHIR_FRONTIER_BIN}" serve'),
-])
-def test_launchers_check_after_their_exports_and_before_serving(script: str, serve: str) -> None:
-    text = (LME / script).read_text(encoding="utf-8")
+def test_retry_checks_after_its_exports_and_before_serving() -> None:
+    text = (LME / "retry.sh").read_text(encoding="utf-8")
     check = text.index('lib/retired_flags.py" check "${MENHIR_FRONTIER}"')
-    assert check < text.index(serve)
+    assert check < text.index('"${MENHIR_FRONTIER_BIN}" serve')
     last_menhir_export = max(i for i, line in enumerate(text.splitlines())
                              if line.startswith("export MENHIR_"))
     assert text[:check].count("\n") > last_menhir_export
+
+
+def test_build_checks_with_the_full_menhir_env_and_before_serving(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from archolith_bench.build import pipeline
+
+    from .test_build_pipeline import run_build
+
+    build = run_build(tmp_path, monkeypatch)
+    assert build.error is None
+    check = build.call("retired_flags.py check")
+    assert check.cmd[-2:] == ["check", build.settings["MENHIR_FRONTIER"]]
+    assert {name for name, _ in pipeline.MENHIR_ENV} <= set(check.env)
+    assert build.index("retired_flags.py check") < build.index("frontier-menhir serve", kind="popen")
 
 
 def test_module_loads() -> None:

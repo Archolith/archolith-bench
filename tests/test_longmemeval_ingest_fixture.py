@@ -143,31 +143,45 @@ def test_current_scalar_buildout_wrapper_is_fail_closed() -> None:
 
 
 def test_build_graph_wires_same_namespace_window_into_menhir_workers() -> None:
-    script = (ROOT / "scripts" / "longmemeval" / "build_graph.sh").read_text(encoding="utf-8")
+    from archolith_bench.build import pipeline
 
-    assert 'export MENHIR_INGEST_CONCURRENCY="${LME_INGEST_CONCURRENCY}"' in script
-    assert '--namespace-window "${LME_INGEST_CONCURRENCY}"' in script
-    assert '--manifest-item-limit "${LME_INGEST_STOP_AFTER_ITEMS}"' in script
-    assert '"ingest_target_items": ${INGEST_TARGET}' in script
+    assert ("MENHIR_INGEST_CONCURRENCY", "${LME_INGEST_CONCURRENCY}") in pipeline.MENHIR_ENV
+    assert ("ingest_target_items", "${INGEST_TARGET}", "int") in pipeline.ATTEMPT_RECORD
+    base = {
+        "LIMIT": "5", "MENHIR_URL": "http://unused", "LME_MANIFEST_PATH": "unused",
+        "LME_SEGMENTATION": "adaptive", "LME_INGEST_CONCURRENCY": "7",
+        "LME_SCALAR_CONSOLIDATION_K": "3", "LME_SCALAR_CALL_BUDGET": "50",
+        "LME_COUNTER_STATE_ENABLED": "0", "LME_SCALAR_STATE_ENABLED": "0",
+    }
+    args = pipeline.ingest_args({**base, "LME_INGEST_STOP_AFTER_ITEMS": "2"})
+    assert args[args.index("--namespace-window") + 1] == "7"
+    assert args[args.index("--manifest-item-limit") + 1] == "2"
+    assert "--manifest-item-limit" not in pipeline.ingest_args({**base, "LME_INGEST_STOP_AFTER_ITEMS": "0"})
 
 
 def test_build_graph_supports_explicit_local_extraction_provider() -> None:
     config = (ROOT / "scripts" / "longmemeval" / "config.sh").read_text(encoding="utf-8")
-    script = (ROOT / "scripts" / "longmemeval" / "build_graph.sh").read_text(encoding="utf-8")
+    from archolith_bench.build import pipeline
+
+    script = Path(pipeline.__file__).read_text(encoding="utf-8")
 
     assert 'LME_EXTRACT_PROVIDER="${LME_EXTRACT_PROVIDER:-openai}"' in config
     assert 'LME_EXTRACT_BASE_URL="${LME_EXTRACT_BASE_URL:-}"' in config
-    assert 'case "${LME_EXTRACT_PROVIDER}" in' in script
-    assert 'export LOCAL_LLM_BASE_URL="${LME_EXTRACT_BASE_URL}"' in script
-    assert 'export LOCAL_LLM_CHAT_MODEL="${LME_EXTRACT_MODEL}"' in script
-    assert 'export GRAPHITI_EMBED_PROVIDER="openai"' in script
-    assert '"ingest_concurrency": ${LME_INGEST_CONCURRENCY}' in script
-    assert (
-        'export MENHIR_PERSONAL_MEMORY_SCALAR_HISTORY_ENABLED="${LME_SCALAR_HISTORY_ENABLED}"'
-        in script
-    )
-    assert '"scalar_history_enabled": ${LME_SCALAR_HISTORY_ENABLED}' in script
-    assert '"scalar_history_views"' in script
+    local = dict(pipeline._PROVIDER_ENV["local"])
+    assert local["LOCAL_LLM_BASE_URL"] == "${LME_EXTRACT_BASE_URL}"
+    assert local["LOCAL_LLM_CHAT_MODEL"] == "${LME_EXTRACT_MODEL}"
+    assert ("GRAPHITI_EMBED_PROVIDER", "openai") in pipeline._EMBED_ENV
+    assert ("ingest_concurrency", "${LME_INGEST_CONCURRENCY}", "int") in pipeline.ATTEMPT_RECORD
+    assert ("MENHIR_PERSONAL_MEMORY_SCALAR_HISTORY_ENABLED",
+            "${LME_SCALAR_HISTORY_ENABLED}") in pipeline.MENHIR_ENV
+    assert ("scalar_history_enabled", "${LME_SCALAR_HISTORY_ENABLED}", "int") in pipeline.ATTEMPT_RECORD
+    assert "scalar_history_views" in script
+    with pytest.raises(pipeline.Die) as exc:
+        pipeline.menhir_env({"LME_EXTRACT_PROVIDER": "local", "LME_EXTRACT_BASE_URL": ""}, {})
+    assert "LME_EXTRACT_BASE_URL is required" in exc.value.message
+    with pytest.raises(pipeline.Die) as exc:
+        pipeline.menhir_env({"LME_EXTRACT_PROVIDER": "bogus"}, {})
+    assert "unsupported LME_EXTRACT_PROVIDER" in exc.value.message
 
 
 def test_longmemeval_container_guards_do_not_use_pipefail_sensitive_grep() -> None:
@@ -228,20 +242,25 @@ def test_buildout_wrapper_records_every_phase_with_effective_settings() -> None:
     assert '--manifest "${LME_MANIFEST_PATH}"' in script
 
 
-def test_provenance_is_appended_never_overwritten() -> None:
+def test_provenance_is_appended_never_overwritten(tmp_path, monkeypatch) -> None:
     """Neither wrapper may `cat >` its provenance file: a resume would erase the real history."""
     buildout = (
         ROOT / "scripts" / "longmemeval" / "run_knowledge_update_buildout.sh"
     ).read_text(encoding="utf-8")
-    build_graph = (ROOT / "scripts" / "longmemeval" / "build_graph.sh").read_text(encoding="utf-8")
+    from archolith_bench.build import pipeline
+
+    from .test_build_pipeline import run_build
 
     assert 'cat > "${LME_RESULTS_DIR}/run_provenance.json"' not in buildout
-    assert 'cat > "${GRAPH_PROVENANCE_PATH}"' not in build_graph
-    for script in (buildout, build_graph):
-        assert "run_provenance.py" in script
-        assert "begin" in script
-    assert 'phase-start "${GRAPH_PROVENANCE_PATH}"' in build_graph
-    assert 'phase-end "${GRAPH_PROVENANCE_PATH}"' in build_graph
+    assert "run_provenance.py" in buildout
+    assert "begin" in buildout
+    assert "run_provenance.py" in Path(pipeline.__file__).read_text(encoding="utf-8")
+    build = run_build(tmp_path, monkeypatch)
+    assert build.error is None
+    assert (build.index("run_provenance.py begin") < build.index("run_provenance.py phase-start")
+            < build.index("run_provenance.py phase-end"))
+    # Only run_provenance.py writes graph-provenance-*.json; the pipeline leaves no such file.
+    assert not list(Path(build.settings["LME_RESULTS_DIR"]).glob("graph-provenance-*.json"))
 
 
 def test_fixture_path_is_forwarded_to_adapter() -> None:
@@ -1352,36 +1371,24 @@ def test_consolidation_rejects_disabled_failed_partial_or_unmeasured_lanes(chang
     (str(i & 1), str((i >> 1) & 1), str((i >> 2) & 1)) for i in range(8)
 ])
 def test_build_script_passes_selected_lanes_to_server_and_ingest(scalar, counter, event):
-    import os
-    import shutil
-    import subprocess
+    from archolith_bench.build import pipeline
 
-    git_bash = Path(os.environ.get("ProgramFiles", "C:/Program Files")) / "Git/bin/bash.exe"
-    bash = str(git_bash) if git_bash.exists() else shutil.which("bash")
-    if not bash:
-        pytest.skip("bash unavailable")
-    script = (ROOT / "scripts/longmemeval/build_graph.sh").read_text()
-    start = script.index("INGEST_ARGS=(")
-    end = script.index('"${BENCH_PY}" "$(dirname "${BASH_SOURCE[0]}")/lib/ingest.py"', start)
-    exports = '\n'.join(line for line in script.splitlines() if line.startswith(
-        "export MENHIR_PERSONAL_MEMORY_SCALAR_STATE_ENABLED"
-    ))
-    env = dict(os.environ, LME_SCALAR_STATE_ENABLED=scalar, LME_COUNTER_STATE_ENABLED=counter,
-               LME_EVENT_HISTORY_ENABLED=event)
-    setup = 'set -eu; LIMIT=1; MENHIR_URL=http://unused; LME_MANIFEST_PATH=unused; LME_SEGMENTATION=adaptive; '
-    setup += 'LME_INGEST_CONCURRENCY=1; LME_INGEST_STOP_AFTER_ITEMS=0; LME_SCALAR_CONSOLIDATION_K=3; LME_SCALAR_CALL_BUDGET=50; '
-    command = setup + exports + '\n' + script[start:end]
-    command += '\nprintf "%s\n" "${INGEST_ARGS[@]}"'
-    result = subprocess.run([bash, '-c', command], env=env, capture_output=True, text=True, check=True)
-    lines = result.stdout.splitlines()
-    # Menhir removed the counter lane; build_graph.sh no longer exports its flag.
-    assert not any(ln.startswith("export MENHIR_PERSONAL_MEMORY_CONSOLIDATION_ENABLED")
-                   for ln in script.splitlines())
-    # Menhir archived the event-history lane; neither script exports its flag any more.
-    for name in ("build_graph.sh", "retry.sh"):
-        text = (ROOT / "scripts/longmemeval" / name).read_text()
-        assert not any(ln.startswith("export MENHIR_PERSONAL_MEMORY_EVENT_HISTORY")
-                       for ln in text.splitlines())
+    s = {
+        "LIMIT": "1", "MENHIR_URL": "http://unused", "LME_MANIFEST_PATH": "unused",
+        "LME_SEGMENTATION": "adaptive", "LME_INGEST_CONCURRENCY": "1",
+        "LME_INGEST_STOP_AFTER_ITEMS": "0", "LME_SCALAR_CONSOLIDATION_K": "3",
+        "LME_SCALAR_CALL_BUDGET": "50", "LME_SCALAR_STATE_ENABLED": scalar,
+        "LME_COUNTER_STATE_ENABLED": counter, "LME_EVENT_HISTORY_ENABLED": event,
+    }
+    lines = pipeline.ingest_args(s)
+    # Menhir removed the counter lane; the build no longer exports its flag.
+    names = {name for name, _ in pipeline.MENHIR_ENV}
+    assert "MENHIR_PERSONAL_MEMORY_CONSOLIDATION_ENABLED" not in names
+    # Menhir archived the event-history lane; neither the build nor retry.sh exports its flag.
+    assert not any(n.startswith("MENHIR_PERSONAL_MEMORY_EVENT_HISTORY") for n in names)
+    text = (ROOT / "scripts/longmemeval/retry.sh").read_text()
+    assert not any(ln.startswith("export MENHIR_PERSONAL_MEMORY_EVENT_HISTORY")
+                   for ln in text.splitlines())
     assert "--consolidate-events" not in lines
     for option, value in [("--consolidate-scalar", scalar), ("--consolidate-counter", counter)]:
         assert (option in lines) is (value == "1")
@@ -1397,29 +1404,33 @@ def test_build_binding_mode_selection_and_early_validation(selection, inherited,
     import shutil
     import subprocess
 
+    from archolith_bench.build import pipeline
+
+    from .test_build_pipeline import make_settings
+
     git_bash = Path(os.environ.get("ProgramFiles", "C:/Program Files")) / "Git/bin/bash.exe"
     bash = str(git_bash) if git_bash.exists() else shutil.which("bash")
     if not bash:
         pytest.skip("bash unavailable")
     config = (ROOT / "scripts/longmemeval/config.sh").read_text()
-    script = (ROOT / "scripts/longmemeval/build_graph.sh").read_text()
     assignment = next(line for line in config.splitlines() if line.startswith("LME_CANONICAL_SELF_BINDING_MODE="))
-    start = script.index("log(){")
-    end = script.index("for lane in", start)
-    export = next(line for line in script.splitlines() if line.startswith("export MENHIR_CANONICAL_SELF_BINDING_MODE="))
     env = dict(os.environ)
     for key, value in [("LME_CANONICAL_SELF_BINDING_MODE", selection), ("MENHIR_CANONICAL_SELF_BINDING_MODE", inherited)]:
         env.pop(key, None)
         if value is not None:
             env[key] = value
-    command = "set -eu\n" + assignment + "\n" + script[start:end] + export
-    command += '\nprintf "%s\\n" "$MENHIR_CANONICAL_SELF_BINDING_MODE"'
-    result = subprocess.run([bash, "-c", command], env=env, capture_output=True, text=True)
+    command = "set -eu\n" + assignment + '\nprintf "%s\\n" "$LME_CANONICAL_SELF_BINDING_MODE"'
+    result = subprocess.run([bash, "-c", command], env=env, capture_output=True, text=True, check=True)
+    mode = result.stdout.strip()
+    s = {**make_settings(Path("t"), Path("f")), "LME_CANONICAL_SELF_BINDING_MODE": mode,
+         "LME_ANCHORED_TIME_RESOLVER": "0"}
     if expected is None:
-        assert result.returncode != 0
-        assert "must be off, observe, or enforce" in result.stderr
+        with pytest.raises(pipeline.Die) as exc:
+            pipeline.validate(s, "1")
+        assert "must be off, observe, or enforce" in exc.value.message
     else:
-        assert result.returncode == 0, result.stderr
-        assert result.stdout.strip() == expected
+        pipeline.validate(s, "1")
+        s.update(EMPTY_ENV="e", OPENAI_KEY="k", MENHIR_PORT="1", RESULTS_DIR_NAME="r")
+        assert pipeline.menhir_env(s, {})["MENHIR_CANONICAL_SELF_BINDING_MODE"] == expected
     # The exact forwarded value is also retained in the attempt record.
-    assert '"canonical_self_binding_mode": "${LME_CANONICAL_SELF_BINDING_MODE}"' in script
+    assert ("canonical_self_binding_mode", "${LME_CANONICAL_SELF_BINDING_MODE}", "str") in pipeline.ATTEMPT_RECORD
