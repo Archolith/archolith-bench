@@ -23,6 +23,9 @@ Unified benchmark suite for the archolith product family. Measures token savings
 - **Dataclass/schema reference** -> [`.agent/data_models.md`](data_models.md)
 - **Pre-launch checklist** -> [`.agent/launch-readiness-tracker.md`](launch-readiness-tracker.md)
 - **User-facing install/quickstart** -> [`../README.md`](../README.md)
+- **Capability fixtures** (F5 decision supersession; KU buildout and SSA-56 planned) -> the private repo
+  `Archolith/archolith-fixtures` (sibling checkout `../archolith-fixtures`); this bench supplies `run_flex`
+  and runs them
 
 ## Before writing a script, read the index
 
