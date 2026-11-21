@@ -326,12 +326,6 @@ def test_retry_checks_provenance_before_starting_menhir() -> None:
     assert "--phase retry-failed" in retry
 
 
-def test_buildout_ab_has_no_hardcoded_models() -> None:
-    script = (LME / "buildout_ab.sh").read_text(encoding="utf-8")
-    assert not re.search(r"gpt-[0-9]", script)
-    assert "MENHIR_MAX_LLM_CALLS_PER_JOB=20" not in script
-
-
 # ---------------------------------------------------------------------------
 # Defaults and early validation (bash)
 # ---------------------------------------------------------------------------

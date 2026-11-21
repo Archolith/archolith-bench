@@ -334,7 +334,7 @@ def begin(
     graph on disk: ``graph_fresh``, ``volume_pre_existed``, the dataset, the settings the data
     was actually ingested under. A resume is by definition not fresh, so copying the resuming
     attempt over the top level would flip ``graph_fresh`` true -> false and rewrite the
-    settings -- and ``lme.sh ir-gate`` reads exactly that field to decide whether the data is
+    settings -- and the IR gate (``retrieval_quality.py``) reads exactly that field to decide whether the data is
     fresh. It would report a graph as stale that is not, or (with the values reversed) vouch
     for one that is.
 

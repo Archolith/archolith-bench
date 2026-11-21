@@ -53,8 +53,6 @@ lme_container_running() {
 # ---- Menhir serve ports (one per workflow) ----
 LME_PORT_BUILD="${LME_PORT_BUILD:-8102}"               # build_graph.sh
 LME_PORT_RECALL="${LME_PORT_RECALL:-8103}"             # recall_ab.sh (shared persistent graph)
-LME_PORT_BUILDOUT_MAIN="${LME_PORT_BUILDOUT_MAIN:-8105}"       # buildout_ab.sh (main branch, fresh graph)
-LME_PORT_BUILDOUT_FRONTIER="${LME_PORT_BUILDOUT_FRONTIER:-8106}" # buildout_ab.sh (frontier, fresh graph)
 
 # ---- Analysis ports (answer matrix, MSC sweep, retrieval quality) ----
 LME_PORT_MATRIX="${LME_PORT_MATRIX:-8112}"             # analysis/answer_matrix.sh

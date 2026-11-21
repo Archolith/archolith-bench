@@ -192,15 +192,9 @@ def test_longmemeval_container_guards_do_not_use_pipefail_sensitive_grep() -> No
 
     for relative_path in (
         "build_graph.sh",
-        "promote_persistent.sh",
         "recall_ab.sh",
         "retry.sh",
         "run_knowledge_update_buildout.sh",
-        "run_ku_adaptive.sh",
-        "run_ku_adaptive_full.sh",
-        "run_ku_nosplit.sh",
-        "run_ku_nosplit_full.sh",
-        "run_ku_split15.sh",
         "run_suburbs_fixture.sh",
     ):
         script = (ROOT / "scripts" / "longmemeval" / relative_path).read_text(

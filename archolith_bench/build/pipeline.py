@@ -695,9 +695,10 @@ def post_ingest(s: dict[str, str], env: dict[str, str], provenance: str) -> None
             raise Die(problem)
         print("scalar ingest validation: PASS", flush=True)
 
-    # Freshly extracted nodes are SESSION-scoped and invisible to build_context / plain recall
-    # (promote_persistent.sh has the rationale); promote this manifest's namespaces while the
-    # ingest Menhir still serves.
+    # Freshly extracted nodes are SESSION-scoped, and recall drops SESSION nodes unless asked to
+    # include them, so build_context and plain recall would see nothing. Consolidation would promote
+    # them but is off in benchmark mode and deletes one-off facts. Promote this manifest's namespaces
+    # (idempotent, deletes nothing) while the ingest Menhir still serves.
     log("ingest complete. promoting SESSION -> PERSISTENT (regular memories)...")
     _run([py, (LIB / "promote.py").as_posix(), s["LME_MANIFEST_PATH"], s["MENHIR_URL"]], env=env)
 

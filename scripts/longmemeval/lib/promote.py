@@ -2,9 +2,8 @@
 
 Usage: promote.py <manifest.json> <menhir_url>
 
-Calls Menhir's ``promote_namespace_scope`` backend op once per manifest namespace. It replaces the
-prefix-wide cypher-shell write promote_persistent.sh used to run. Exits non-zero if the manifest has
-no namespaces or any promotion fails.
+Calls Menhir's ``promote_namespace_scope`` backend op once per manifest namespace (the build pipeline
+runs it after ingest). Exits non-zero if the manifest has no namespaces or any promotion fails.
 """
 
 from __future__ import annotations
