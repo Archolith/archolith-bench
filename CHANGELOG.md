@@ -1,3 +1,12 @@
+## 2026-11-21 - Streamlined harness: staged runs, build YAML and build CLI (PRs #59-#61, #63, #64)
+
+- Staged runs (`python -m archolith_bench.staged`): run dirs, YAML arms and `MenhirSystem` over Menhir's `BackendClient` (#59); the rejected V2-V5 value arms are gone (#60); prompt files are hashed into the run id, with rerun and compare (#61). `staged run --serve <menhir tree> --graph builds/<x>.yaml` replaces `recall_ab.sh`.
+- Graph builds (`python -m archolith_bench.build --build builds/<x>.yaml`): the build YAML resolves to the `LME_*` settings, LME ingest talks to Menhir only through `BackendClient` and Menhir build ops, and the pipeline moved from `build_graph.sh` into `archolith_bench.build.pipeline` (#63). `--retry-failed` replaces `retry.sh`, `--check` replaces `status.sh` and `lme.sh validate`, dead `lme.sh` verbs are retired (#64).
+- The build CLI now resolves its settings in Python (`archolith_bench/build/settings.py`) and starts `pipeline.py` itself; it no longer runs `config.sh` or `build_graph.sh`. Both shell files remain for the shell tools that still use them, and `settings.py` must be kept in sync with `config.sh` (a parity test checks it).
+- Capability fixtures (F5 decision supersession, and later the KU buildout and SSA-56) live in the private repo `Archolith/archolith-fixtures`, which depends on this bench for `run_flex`; the bench runs them.
+- Planned, not built: a layered graph store that keeps expensive graphs (ingest, then post-ingest passes) as Docker volumes marked by the last Menhir commit that changed each layer's code, served only from throwaway copies (workspace plan `archolith-bench-graph-store-p8a-plan-2026-11-21.md`).
+- `CHANGELOG-archive.md`: the oldest dated entry moved there (10-entry limit).
+
 ## 2026-10-29 - Wide ingest by default (`LME_INGEST_CONCURRENCY=30`); paid runs under $0.25 pre-approved with a cost ceiling
 
 - `.agent/README.md` (LLM-call helpers) and `scripts/longmemeval/README.md` (Prerequisites) state the owner's standing rule: ingest as many namespaces at once as the system can handle within reason (every namespace of a staged fixture), parallel lanes, slices and shards, lowering it only for a measured, recorded limit. A paid run under $0.25 needs no owner go-ahead if a cost monitor with a manual ceiling (the cost guard, `rs-score.sh` ceilings, `run_flex(max_usd=...)`) covers it.
@@ -52,9 +61,3 @@
 
 - `archolith_bench/harness/menhir_client.py`: a fact line becomes `- <happened> | said <time> | <fact>` when Menhir sends `said_at` (Menhir `MENHIR_FRONTIER_FACT_SAID_TIME`, off by default); unchanged otherwise, so the answer prompt is the same for arms without it.
 - `tests/test_menhir_client_contract.py`: `test_recall_renders_said_time_only_when_menhir_sends_it`.
-
-## 2026-10-25 - LME answer prompt picks the best-supported candidate; recall limit 20
-
-- The memory answer prompt no longer stops at "I don't know" when the recall holds candidate answers: it gives the best-supported one, names the other, and abstains only when no memory addresses the question. With unknown source times it prefers a value stated as a change ("now", "switched to"). Conflicting authoritative records lose their authority instead of forcing "I don't know". The answer `prompt_fingerprint` changes for every arm.
-- `--recall-limit` defaults to 20 (was 10), as do `run_memory_ab` (`LME_RECALL_LIMIT`) and `run_stratified_slice`.
-- o500 recall-only A/B (Menhir 953ca6e + #383, bench 06ab93b, one run per arm): 0.694 baseline, 0.686 with limit 20 alone, 0.710 with the prompt alone, 0.720 with both (+2.6 points, 95% CI +0.2 to +5.0; "don't know" answers 67 to 36; abstention items did not drop). Not measured together with the #36 writer prompt text.
