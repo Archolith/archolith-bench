@@ -53,9 +53,9 @@ def _config_sh(env: dict[str, str], names: list[str]) -> dict[str, str]:
     return {parts[i]: native(parts[i + 1]) for i in range(0, len(parts), 2)}
 
 
-def _exported(env: dict[str, str]) -> dict[str, str]:
-    command = (f'set -eu\ncd "{REPO.as_posix()}"\nsource scripts/longmemeval/config.sh\n'
-               'env -0')
+def _exported(env: dict[str, str], *, source: bool = True) -> dict[str, str]:
+    sourced = "source scripts/longmemeval/config.sh\n" if source else ""
+    command = f'set -eu\ncd "{REPO.as_posix()}"\n{sourced}env -0'
     out = subprocess.run([_bash(), "-c", command], env=env, capture_output=True, check=True).stdout
     pairs = (item.split("=", 1) for item in out.decode("utf-8").split("\0") if "=" in item)
     return {k: v for k, v in pairs}
@@ -87,8 +87,10 @@ def test_exported_env_matches_config_sh():
     shell = _exported(env)
     for var in settings.EXPORTED:
         assert exported[var] == shell[var]
-    # config.sh adds no other name to the environment children inherit.
-    assert set(shell) - set(env) - {"_", "SHLVL", "PWD", "OLDPWD"} <= set(settings.EXPORTED)
+    # config.sh adds no other name to the environment children inherit. The baseline is the same bash
+    # without config.sh: Git Bash adds HOME, TERM, MSYSTEM etc. itself when they are missing.
+    baseline = _exported(env, source=False)
+    assert set(shell) - set(baseline) - {"_", "OLDPWD"} <= set(settings.EXPORTED)
 
 
 def _assigned_by_config_sh() -> set[str]:
