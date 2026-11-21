@@ -18,6 +18,8 @@ from pathlib import Path
 
 import pytest
 
+from archolith_bench.build import pipeline
+
 ROOT = Path(__file__).resolve().parents[1]
 LME = ROOT / "scripts" / "longmemeval"
 
@@ -261,13 +263,19 @@ def _exports(script: str) -> dict[str, str | None]:
     return found
 
 
+def _build_exports() -> dict[str, str]:
+    """NAME -> shell expression for every export the build pipeline makes for an openai build."""
+    return dict((*pipeline.MENHIR_ENV, *pipeline._PROVIDER_ENV["openai"], *pipeline._EMBED_ENV))
+
+
 def test_retry_exports_the_same_ingest_settings_as_the_build() -> None:
-    build = _exports((LME / "build_graph.sh").read_text(encoding="utf-8"))
+    build = _build_exports()
     retry = _exports((LME / "retry.sh").read_text(encoding="utf-8"))
     for name in INGEST_ENV:
-        assert name in build, f"build_graph.sh does not export {name}"
+        assert name in build, f"pipeline.py does not export {name}"
         assert name in retry, f"retry.sh does not export {name}"
-        assert retry[name] == build[name], f"{name}: build={build[name]!r} retry={retry[name]!r}"
+        # retry.sh keeps the quotes around each value expression.
+        assert retry[name] == f'"{build[name]}"', f"{name}: build={build[name]!r} retry={retry[name]!r}"
 
 
 # Retired by the #168 freeze; Menhir ignores them, so exporting one would record a setting
@@ -285,19 +293,27 @@ RETIRED_ENV = (
 )
 
 
-@pytest.mark.parametrize("script", ["build_graph.sh", "retry.sh"])
+@pytest.mark.parametrize("script", ["retry.sh"])
 def test_build_and_retry_export_no_retired_flag(script) -> None:
     exports = _exports((LME / script).read_text(encoding="utf-8"))
     assert not set(RETIRED_ENV) & set(exports)
 
 
+def test_build_pipeline_exports_no_retired_flag() -> None:
+    names = {name for name, _ in (*pipeline.MENHIR_ENV, *pipeline._EMBED_ENV,
+                                  *pipeline._PROVIDER_ENV["openai"], *pipeline._PROVIDER_ENV["local"])}
+    assert not set(RETIRED_ENV) & names
+
+
 def test_retry_record_lines_match_the_build_attempt_record() -> None:
     """The check compares JSON values, so each key must be rendered the same way (quoted or not)."""
-    build = (LME / "build_graph.sh").read_text(encoding="utf-8")
     retry = (LME / "retry.sh").read_text(encoding="utf-8")
     for key in provenance.RETRY_BEHAVIOR_KEYS:
         pattern = re.compile(rf'^\s*"{key}": .*$', re.MULTILINE)
-        build_lines = {m.group(0).strip().rstrip(",") for m in pattern.finditer(build)}
+        entries = [(expr, kind) for k, expr, kind in pipeline.ATTEMPT_RECORD if k == key]
+        assert len(entries) == 1, f"{key}: {entries}"
+        expr, kind = entries[0]
+        build_lines = {f'"{key}": "{expr}"' if kind == "str" else f'"{key}": {expr}'}
         retry_lines = {m.group(0).strip().rstrip(",") for m in pattern.finditer(retry)}
         assert len(build_lines) == 1, f"{key}: {build_lines}"
         assert retry_lines == build_lines, f"{key}: build={build_lines} retry={retry_lines}"
@@ -383,15 +399,20 @@ def test_attach_model_follows_resolver_model_override() -> None:
     ({"LME_ANCHORED_TIME_RESOLVER": "0", "LME_EXTRACT_PROVIDER": "local"}, None),
 ])
 def test_build_validates_anchored_settings_before_any_work(overrides, message) -> None:
-    script = (LME / "build_graph.sh").read_text(encoding="utf-8")
-    start = script.index('for flag in "${LME_ANCHORED_TIME_RESOLVER}"')
-    end = script.index('case "${LME_INGEST_CONCURRENCY}" in', start)
-    die = "die(){ printf '%s\\n' \"$*\" >&2; exit 1; }\n"
-    command = "set -eu\n" + _config_lines() + "\n" + die + script[start:end] + "\necho ok"
-    result = subprocess.run([_bash(), "-c", command], env=_clean_env(**overrides), capture_output=True, text=True)
+    names = ("LME_EXTRACT_PROVIDER", "LME_ANCHORED_TIME_RESOLVER")
+    command = "set -eu\n" + _config_lines() + "\nprintf '%s\\n' " + " ".join(f'"${name}"' for name in names)
+    result = subprocess.run([_bash(), "-c", command], env=_clean_env(**overrides),
+                            capture_output=True, text=True, check=True)
+    settings = {
+        "LME_CANONICAL_SELF_BINDING_MODE": "off", "LME_COUNTER_STATE_ENABLED": "0",
+        "LME_SCALAR_STATE_ENABLED": "0", "LME_EVENT_HISTORY_ENABLED": "0",
+        "LME_INGEST_CONCURRENCY": "30", "LME_RESUME": "0", "LME_INGEST_STOP_AFTER_ITEMS": "0",
+        **dict(zip(names, result.stdout.split(), strict=True)),
+    }
     if message is None:
-        assert result.returncode == 0, result.stderr
-        assert result.stdout.strip() == "ok"
+        pipeline.validate(settings, "5")
+        assert settings["LIMIT"] == "5"
     else:
-        assert result.returncode != 0
-        assert message in result.stderr
+        with pytest.raises(pipeline.Die) as exc:
+            pipeline.validate(settings, "5")
+        assert message in exc.value.message

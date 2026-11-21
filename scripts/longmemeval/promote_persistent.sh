@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Promote all LongMemEval memories from SESSION to PERSISTENT scope.
+# Promote one build's LongMemEval memories from SESSION to PERSISTENT scope.
 #
 # WHY: menhir stamps freshly-extracted Entity nodes as scope=SESSION, and only the
 # consolidation pass (lifecycle_service) promotes reinforced facts to PERSISTENT — but
@@ -11,27 +11,24 @@
 # (non-session) recall path sees nothing. LME facts are durable knowledge the system should
 # always recall, so we write them as regular memories: a blanket SESSION->PERSISTENT flip.
 #
-# This is idempotent and non-destructive (unlike consolidation — nothing is deleted).
+# This is idempotent and non-destructive (unlike consolidation -- nothing is deleted).
 # Existing recall-only A/B results are unaffected: they already use include_session=True,
 # so those nodes were always visible; this only ALSO makes them visible to build_context
 # and plain recall.
 #
-# Usage: promote_persistent.sh
+# It promotes exactly the namespaces in this build's manifest, through Menhir's
+# promote_namespace_scope backend op (operator tier), so the build's Menhir must still be serving.
+#
+# Usage: MENHIR_URL=<serving menhir> [LME_MANIFEST_PATH=<manifest>] promote_persistent.sh
 set -euo pipefail
 
 source "$(dirname "${BASH_SOURCE[0]}")/config.sh"
 
-NS_PREFIX="${LME_NS_PREFIX:-lme-}"
 log(){ printf '[lme-promote] %s\n' "$*" >&2; }
 
-lme_container_running "${LME_NEO4J_NAME}" \
-  || { log "ERROR: ${LME_NEO4J_NAME} not running"; exit 1; }
+[ -n "${MENHIR_URL:-}" ] || { log "ERROR: MENHIR_URL is not set (run from build_graph.sh)"; exit 1; }
+[ -f "${LME_MANIFEST_PATH}" ] || { log "ERROR: manifest not found: ${LME_MANIFEST_PATH}"; exit 1; }
 
-log "promoting SESSION -> PERSISTENT for namespaces prefixed '${NS_PREFIX}'..."
-docker exec "${LME_NEO4J_NAME}" cypher-shell -u neo4j -p "${LME_NEO4J_PW}" --format plain \
-  "MATCH (n:Entity) WHERE n.group_id STARTS WITH '${NS_PREFIX}' AND coalesce(n.scope,'SESSION')='SESSION'
-   SET n.scope='PERSISTENT' RETURN count(*) AS entities_promoted;"
-docker exec "${LME_NEO4J_NAME}" cypher-shell -u neo4j -p "${LME_NEO4J_PW}" --format plain \
-  "MATCH ()-[r:RELATES_TO]->() WHERE r.group_id STARTS WITH '${NS_PREFIX}' AND coalesce(r.scope,'SESSION')='SESSION'
-   SET r.scope='PERSISTENT' RETURN count(*) AS edges_promoted;"
+log "promoting SESSION -> PERSISTENT for the namespaces in ${LME_MANIFEST_PATH}..."
+"${BENCH_PY}" "$(dirname "${BASH_SOURCE[0]}")/lib/promote.py" "${LME_MANIFEST_PATH}" "${MENHIR_URL}"
 log "done. LME memories are now regular (PERSISTENT) scope."

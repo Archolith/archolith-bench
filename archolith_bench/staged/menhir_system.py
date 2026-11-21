@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import sys
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +26,67 @@ class MenhirSystem:
         """Delete the namespace (throwaway graph; P4 revisits)."""
         return await self.backend.delete_namespace(ns, force=True)
 
+    async def record_turn_evidence(
+        self,
+        ns: str,
+        text: str,
+        *,
+        role: str = "user",
+        declarant: str | None = "user",
+        session_id: str | None = None,
+        occurred_at: str | None = None,
+        turn_key: str | None = None,
+    ) -> dict:
+        """Capture one turn as :TurnEvidence; same request as HttpMenhirClient.record_turn_evidence."""
+        return await self.backend.record_turn_evidence(
+            text,
+            role=role,
+            declarant=declarant,
+            namespace=ns,
+            session_id=session_id,
+            occurred_at=occurred_at,
+            source_kind="archolith-bench",
+            source_client="archolith_bench",
+            turn_key=turn_key,
+        )
+
+    async def ingest(
+        self,
+        ns: str,
+        role: str,
+        content: str,
+        *,
+        occurred_at: str | None = None,
+        session_id: str | None = None,
+        source: str | None = None,
+        turn_evidence_uuid: str | None = None,
+        idempotency_key: str | None = None,
+        memory_role: str | None = None,
+        store_only: bool = False,
+        wait: bool = False,  # noqa: ARG002 - accepted for HttpMenhirClient parity; callers poll
+    ) -> dict | None:
+        """Queue one episode with the request HttpMenhirClient.ingest would send (same digest)."""
+        if not content:
+            return None
+        # A grounded claim must equal its evidence text byte for byte; ungrounded text keeps the speaker prefix.
+        text = content if turn_evidence_uuid is not None else f"{role}: {content}"
+        kwargs: dict[str, Any] = {
+            "user_id": self.user_id,
+            "session_id": session_id or uuid.uuid4().hex,
+            # BackendClient defaults source to "mcp"; the REST default is "remote-api".
+            "source": source or "remote-api",
+            "namespace": ns,
+            "occurred_at": occurred_at,
+            "turn_evidence_uuid": turn_evidence_uuid,
+        }
+        if memory_role is not None:
+            kwargs["role"] = memory_role
+        if idempotency_key is not None:
+            kwargs["idempotency_key"] = idempotency_key
+        if store_only:
+            kwargs["store_only"] = True
+        return await self.backend.queue_episode(text, **kwargs)
+
     async def add(
         self,
         ns: str,
@@ -38,32 +100,30 @@ class MenhirSystem:
         record_evidence: bool = True,
         source: str | None = None,
     ) -> dict:
-        """Ingest one turn. Ingest-policy parity with scripts/longmemeval/lib/ingest.py is P4's job."""
+        """Ingest one turn: evidence for user turns, then the shared ingest request shape."""
         is_user = role.strip().lower() == "user"
         turn_id = None
         if record_evidence and is_user and text:
-            ev = await self.backend.record_turn_evidence(
+            ev = await self.record_turn_evidence(
+                ns,
                 text,
                 role="user",
                 declarant="user",
-                namespace=ns,
                 session_id=session_id,
                 occurred_at=occurred_at,
-                source_kind="archolith-bench",
-                source_client="archolith_bench",
                 turn_key=turn_key,
             )
             turn_id = ev.get("turn_id") or None
-        return await self.backend.queue_episode(
+        return await self.ingest(
+            ns,
+            role,
             text,
-            user_id=self.user_id,
-            session_id=session_id,
-            source=source or ("user" if is_user else "remote-api"),
-            namespace=ns,
             occurred_at=occurred_at,
+            session_id=session_id,
+            source=source or ("user" if is_user else None),
             turn_evidence_uuid=turn_id,
-            role=role,
             idempotency_key=idempotency_key,
+            memory_role=role,
         )
 
     async def wait_indexed(

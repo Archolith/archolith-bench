@@ -34,6 +34,7 @@ def _load_script(name: str, relative_path: str):
 
 ingest = _load_script("lme_ingest_store_only_test", "scripts/longmemeval/lib/ingest.py")
 
+from archolith_bench.build import pipeline  # noqa: E402
 from archolith_bench.harness.menhir_client import HttpMenhirClient  # noqa: E402
 
 QUESTION = "Thanks! What do you think?"
@@ -187,28 +188,6 @@ def test_http_client_sends_store_only_only_when_set() -> None:
     assert "store_only" not in captured[1]
 
 
-def _queries(monkeypatch: pytest.MonkeyPatch) -> list[str]:
-    queries: list[str] = []
-
-    def fake_counts(query: str, width: int) -> list[int]:
-        queries.append(query)
-        return [0] * width
-
-    monkeypatch.setattr(ingest, "_cypher_counts", fake_counts)
-    ingest._integrity_counts("lme-x", [])
-    return queries
-
-
-def test_integrity_exempts_store_only_from_projection_and_pairing(monkeypatch: pytest.MonkeyPatch) -> None:
-    provenance, _unfounded, _valid_at, time_unpaired, _cross = _queries(monkeypatch)
-    # Admission still counts a store-only admitter; only the projection check skips it.
-    admitted = re.search(r"EXISTS \{[^}]*\} AS admitted", provenance).group(0)
-    assert "store_only" not in admitted
-    assert "coalesce(q.extraction_mode, '') <> 'store_only' } AS extracted" in provenance
-    assert "WHEN extracted AND NOT projected" in provenance
-    assert "coalesce(q.extraction_mode, '') <> 'store_only'" in time_unpaired
-
-
 def _config_value(name: str) -> str:
     config = (LME / "config.sh").read_text(encoding="utf-8")
     match = re.search(rf'^{name}="\$\{{{name}:-([^}}]*)\}}"', config, re.MULTILINE)
@@ -221,23 +200,42 @@ def test_build_defaults_turn_both_on() -> None:
     assert _config_value("LME_EMBED_BACKFILL") == "1"
 
 
-def test_build_exports_the_toggle_and_gates_after_the_ingest() -> None:
-    build = (LME / "build_graph.sh").read_text(encoding="utf-8")
-    assert 'export LME_STORE_ONLY_CONTEXT="${LME_STORE_ONLY_CONTEXT}"' in build
-    ingest_at = build.index('/lib/ingest.py" "${INGEST_ARGS[@]}"')
-    backfill_at = build.index('scripts/backfill_episode_embeddings.py" --require-complete')
-    promote_at = build.index("promote_persistent.sh\"\n")
+def test_build_exports_the_toggle_and_gates_after_the_ingest(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from .test_build_pipeline import run_build
+
+    assert ("LME_STORE_ONLY_CONTEXT", "${LME_STORE_ONLY_CONTEXT}") in pipeline.MENHIR_ENV
+    assert ("NEO4J_URI", "bolt://localhost:${LME_BOLT}") in pipeline.MENHIR_ENV
+    build = run_build(tmp_path, monkeypatch)
+    assert build.error is None
+    ingest_at = build.index("lib/ingest.py")
+    backfill_at = build.index("backfill_episode_embeddings.py")
+    promote_at = build.index("lib/promote.py")
     assert ingest_at < backfill_at < promote_at
     # The serving tree's code embeds, against the NEO4J_* exported for this build.
-    assert ('PYTHONPATH="${MENHIR_FRONTIER}/src" \\\n'
-            '    "${MENHIR_FRONTIER_PY}" "${MENHIR_FRONTIER}/scripts/backfill_episode_embeddings.py"') in build
-    assert build.index('export NEO4J_URI="bolt://localhost:${LME_BOLT}"') < backfill_at
+    frontier = build.settings["MENHIR_FRONTIER"]
+    backfill = build.call("backfill_episode_embeddings.py")
+    assert backfill.cmd == [build.settings["MENHIR_FRONTIER_PY"],
+                            f"{frontier}/scripts/backfill_episode_embeddings.py", "--require-complete"]
+    assert backfill.env["PYTHONPATH"] == f"{frontier}/src"
+    assert backfill.env["NEO4J_URI"] == f"bolt://localhost:{build.settings['LME_BOLT']}"
 
 
-def test_build_refuses_a_serving_tree_without_the_menhir_support_before_paid_work() -> None:
-    build = (LME / "build_graph.sh").read_text(encoding="utf-8")
-    start_at = build.index('"${MENHIR_FRONTIER_BIN}" serve')
-    for needle in ('has no store_only ingest', 'has no backfill --require-complete'):
-        assert build.index(needle) < start_at
-    assert '--setting "store_only_context=${LME_STORE_ONLY_CONTEXT}"' in build
-    assert '--setting "embed_backfill=${LME_EMBED_BACKFILL}"' in build
+def test_build_refuses_a_serving_tree_without_the_menhir_support_before_paid_work(tmp_path: Path) -> None:
+    s = {"MENHIR_FRONTIER": tmp_path.as_posix(), "LME_ASSISTANT_STORE_ONLY": "0",
+         "LME_SEGMENTATION": "adaptive", "LME_STORE_ONLY_CONTEXT": "1", "LME_EMBED_BACKFILL": "1"}
+    problem = pipeline.serving_tree_problem(s)
+    assert problem and "has no store_only ingest" in problem
+    routes = tmp_path / "src" / "menhir" / "api" / "routes_support.py"
+    routes.parent.mkdir(parents=True)
+    routes.write_text("store_only = True\n", encoding="utf-8")
+    problem = pipeline.serving_tree_problem(s)
+    assert problem and "has no backfill --require-complete" in problem
+    script = tmp_path / "scripts" / "backfill_episode_embeddings.py"
+    script.parent.mkdir(parents=True)
+    script.write_text("# --require-complete\n", encoding="utf-8")
+    assert pipeline.serving_tree_problem(s) is None
+    # Both are recorded in the phase settings, and refusal comes before serve (test_build_pipeline).
+    names = dict(pipeline.PHASE_SETTINGS)
+    assert names["store_only_context"] == "${LME_STORE_ONLY_CONTEXT}"
+    assert names["embed_backfill"] == "${LME_EMBED_BACKFILL}"

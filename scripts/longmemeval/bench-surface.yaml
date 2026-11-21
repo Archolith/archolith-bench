@@ -94,10 +94,6 @@ stages:
       - repo: menhir
         glob: "src/menhir/services/lifecycle_*.py"
       - repo: menhir
-        glob: "src/menhir/services/correction_resolver.py"
-      - repo: menhir
-        glob: "src/menhir/services/quantstate_consolidator.py"
-      - repo: menhir
         glob: "src/menhir/services/perception*.py"
       - repo: menhir
         glob: "src/menhir/services/merge_coordinator.py"
@@ -107,8 +103,6 @@ stages:
         glob: "src/menhir/domain/belief*.py"
       - repo: menhir
         glob: "src/menhir/domain/merge_delta.py"
-      - repo: menhir
-        glob: "src/menhir/domain/event_history.py"
       - repo: menhir
         glob: "src/menhir/infrastructure/consolidation_*.py"
 
@@ -127,12 +121,6 @@ stages:
         glob: "src/menhir/services/context_builder.py"
       - repo: menhir
         glob: "src/menhir/services/scoring_service.py"
-      - repo: menhir
-        glob: "src/menhir/services/shadow_context_composition.py"
-      - repo: menhir
-        glob: "src/menhir/domain/brief_builder.py"
-      - repo: menhir
-        glob: "src/menhir/domain/diversity.py"
       - repo: menhir
         glob: "src/menhir/domain/intent_affinity.py"
       - repo: menhir
@@ -164,6 +152,11 @@ stages:
         glob: "archolith_bench/staged/*.py"
       - repo: bench
         glob: "arms/*.yaml"
+      # Build YAMLs (python -m archolith_bench.build): resolved into the LME_* build settings.
+      - repo: bench
+        glob: "builds/*.yaml"
+      - repo: bench
+        glob: "archolith_bench/build/*.py"
 
   harness:
     description: >

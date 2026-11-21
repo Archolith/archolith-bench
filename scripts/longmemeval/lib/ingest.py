@@ -31,12 +31,12 @@ Sliding namespace pool (--namespace-window = pool size):
 from __future__ import annotations
 
 import argparse
+import asyncio
 import hashlib
 import json
 import math
 import os
 import re
-import subprocess
 import sys
 import time
 from collections import Counter
@@ -64,10 +64,9 @@ DEFAULT_MANIFEST = os.getenv(
 
 import httpx  # noqa: E402
 from ingest_state import IngestStateLog  # noqa: E402
-from neo4j_http import Neo4jHttpReader, Neo4jUnavailable  # noqa: E402
 from validate_run import consolidation_errors  # noqa: E402
 from archolith_bench.harness.longmemeval import LongMemEvalMemoryAdapter  # noqa: E402
-from archolith_bench.harness.menhir_client import HttpMenhirClient  # noqa: E402
+from archolith_bench.staged.menhir_system import MenhirSystem, load_backend_client  # noqa: E402
 
 import memory_writer  # noqa: E402
 from claim_segmenter import (  # noqa: E402
@@ -82,9 +81,6 @@ def _heuristic_extract_claims_sync(content: str, role: str) -> list[ClaimSegment
     """Synchronous wrapper for Stage B heuristic claim extraction."""
     return _heuristic_extract_claims(content, role)
 
-# Throwaway lme Neo4j (must match _lme_build_db.sh).
-NEO4J_CONTAINER = os.getenv("LME_NEO4J_CONTAINER", "menhir-lme-neo4j")
-NEO4J_PW = os.getenv("LME_NEO4J_PW", "lmedata123")
 REQUIRE_TURN_EVIDENCE = os.getenv("LME_REQUIRE_TURN_EVIDENCE", "1").strip().lower() in {
     "1", "true", "yes", "on",
 }
@@ -104,8 +100,6 @@ STORE_ONLY_CONTEXT = os.getenv("LME_STORE_ONLY_CONTEXT", "0").strip().lower() in
 ASSISTANT_STORE_ONLY = os.getenv("LME_ASSISTANT_STORE_ONLY", "0").strip().lower() in {
     "1", "true", "yes", "on",
 }
-# Menhir's :Episodic.extraction_mode value for store-only episodes.
-_STORE_ONLY = "store_only"
 
 # Sentence splitting — long multi-topic messages bury factual claims in geographic
 # noise, causing Graphiti's node resolution to collapse distinct entities (e.g.
@@ -205,7 +199,7 @@ def _parse_lme_date(date_str: str | None) -> str | None:
 
 
 def _ingest_turn(
-    client: HttpMenhirClient,
+    client: SyncMenhir,
     ns: str,
     role: str,
     content: str,
@@ -376,137 +370,35 @@ def _ingest_turn(
             time.sleep(wait)
 
 
-_NEO4J_HTTP = Neo4jHttpReader.from_env()
-
-
-def _plain_cell(cell: object) -> str:
-    """Render a JSON cell the way cypher-shell's plain format does."""
-    if cell is None:
-        return "NULL"
-    if isinstance(cell, bool):
-        return "true" if cell else "false"
-    return str(cell)
-
-
 def _ns_state_counts_many(namespaces: list[str]) -> dict[str, dict[str, int]]:
-    """Batched ``_ns_state_counts``; -1 values mean unreadable."""
+    """Per-namespace ``_ns_state_counts``; -1 values mean unreadable."""
     names = list(dict.fromkeys(namespaces))
-    if _NEO4J_HTTP is not None:
-        try:
-            return _NEO4J_HTTP.namespace_state_counts(names)
-        except Neo4jUnavailable:
-            pass
     return {ns: _ns_state_counts(ns) for ns in names}
 
 
-def _cypher(query: str) -> list[list[str]]:
-    """Run a read-only cypher query against the lme Neo4j (HTTP when LME_NEO4J_HTTP_URL is set,
-    else docker exec); return data rows (header dropped). Returns [] on any failure."""
-    if _NEO4J_HTTP is not None:
-        try:
-            return [
-                [_plain_cell(cell) for cell in row]
-                for row in _NEO4J_HTTP.rows(query.strip().rstrip(";"))
-            ]
-        except Neo4jUnavailable:
-            pass
-    try:
-        proc = subprocess.run(
-            ["docker", "exec", NEO4J_CONTAINER, "cypher-shell", "-u", "neo4j", "-p", NEO4J_PW,
-             "--format", "plain", query],
-            capture_output=True, text=True, timeout=300,
-        )
-    except Exception:
-        return []
-    if proc.returncode != 0:
-        return []
-    lines = [ln for ln in proc.stdout.splitlines() if ln.strip()]
-    rows = []
-    for ln in lines[1:]:  # drop header
-        rows.append([c.strip().strip('"') for c in ln.split(", ")])
-    return rows
-
-
 def _ns_state_counts(ns: str) -> dict[str, int]:
-    """Per-namespace processing-state counts from Neo4j. PENDING and ENRICHING are the two
-    non-terminal lifecycle states (in-flight); READY and FAILED are terminal (see menhir
-    episode_lifecycle.mark_episode_ready/_failed). Episodic nodes with a NULL processing_state are
-    graphiti-derived resolved nodes, not ingest episodes, and are deliberately excluded from the
-    in-flight signal so the drain never waits on them forever."""
-    rows = _cypher(
-        f"MATCH (e:Episodic {{namespace:'{ns}'}}) RETURN "
-        "sum(CASE WHEN e.processing_state='PENDING' THEN 1 ELSE 0 END) AS pending, "
-        "sum(CASE WHEN e.processing_state='READY' THEN 1 ELSE 0 END) AS ready, "
-        "sum(CASE WHEN e.processing_state='ENRICHING' THEN 1 ELSE 0 END) AS enriching, "
-        "sum(CASE WHEN e.processing_state='FAILED' THEN 1 ELSE 0 END) AS failed, "
-        "sum(coalesce(toInteger(e.processing_llm_tasks_total), 0)) AS llm_tasks, "
-        "sum(coalesce(toInteger(e.processing_attempts), 0)) AS processing_attempts, "
-        "count(*) AS total;"
-    )
-    if not rows or len(rows[0]) < 7:
-        return {
-            "pending": -1,
-            "ready": -1,
-            "enriching": -1,
-            "failed": -1,
-            "llm_tasks": -1,
-            "processing_attempts": -1,
-            "total": -1,
-        }
-    r = rows[0]
-    return {
-        "pending": int(r[0] or 0),
-        "ready": int(r[1] or 0),
-        "enriching": int(r[2] or 0),
-        "failed": int(r[3] or 0),
-        "llm_tasks": int(r[4] or 0),
-        "processing_attempts": int(r[5] or 0),
-        "total": int(r[6] or 0),
-    }
-
-
-def _cypher_count(query: str) -> int:
-    rows = _cypher(query)
-    if not rows or not rows[0]:
-        return -1
-    return int(rows[0][0] or 0)
+    """Per-namespace processing-state counts via Menhir's fetch_namespace_build_counts op.
+    PENDING and ENRICHING are the non-terminal states; READY and FAILED are terminal. Every value
+    is -1 when the read fails."""
+    keys = ("pending", "ready", "enriching", "failed", "llm_tasks", "processing_attempts", "total")
+    try:
+        state = _build_op("fetch_namespace_build_counts", {"namespace": ns, "sections": ["state"]})["state"]
+        return {key: int(state[key]) for key in keys}
+    except Exception:
+        return {key: -1 for key in keys}
 
 
 def _scalar_counts(ns: str) -> dict[str, int]:
     """Return the materialization/provenance counts needed to trust a scalar snapshot."""
-    return {
-        "turn_evidence": _cypher_count(
-            f"MATCH (t:TurnEvidence {{namespace:'{ns}'}}) RETURN count(t);"
-        ),
-        "typed_assertions": _cypher_count(
-            f"MATCH (a:TypedAssertion {{namespace:'{ns}'}}) RETURN count(a);"
-        ),
-        "scalar_views": _cypher_count(
-            f"MATCH (v:Entity {{group_id:'{ns}', view_kind:'scalar_state'}}) "
-            "WHERE coalesce(v.view_current, true) RETURN count(v);"
-        ),
-        "scalar_history_views": _cypher_count(
-            f"MATCH (v:Entity {{group_id:'{ns}', view_kind:'scalar_history'}}) "
-            "WHERE coalesce(v.view_current, true) RETURN count(v);"
-        ),
-        "user_founded_scalar_views": _cypher_count(
-            f"MATCH (t:TurnEvidence {{namespace:'{ns}', declarant:'user'}})-[:FOUNDS]->"
-            f"(a:TypedAssertion {{namespace:'{ns}'}})<-[:CURRENT_ANCHOR]-"
-            f"(v:Entity {{group_id:'{ns}', view_kind:'scalar_state'}}) "
-            "WHERE coalesce(v.view_current, true) RETURN count(DISTINCT v);"
-        ),
-    }
-
-
-def _cypher_counts(query: str, width: int) -> list[int]:
-    """Read one aggregate row of ``width`` integers; every value is -1 when it cannot be read."""
-    rows = _cypher(query)
-    if not rows or len(rows[0]) < width:
-        return [-1] * width
+    keys = (
+        "turn_evidence", "typed_assertions", "scalar_views", "scalar_history_views",
+        "user_founded_scalar_views",
+    )
     try:
-        return [int(value or 0) for value in rows[0][:width]]
-    except ValueError:
-        return [-1] * width
+        scalar = _build_op("fetch_namespace_build_counts", {"namespace": ns, "sections": ["scalar"]})["scalar"]
+        return {key: int(scalar[key]) for key in keys}
+    except Exception:
+        return {key: -1 for key in keys}
 
 
 def _submitted_epoch_millis(item: dict) -> list[int]:
@@ -539,94 +431,19 @@ def _integrity_counts(ns: str, submitted_epoch_millis: list[int]) -> dict[str, i
     ``user_turns_admitted`` is compared there with ``user_turns_submitted``; every other value is
     a violation count that must be zero. -1 means the count could not be read.
     """
-    nl = ns.lower()
-    admitted, unprojected = _cypher_counts(
-        # Provenance: a user turn's evidence is admitted by a user-tier memory and projected.
-        # A store-only episode is admitted but never projected (Menhir mints no projection for
-        # it), so only an extracted admitter makes a missing projection a violation.
-        f"MATCH (t:TurnEvidence {{namespace:'{ns}'}}) "
-        "WITH t, EXISTS { MATCH (q:Episodic)-[:ADMITTED_ON]->(t) WHERE q.valid_at IS NULL "
-        "AND q.source = 'user' AND NOT coalesce(q.is_evidence_projection, false) } AS admitted, "
-        "EXISTS { MATCH (q:Episodic)-[:ADMITTED_ON]->(t) WHERE q.valid_at IS NULL "
-        "AND q.source = 'user' AND NOT coalesce(q.is_evidence_projection, false) "
-        f"AND coalesce(q.extraction_mode, '') <> '{_STORE_ONLY}' }} AS extracted, "
-        "EXISTS { MATCH (p:Episodic)-[:ADMITTED_ON]->(t) "
-        "WHERE coalesce(p.is_evidence_projection, false) } AS projected "
-        "RETURN sum(CASE WHEN admitted THEN 1 ELSE 0 END), "
-        "sum(CASE WHEN extracted AND NOT projected THEN 1 ELSE 0 END);",
-        2,
+    keys = (
+        "user_turns_admitted", "admitted_turns_unprojected", "assertions_unfounded",
+        "episodes_valid_at_unsubmitted", "ready_episodes_time_unpaired", "cross_namespace_links",
     )
-    (unfounded,) = _cypher_counts(
-        # Every assertion traces to this namespace's evidence: FOUNDS directly, or GROUNDS from an
-        # episode admitted on it (view_write_repository resolves Episodic anchors the same way).
-        "MATCH (a) WHERE (a:TypedAssertion OR a:TypedEventAssertion) "
-        f"AND a.namespace = '{ns}' "
-        f"AND NOT EXISTS {{ MATCH (:TurnEvidence {{namespace:'{ns}'}})-[:FOUNDS]->(a) }} "
-        f"AND NOT EXISTS {{ MATCH (:TurnEvidence {{namespace:'{ns}'}})<-[:ADMITTED_ON]-"
-        "(:Episodic)-[:GROUNDS]->(a) } "
-        "RETURN count(a);",
-        1,
-    )
-    (valid_at_unsubmitted,) = _cypher_counts(
-        # Graphiti episodes (group_id; Menhir's queue node carries namespace instead).
-        f"MATCH (g:Episodic {{group_id:'{ns}'}}) "
-        "RETURN sum(CASE WHEN g.valid_at IS NULL THEN 1 "
-        f"WHEN datetime(toString(g.valid_at)).epochMillis IN {submitted_epoch_millis} THEN 0 "
-        "ELSE 1 END);",
-        1,
-    )
-    (time_unpaired,) = _cypher_counts(
-        # Each READY queue node resolves to exactly one Graphiti episode dated at its reference_time.
-        # A store-only node is never extracted, so it has no Graphiti episode to pair with.
-        # A verbatim-skipped client (Menhir marks it READY with substage 'verbatim_skipped' and
-        # extraction_skipped_for = the projection that extracted the same text) has none either:
-        # it passes only when that projection is READY in this namespace with the same
-        # reference_time. The projection is itself a queue node here, so its own pairing is checked.
-        f"MATCH (q:Episodic {{namespace:'{ns}'}}) "
-        "WHERE q.valid_at IS NULL AND q.processing_state = 'READY' "
-        f"AND coalesce(q.extraction_mode, '') <> '{_STORE_ONLY}' "
-        f"OPTIONAL MATCH (g:Episodic {{group_id:'{ns}'}}) "
-        "WHERE g.uuid = q.resolved_episode_uuid AND g.valid_at IS NOT NULL "
-        "WITH q, collect(g) AS gs, "
-        "q.processing_substage = 'verbatim_skipped' AND q.extraction_skipped_for IS NOT NULL "
-        "AS skipped "
-        f"OPTIONAL MATCH (p:Episodic {{namespace:'{ns}'}}) "
-        "WHERE skipped AND p.uuid = q.extraction_skipped_for "
-        "AND coalesce(p.is_evidence_projection, false) AND p.processing_state = 'READY' "
-        "WITH q, gs, skipped, collect(p) AS ps "
-        "RETURN sum(CASE WHEN skipped THEN "
-        "CASE WHEN size(ps) = 1 AND q.reference_time IS NOT NULL "
-        "AND ps[0].reference_time IS NOT NULL "
-        "AND datetime(toString(ps[0].reference_time)).epochMillis "
-        "= datetime(toString(q.reference_time)).epochMillis THEN 0 ELSE 1 END "
-        "WHEN size(gs) <> 1 OR q.reference_time IS NULL THEN 1 "
-        "WHEN datetime(toString(gs[0].valid_at)).epochMillis "
-        "<> datetime(toString(q.reference_time)).epochMillis THEN 1 ELSE 0 END);",
-        1,
-    )
-    (cross_namespace,) = _cypher_counts(
-        # Nodes stamped with two silos, plus any edge from this namespace to another silo's node,
-        # or carrying another silo's namespace/group_id itself.
-        f"MATCH (a) WHERE toLower(a.namespace) = '{nl}' OR toLower(a.group_id) = '{nl}' "
-        "WITH a, CASE WHEN a.namespace IS NOT NULL AND a.group_id IS NOT NULL "
-        "AND toLower(a.namespace) <> toLower(a.group_id) THEN 1 ELSE 0 END AS split "
-        "OPTIONAL MATCH (a)-[r]-(b) "
-        f"WHERE toLower(coalesce(b.namespace, '{nl}')) <> '{nl}' "
-        f"OR toLower(coalesce(b.group_id, '{nl}')) <> '{nl}' "
-        f"OR toLower(coalesce(r.namespace, '{nl}')) <> '{nl}' "
-        f"OR toLower(coalesce(r.group_id, '{nl}')) <> '{nl}' "
-        "WITH a, split, count(r) AS crossing "
-        "RETURN sum(split) + sum(crossing);",
-        1,
-    )
-    return {
-        "user_turns_admitted": admitted,
-        "admitted_turns_unprojected": unprojected,
-        "assertions_unfounded": unfounded,
-        "episodes_valid_at_unsubmitted": valid_at_unsubmitted,
-        "ready_episodes_time_unpaired": time_unpaired,
-        "cross_namespace_links": cross_namespace,
-    }
+    try:
+        integrity = _build_op("fetch_namespace_build_counts", {
+            "namespace": ns,
+            "sections": ["integrity"],
+            "submitted_epoch_millis": list(submitted_epoch_millis),
+        })["integrity"]
+        return {key: -1 if integrity.get(key) is None else int(integrity[key]) for key in keys}
+    except Exception:
+        return {key: -1 for key in keys}
 
 
 def _consolidate_lanes(
@@ -725,33 +542,101 @@ def _check_menhir_health(admin: httpx.Client, menhir_url: str) -> bool:
     return isinstance(body, dict)
 
 
+_BACKEND_PATH = "/api/internal/backend/"
+_IDEMPOTENCY_CONFLICT_DETAIL = "idempotency_key was already used with a different request"
+
+
+def _status_error(status: int, detail: str, url: str) -> httpx.HTTPStatusError:
+    """Build the httpx error the REST path raised for this status."""
+    request = httpx.Request("POST", url)
+    response = httpx.Response(status, request=request, json={"detail": detail})
+    return httpx.HTTPStatusError(f"HTTP {status}: {detail}", request=request, response=response)
+
+
+class SyncMenhir:
+    """Sync facade over MenhirSystem: one persistent event loop, httpx-compatible errors.
+
+    BackendClient (Menhir) raises httpx transport errors and httpx.HTTPStatusError (5xx and other
+    statuses) unchanged, but turns the dispatch's 400 into ValueError(detail) and 403 into
+    PermissionError(detail), and an IdempotencyKeyConflict arrives as the 400 ValueError
+    "idempotency_key was already used with a different request". Callers here were written for the
+    REST client, so those are re-raised as httpx.HTTPStatusError with the original status (409 for
+    the conflict).
+    """
+
+    def __init__(self, system: MenhirSystem, base_url: str = "") -> None:
+        self.system = system
+        self._base_url = base_url.rstrip("/")
+        self._loop = asyncio.new_event_loop()
+
+    def _run(self, coro, path: str):
+        try:
+            return self._loop.run_until_complete(coro)
+        except httpx.HTTPError:
+            raise
+        except PermissionError as exc:
+            raise _status_error(403, str(exc), self._base_url + path) from exc
+        except ValueError as exc:
+            status = 409 if _IDEMPOTENCY_CONFLICT_DETAIL in str(exc) else 400
+            raise _status_error(status, str(exc), self._base_url + path) from exc
+
+    def record_turn_evidence(self, namespace: str, text: str, **kw) -> dict:
+        return self._run(
+            self.system.record_turn_evidence(namespace, text, **kw), _BACKEND_PATH + "record_turn_evidence"
+        )
+
+    def ingest(self, namespace: str, role: str, content: str, **kw) -> dict | None:
+        return self._run(self.system.ingest(namespace, role, content, **kw), _BACKEND_PATH + "queue_episode")
+
+    def call(self, op: str, body: dict | None = None):
+        return self._run(getattr(self.system.backend, op)(**(body or {})), _BACKEND_PATH + op)
+
+    def close(self) -> None:
+        if self._loop.is_closed():
+            return
+        try:
+            aclose = getattr(self.system.backend, "aclose", None)
+            if aclose is not None:
+                self._loop.run_until_complete(aclose())
+        finally:
+            self._loop.close()
+
+
+_FACADE: SyncMenhir | None = None
+
+
 def _backend(admin: httpx.Client, menhir_url: str, op: str, body: dict | None = None):
-    """Invoke an internal backend operation; raises on HTTP error."""
-    url = menhir_url.rstrip("/") + "/api/internal/backend/" + op
-    resp = admin.post(url, json=(body or {}))
-    resp.raise_for_status()
-    return resp.json()
+    """Invoke an internal backend operation through Menhir's BackendClient; raises httpx errors."""
+    if _FACADE is None:
+        raise GraphUnreadable("menhir backend not bound")
+    return _FACADE.call(op, body or {})
 
 
 def _reset_namespace(admin: httpx.Client, menhir_url: str, namespace: str) -> None:
     """Fully clear one throwaway namespace, including namespace-keyed TurnEvidence.
 
-    The ordinary DELETE endpoint has a 200-node safety ceiling and does not purge TurnEvidence.
-    This benchmark owns its isolated namespace, so force-delete the graph partition explicitly,
-    then call the Phase-3 reset to clear evidence that is keyed by namespace rather than group_id.
+    One ``reset_namespace`` backend op force-deletes the graph partition and clears the
+    namespace-keyed TurnEvidence (it includes the Phase-3 reset).
     """
-    _backend(
-        admin,
-        menhir_url,
-        "delete_namespace",
-        {"namespace": namespace, "force": True},
-    )
-    response = admin.post(
-        menhir_url.rstrip("/") + "/api/phase3/reset",
-        params={"namespace": namespace},
-        timeout=300.0,
-    )
-    response.raise_for_status()
+    _backend(admin, menhir_url, "reset_namespace", {"namespace": namespace, "force": True})
+
+
+_BUILD_BACKEND: tuple[httpx.Client, str] | None = None
+
+
+def _bind_build_backend(admin: httpx.Client, menhir_url: str, facade: SyncMenhir | None = None) -> None:
+    """Bind the Menhir backend the build-count readers use."""
+    global _BUILD_BACKEND, _FACADE
+    _BUILD_BACKEND = (admin, menhir_url)
+    _FACADE = facade
+
+
+def _build_op(op: str, body: dict):
+    """Call a Menhir backend op through the bound client; GraphUnreadable when unbound."""
+    if _BUILD_BACKEND is None:
+        raise GraphUnreadable("menhir backend not bound")
+    admin, menhir_url = _BUILD_BACKEND
+    return _backend(admin, menhir_url, op, body)
 
 
 def _await_stale_episode_settlement(
@@ -900,32 +785,19 @@ def _failed_evidence_projections(namespace: str) -> list[tuple[str, bool]]:
     Submitted transcript episodes are retried by ``_ingest_pool`` while their chronological
     position is still active. Evidence projections are generated asynchronously by Menhir, so
     their UUIDs are invisible to that scheduler and require this post-drain enumeration.
-    Raises GraphUnreadable when the read fails (``_cypher`` returns [] for a failure and for
-    "none"), so a count that always returns one row is read first and must match the list.
+    Raises GraphUnreadable when the Menhir backend read fails.
     """
-    where = (
-        f"MATCH (e:Episodic {{namespace:'{namespace}'}}) "
-        "WHERE e.processing_state='FAILED' AND coalesce(e.is_evidence_projection, false) "
-    )
-    count_rows = _cypher(where + "RETURN count(e) AS n;")
     try:
-        expected = int(count_rows[0][0])
-    except (IndexError, TypeError, ValueError):
-        raise GraphUnreadable(f"could not count failed evidence projections in {namespace}")
-    if expected == 0:
-        return []
-    markers = ", ".join(f"'{marker}'" for marker in _PROVIDER_FAILURE_MARKERS)
-    rows = _cypher(
-        where
-        + "WITH e, toLower(coalesce(toString(e.processing_error), '')) AS err "
-        + f"RETURN e.uuid AS uuid, any(m IN [{markers}] WHERE err CONTAINS m) AS provider "
-        + "ORDER BY uuid;"
+        rows = _build_op("list_failed_evidence_projections", {"namespace": namespace})
+    except Exception as exc:
+        raise GraphUnreadable(
+            f"could not list failed evidence projections in {namespace}"
+        ) from exc
+    return sorted(
+        (str(r["uuid"]), _provider_caused(r.get("processing_error")))
+        for r in rows
+        if str(r.get("uuid") or "").strip()
     )
-    found = [(str(row[0]), str(row[1]).lower() == "true") for row in rows
-             if len(row) >= 2 and str(row[0]).strip()]
-    if len(found) != expected:
-        raise GraphUnreadable(f"could not list failed evidence projections in {namespace}")
-    return found
 
 
 def _failed_evidence_projection_uuids(namespace: str) -> list[str]:
@@ -1148,7 +1020,7 @@ def _refuse_unrecorded_dirty(remaining: list[str], state: IngestStateLog, listed
 
 def _ingest_pool(
     runs: list[NamespaceRun],
-    client: HttpMenhirClient,
+    client: SyncMenhir,
     admin: httpx.Client,
     menhir_url: str,
     state: IngestStateLog,
@@ -1408,6 +1280,12 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ap = argparse.ArgumentParser()
     ap.add_argument("--limit", type=int, default=500)
     ap.add_argument("--menhir-url", default="http://localhost:8102")
+    ap.add_argument(
+        "--menhir-root",
+        default=None,
+        help="Menhir checkout whose BackendClient talks to --menhir-url; "
+        "defaults to MENHIR_FRONTIER, then MENHIR_MAIN",
+    )
     ap.add_argument("--manifest", default=DEFAULT_MANIFEST)
     ap.add_argument(
         "--fixture",
@@ -1489,6 +1367,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ap.add_argument("--writer-workers", type=_positive_int, default=16,
                     help="adaptive-writer: concurrent writer requests")
     args = ap.parse_args(argv)
+    args.menhir_root = args.menhir_root or os.getenv("MENHIR_FRONTIER") or os.getenv("MENHIR_MAIN") or None
     # argparse does not check an env-supplied default against `choices`.
     if args.segmentation == "adaptive-writer" and args.writer_granularity not in memory_writer.GRANULARITIES:
         ap.error(f"--writer-granularity must be one of {memory_writer.GRANULARITIES}")
@@ -1894,7 +1773,35 @@ def _require_no_failed_episodes(
         )
 
 
+_MENHIR_ROOT: str | None = None
+
+
+def HttpMenhirClient(menhir_url: str) -> SyncMenhir:  # noqa: N802
+    """Open the BackendClient facade for ``menhir_url`` (Menhir code from ``_MENHIR_ROOT``).
+
+    Kept under the old client's name only because the main() tests patch ``HttpMenhirClient``;
+    it no longer speaks REST.
+    """
+    if not _MENHIR_ROOT:
+        raise SystemExit("--menhir-root is required when neither MENHIR_FRONTIER nor MENHIR_MAIN is set")
+    return SyncMenhir(
+        MenhirSystem(load_backend_client(Path(_MENHIR_ROOT), menhir_url), user_id="remote-api"),
+        menhir_url,
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
+    closers: list = []
+    try:
+        return _main(argv, closers)
+    finally:
+        for closer in closers:
+            close = getattr(closer, "close", None)
+            if callable(close):
+                close()
+
+
+def _main(argv: list[str] | None, closers: list) -> int:
     args = _parse_args(argv)
     requested_lanes = {
         "scalar": args.consolidate_scalar,
@@ -1938,8 +1845,12 @@ def main(argv: list[str] | None = None) -> int:
     from archolith_bench.harness.memory_ab import assert_not_production
 
     assert_not_production(args.menhir_url)
+    global _MENHIR_ROOT
+    _MENHIR_ROOT = args.menhir_root
     client = HttpMenhirClient(args.menhir_url)
+    closers.append(client)
     admin = httpx.Client(timeout=120.0)
+    _bind_build_backend(admin, args.menhir_url, client)
     t_all = time.time()
     target_items = (
         items[:args.manifest_item_limit]

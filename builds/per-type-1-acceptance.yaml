@@ -1,0 +1,11 @@
+# One item per LongMemEval question type (6 types), the P4 acceptance build.
+# Fixture: generated, not committed. Regenerate with
+#   python scripts/longmemeval/lib/make_smoke_fixture.py multi --per-type 1
+# The sha pins the bytes written on Windows (json.dump through text mode); the build refuses others.
+extends: default.yaml
+
+dataset:
+  limit: 6
+  fixture_path: scripts/longmemeval/fixtures/multi-smoke-6.json
+  fixture_count: 6
+  fixture_sha256: 151d2a962b013b1836292f8b1c34754d18a854ed4e896f9dc1a0fcb438551db6

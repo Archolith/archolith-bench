@@ -14,6 +14,8 @@ from pathlib import Path
 
 import pytest
 
+from archolith_bench.build import pipeline
+
 ROOT = Path(__file__).resolve().parents[1]
 LME = ROOT / "scripts" / "longmemeval"
 
@@ -163,12 +165,31 @@ def test_config_defaults_off_and_build_records_and_checks_it() -> None:
     assert re.search(r'^LME_ASSISTANT_STORE_ONLY="\$\{LME_ASSISTANT_STORE_ONLY:-0\}"', config, re.MULTILINE)
     # The policy is not switchable since the #168 freeze, so the bench neither sets nor records it.
     assert "LME_ASSISTANT_TURN_POLICY" not in config
-    build = (LME / "build_graph.sh").read_text(encoding="utf-8")
-    assert 'export LME_ASSISTANT_STORE_ONLY="${LME_ASSISTANT_STORE_ONLY}"' in build
-    assert '--setting "assistant_store_only=${LME_ASSISTANT_STORE_ONLY}"' in build
+    build = Path(pipeline.__file__).read_text(encoding="utf-8")
+    assert ("LME_ASSISTANT_STORE_ONLY", "${LME_ASSISTANT_STORE_ONLY}") in pipeline.MENHIR_ENV
+    assert ("assistant_store_only", "${LME_ASSISTANT_STORE_ONLY}") in pipeline.PHASE_SETTINGS
     assert "LME_ASSISTANT_TURN_POLICY" not in build
-    assert "export MENHIR_ASSISTANT_TURNS_STORE_ONLY_ENABLED" not in build
-    serve = build.index('"${MENHIR_FRONTIER_BIN}" serve')
-    assert build.index("LME_ASSISTANT_STORE_ONLY=1 needs LME_SEGMENTATION=adaptive") < serve
+    assert not any(name == "MENHIR_ASSISTANT_TURNS_STORE_ONLY_ENABLED"
+                   for name, _ in (*pipeline.MENHIR_ENV, *pipeline._EMBED_ENV,
+                                   *pipeline._PROVIDER_ENV["openai"], *pipeline._PROVIDER_ENV["local"]))
+    # The ordering before serve is covered by tests/test_build_pipeline.py (serving_tree_problem
+    # is checked before the serve Popen).
+
+
+def _serving_settings(frontier: Path, segmentation: str = "adaptive") -> dict[str, str]:
+    return {
+        "MENHIR_FRONTIER": frontier.as_posix(), "LME_ASSISTANT_STORE_ONLY": "1",
+        "LME_SEGMENTATION": segmentation, "LME_STORE_ONLY_CONTEXT": "0", "LME_EMBED_BACKFILL": "0",
+    }
+
+
+def test_build_refuses_assistant_store_only_without_adaptive_or_the_policy(tmp_path: Path) -> None:
+    flags = tmp_path / "src" / "menhir" / "config" / "feature_flags.py"
+    problem = pipeline.serving_tree_problem(_serving_settings(tmp_path, "adaptive-writer"))
+    assert problem == "LME_ASSISTANT_STORE_ONLY=1 needs LME_SEGMENTATION=adaptive (got adaptive-writer)"
     # An older Menhir ignores the policy env and would extract every raw assistant turn.
-    assert build.index("has no assistant-turn policy") < serve
+    problem = pipeline.serving_tree_problem(_serving_settings(tmp_path))
+    assert problem and "has no assistant-turn policy" in problem
+    flags.parent.mkdir(parents=True)
+    flags.write_text('RETIRED = {"MENHIR_ASSISTANT_TURNS_STORE_ONLY_ENABLED": "x"}\n', encoding="utf-8")
+    assert pipeline.serving_tree_problem(_serving_settings(tmp_path)) is None
