@@ -514,7 +514,9 @@ log "ingest complete. promoting SESSION -> PERSISTENT (regular memories)..."
 
 # Write the benchmark as regular memories: freshly-extracted nodes are SESSION-scoped and
 # would be invisible to build_context / plain recall (recall_service.py:937). See
-# promote_persistent.sh for the full rationale.
+# promote_persistent.sh for the full rationale. It promotes this manifest's namespaces through
+# the ingest Menhir, which is still serving here.
+export MENHIR_URL LME_MANIFEST_PATH
 "$(dirname "${BASH_SOURCE[0]}")/promote_persistent.sh"
 
 # NO LONGER MANDATORY -- and off by default. The old comment here claimed graphiti-core does not
