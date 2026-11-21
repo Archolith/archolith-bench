@@ -63,8 +63,8 @@ when each has a cost monitor with a manual ceiling. The full rule is in
 #    this estimate is stale until re-measured)
 python -m archolith_bench.build --build builds/default.yaml   # or: ./build_graph.sh 500
 
-# 2. Check graph status (read-only; safe to run mid-ingest)
-./lme.sh status
+# 2. Check build progress (read-only; safe mid-ingest: live counts come from the build's own Menhir)
+python -m archolith_bench.build --build builds/default.yaml --check   # --watch 30 to repeat
 
 # 3. Recall-only A/B: main vs frontier on the built graph
 python -m archolith_bench.staged run --arm arms/menhir_recall.yaml --fixture <fixture.json> \
@@ -219,7 +219,8 @@ later from these immutable token counts and the price schedule being evaluated.
 
 ## Acceptance Validation
 
-`lme.sh validate --expected N` runs `lib/validate_run.py` against the current provenance file,
+`python -m archolith_bench.build --build builds/<x>.yaml --check --expected-items N` runs
+`lib/validate_run.py` against the build's provenance file,
 manifest, and telemetry DB. This acceptance command requires fresh-graph, clean-commit,
 fingerprinted provenance and refuses to run without `--expected N`, so a short manifest cannot
 pass. It emits a machine-readable JSON report covering:
@@ -687,10 +688,10 @@ development probes; results produced with it are not canonical benchmark evidenc
 The Docker container takes 10-20s to start. If it persists, check `docker ps` and `docker logs menhir-lme-neo4j`.
 
 ### Graph has 0 episodic nodes
-The ingest may not have finished. Check `lme.sh status` and wait for queue_depth==0.
+The ingest may not have finished. Check `python -m archolith_bench.build --build builds/<x>.yaml --check` and wait for queue=0.
 
 ### FAILED episodes
-The ingest script retries FAILED episodes once. If episodes still fail, they hit the per-job LLM budget (`LME_MAX_LLM_CALLS_PER_JOB`, default 100). Run `lme.sh retry` to reset+drain them.
+The ingest script retries FAILED episodes once. If episodes still fail, they hit the per-job LLM budget (`LME_MAX_LLM_CALLS_PER_JOB`, default 100). Run `python -m archolith_bench.build --build builds/<x>.yaml --retry-failed` to reset+drain them.
 
 A scalar build then **stops** on any residual FAILED episode. This gate is strict and has no
 tolerance knob — a FAILED episode means a turn never reached the graph, so scalar views, user-founded

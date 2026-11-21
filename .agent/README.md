@@ -124,7 +124,7 @@ Memory-specific A/B testing for menhir's recall and ingest, consolidated under
 Quickstart:
 ```bash
 ./scripts/longmemeval/lme.sh -h                 # all commands
-./scripts/longmemeval/lme.sh status             # read-only graph/queue state
+python -m archolith_bench.build --build builds/default.yaml --check  # read-only progress
 python -m archolith_bench.build --build builds/default.yaml  # persistent graph (~1 day for oracle)
 python -m archolith_bench.staged run --arm arms/menhir_recall.yaml --fixture <f.json> \
   --serve <menhir tree> --graph builds/default.yaml  # recall-only run against that graph

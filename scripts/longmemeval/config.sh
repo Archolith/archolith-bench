@@ -225,7 +225,7 @@ LME_RESULTS_DIR="${LME_RESULTS_DIR:-${BENCH_DIR}/results/lme-ingest}"
 # with the canonical persistent graph's manifest.json, and a later full build against
 # the real graph does not see the smoke items as "already done" (or vice versa).
 # Default container name keeps the original unscoped filename for backward compat with
-# existing manifests/status.sh history.
+# existing manifests.
 if [ "${LME_NEO4J_NAME}" = "menhir-lme-neo4j" ]; then
   LME_MANIFEST_PATH="${LME_MANIFEST_PATH:-${LME_RESULTS_DIR}/manifest.json}"
 else

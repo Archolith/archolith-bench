@@ -1,6 +1,7 @@
 """CLI: python -m archolith_bench.build --build builds/x.yaml [run-control flags] [--dry-run].
 
 --retry-failed re-enriches the built graph's FAILED episodes (LME_RETRY_FAILED=1) instead of building.
+--check reports the build's progress (and, with --expected-items, its acceptance verdict); it builds nothing.
 """
 
 from __future__ import annotations
@@ -41,12 +42,32 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--retry-failed", action="store_true",
                    help="LME_RETRY_FAILED=1: reset and drain this build's FAILED episodes on the existing graph")
     p.add_argument("--drain-timeout", type=int, help="LME_RETRY_DRAIN_TIMEOUT seconds (--retry-failed; default 86400)")
+    p.add_argument("--check", action="store_true",
+                   help="report progress (manifest, state log, live Menhir ops if one serves); never builds")
+    p.add_argument("--expected-items", type=int, help="--check: also run canonical acceptance for N items")
+    p.add_argument("--watch", type=int, metavar="SECS", help="--check: repeat every SECS, logging to progress.log")
+    p.add_argument("--menhir-url", help="--check: Menhir to read live state from (default: the build port)")
     p.add_argument("--dry-run", action="store_true", help="print the resolution and run nothing")
     return p
 
 
 def _mask(var: str, value: str) -> str:
     return "***" if var == API_KEY_VAR else value
+
+
+def _check(args: argparse.Namespace, config: dict, environ: dict[str, str]) -> int:
+    from ..harness.targets import TargetRefused, assert_allowed_target
+    from .check import check_paths, run_check
+
+    url = args.menhir_url or f"http://127.0.0.1:{config['container']['menhir_port']}"
+    try:
+        assert_allowed_target(url, what="--check Menhir")
+    except TargetRefused as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    paths = check_paths(config, environ, args.results_dir)
+    return run_check(paths, limit=int(config["dataset"]["limit"]), menhir_url=url,
+                     expected_items=args.expected_items, watch=args.watch)
 
 
 def main(argv: list[str] | None = None, environ: dict[str, str] | None = None) -> int:
@@ -63,6 +84,21 @@ def main(argv: list[str] | None = None, environ: dict[str, str] | None = None) -
     if args.drain_timeout is not None and not args.retry_failed:
         print("error: --drain-timeout applies only to --retry-failed", file=sys.stderr)
         return 2
+    check_only = [f for f, v in (("--expected-items", args.expected_items), ("--watch", args.watch),
+                                 ("--menhir-url", args.menhir_url)) if v is not None]
+    if check_only and not args.check:
+        print(f"error: {', '.join(check_only)} applies only to --check", file=sys.stderr)
+        return 2
+    if args.check and (args.retry_failed or args.resume or args.fresh or args.reset_file
+                       or args.stop_after_items is not None or args.dry_run):
+        print("error: --check takes no build, retry or dry-run flag", file=sys.stderr)
+        return 2
+    if args.watch is not None and (args.watch < 1 or args.expected_items is not None):
+        print("error: --watch needs SECS >= 1 and cannot be combined with --expected-items", file=sys.stderr)
+        return 2
+    if args.expected_items is not None and args.expected_items < 1:
+        print("error: --expected-items must be a positive item count", file=sys.stderr)
+        return 2
     try:
         config = resolve_yaml(args.build)
     except (ValueError, OSError, yaml.YAMLError) as exc:
@@ -76,6 +112,8 @@ def main(argv: list[str] | None = None, environ: dict[str, str] | None = None) -
     for w in warnings:
         log.warning(w)
     record = resolved_record(args.build, config, overrides)
+    if args.check:
+        return _check(args, config, environ)
 
     try:
         sets, unset = env_assignments(config, environ, overrides)

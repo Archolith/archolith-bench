@@ -24,7 +24,8 @@ LME_KU_RUN_ID=scalar-<arm>-<date> LME_KU_ARM=<baseline|candidate> \
   ./run_knowledge_update_buildout.sh
 
 # 3. Validate the run
-./lme.sh validate --expected 78
+# (same LME_* environment as the buildout, so --check finds its results dir and manifest)
+python -m archolith_bench.build --build builds/default.yaml --check --expected-items 78
 
 # 4. Inspect the acceptance report
 cat results/lme-ingest/acceptance-report.json | python -m json.tool
@@ -53,7 +54,7 @@ The dashboard's `ScalarTaskReader` reads this path for audit provenance display.
 
 ## Acceptance Report
 
-`lme.sh validate --expected N` (required) checks:
+`build --check --expected-items N` (required) checks:
 
 - Manifest cardinality matches expected item count
 - Zero failed episodes
