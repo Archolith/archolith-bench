@@ -4,11 +4,11 @@
 # Usage:
 #   lme.sh backfill-dates [--dry-run]  # repair valid_at from real session dates (no re-ingest)
 #   lme.sh status [watch [secs]]       # read-only progress tracker
-#   lme.sh retry                       # reset+drain FAILED episodes
 #   lme.sh validate --expected N       # final acceptance report (provenance + manifest + telemetry)
 #   lme.sh -h|--help                   # show this help
 #
 # Builds:  python -m archolith_bench.build --build builds/<x>.yaml  (promotion runs inside it)
+# Retry:   python -m archolith_bench.build --build builds/<x>.yaml --retry-failed [--drain-timeout S]
 # Recall:  python -m archolith_bench.staged run [--serve <menhir tree> --graph builds/<x>.yaml]|rerun|compare
 # Research tools run directly: analysis/answer_matrix.sh, analysis/msc_sweep.sh, analysis/brief_ab.sh,
 # analysis/entropy.sh, analysis/lib/retrieval_quality.py (presence / ir-gate).
@@ -34,9 +34,6 @@ case "$COMMAND" in
     ;;
   status)
     "${_LONGMEMEVAL_DIR}/status.sh" "${2:-}" "${3:-}"
-    ;;
-  retry)
-    "${_LONGMEMEVAL_DIR}/retry.sh"
     ;;
   validate)
     # Canonical acceptance: without an expected count any non-empty manifest would pass.

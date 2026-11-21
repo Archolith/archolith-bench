@@ -192,7 +192,6 @@ def test_longmemeval_container_guards_do_not_use_pipefail_sensitive_grep() -> No
 
     for relative_path in (
         "build_graph.sh",
-        "retry.sh",
         "run_knowledge_update_buildout.sh",
         "run_suburbs_fixture.sh",
     ):
@@ -1377,11 +1376,8 @@ def test_build_script_passes_selected_lanes_to_server_and_ingest(scalar, counter
     # Menhir removed the counter lane; the build no longer exports its flag.
     names = {name for name, _ in pipeline.MENHIR_ENV}
     assert "MENHIR_PERSONAL_MEMORY_CONSOLIDATION_ENABLED" not in names
-    # Menhir archived the event-history lane; neither the build nor retry.sh exports its flag.
+    # Menhir archived the event-history lane; the build does not export its flag.
     assert not any(n.startswith("MENHIR_PERSONAL_MEMORY_EVENT_HISTORY") for n in names)
-    text = (ROOT / "scripts/longmemeval/retry.sh").read_text()
-    assert not any(ln.startswith("export MENHIR_PERSONAL_MEMORY_EVENT_HISTORY")
-                   for ln in text.splitlines())
     assert "--consolidate-events" not in lines
     for option, value in [("--consolidate-scalar", scalar), ("--consolidate-counter", counter)]:
         assert (option in lines) is (value == "1")

@@ -120,7 +120,7 @@ Choose and freeze the mode before the final ingest; no mode or feature default i
 Anchored time is on by default for builds: `LME_ANCHORED_TIME_RESOLVER=1`, with
 `LME_ANCHORED_TIME_MODEL` (and `_ATTACH_MODEL`) defaulting to `gpt-6-luna`. Since the #168 freeze
 Menhir runs the attach check and expiry whenever the resolver is on; neither is a separate setting.
-The resolver requires `LME_EXTRACT_PROVIDER=openai`. `build_graph.sh` and `retry.sh` refuse to start
+The resolver requires `LME_EXTRACT_PROVIDER=openai`. The build (and `--retry-failed`) refuses to start
 Menhir when the environment sets a flag the serving tree lists as retired (`lib/retired_flags.py`).
 `LME_OPENAI_SERVICE_TIER` (default `flex`) is forwarded as `MENHIR_OPENAI_SERVICE_TIER` (set in
 `config.sh`, so the recall and analysis serves of every wrapper get it too, not only the build) and, for
@@ -130,13 +130,15 @@ retries it) rather than scoring a failed answer or judge call. These settings
 and `LME_EXTRACT_MODEL` are part of the graph's provenance identity: a resume that changes them,
 or that sets them on a graph whose record predates them, is refused.
 
-`retry.sh` exports the same ingest settings as `build_graph.sh` and runs
+`build --retry-failed` serves Menhir with the build's own settings and runs
 `run_provenance.py check-retry` first, refusing to re-enrich a graph whose recorded settings,
-commits, or surface differ. It records its pass as a `retry-failed` phase.
+commits, or surface differ. It never creates or starts the graph, and records its pass as a
+`retry-failed` phase. The reset and drain go through Menhir ops (`lib/retry_failed.py`), over this
+build's manifest namespaces only.
 
 1. **Build**: `python -m archolith_bench.build --build builds/<x>.yaml` (or `build_graph.sh [N]`) — ingest N items (default 30, full 500 in oracle mode takes ~1 day) into a fresh persistent Neo4j, then leave it up. Build finishes by promoting every manifest namespace to PERSISTENT scope through Menhir's `promote_namespace_scope` op (`lib/promote.py`), so builds end ready-to-recall. Idempotent and non-destructive. See [Memory scope](#memory-scope-regular-vs-session) below.
 2. **Recall A/B**: `python -m archolith_bench.staged run --serve <menhir tree> --graph builds/<x>.yaml ...` per tree, then `staged compare` — serves that tree's source over the built graph for the search stage; read-only, never resets it.
-3. **Retry failed**: `lme.sh retry` — reset+drain episodic nodes in FAILED state.
+3. **Retry failed**: `python -m archolith_bench.build --build builds/<x>.yaml --retry-failed [--drain-timeout S]` — reset+drain this build's FAILED episodes.
 
 **Rule**: Never reset a built graph. The manifest (`results/lme-ingest/manifest.json` for the
 canonical `menhir-lme-neo4j` container; `manifest-<LME_NEO4J_NAME>.json` for any other container
@@ -748,4 +750,4 @@ add new features to the standalone dashboard; extend the Menhir explorer instead
 
 - `.agent/README.md` — main project index
 - `menhir-frontier/.agent/plans/anecdotal-recall-oracle-ladder.md` — oracle routing roadmap
-- `archolith-bench/scripts/longmemeval/lib/` — Python support (ingest, retry, expected turns)
+- `archolith-bench/scripts/longmemeval/lib/` — Python support (ingest, promote, retry_failed, expected turns)

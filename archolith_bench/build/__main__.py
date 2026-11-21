@@ -1,4 +1,7 @@
-"""CLI: python -m archolith_bench.build --build builds/x.yaml [run-control flags] [--dry-run]."""
+"""CLI: python -m archolith_bench.build --build builds/x.yaml [run-control flags] [--dry-run].
+
+--retry-failed re-enriches the built graph's FAILED episodes (LME_RETRY_FAILED=1) instead of building.
+"""
 
 from __future__ import annotations
 
@@ -35,6 +38,9 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--results-dir", help="LME_RESULTS_DIR; build.resolved.yaml is written here")
     p.add_argument("--reset-file", help="LME_RESET_FILE")
     p.add_argument("--stop-after-items", type=int, help="LME_INGEST_STOP_AFTER_ITEMS")
+    p.add_argument("--retry-failed", action="store_true",
+                   help="LME_RETRY_FAILED=1: reset and drain this build's FAILED episodes on the existing graph")
+    p.add_argument("--drain-timeout", type=int, help="LME_RETRY_DRAIN_TIMEOUT seconds (--retry-failed; default 86400)")
     p.add_argument("--dry-run", action="store_true", help="print the resolution and run nothing")
     return p
 
@@ -49,6 +55,13 @@ def main(argv: list[str] | None = None, environ: dict[str, str] | None = None) -
     environ = dict(os.environ if environ is None else environ)
     if args.resume and args.fresh:
         print("error: --resume and --fresh are mutually exclusive", file=sys.stderr)
+        return 2
+    if args.retry_failed and (args.resume or args.fresh or args.reset_file or args.stop_after_items is not None):
+        print("error: --retry-failed takes no build run-control flag (--resume/--fresh/--reset-file/--stop-after-items)",
+              file=sys.stderr)
+        return 2
+    if args.drain_timeout is not None and not args.retry_failed:
+        print("error: --drain-timeout applies only to --retry-failed", file=sys.stderr)
         return 2
     try:
         config = resolve_yaml(args.build)
@@ -84,6 +97,10 @@ def main(argv: list[str] | None = None, environ: dict[str, str] | None = None) -
         run_control["LME_RESET_FILE"] = args.reset_file
     if args.stop_after_items is not None:
         run_control["LME_INGEST_STOP_AFTER_ITEMS"] = str(args.stop_after_items)
+    if args.retry_failed:
+        run_control["LME_RETRY_FAILED"] = "1"
+    if args.drain_timeout is not None:
+        run_control["LME_RETRY_DRAIN_TIMEOUT"] = str(args.drain_timeout)
     results_dir = args.results_dir or environ.get("LME_RESULTS_DIR")
     if args.results_dir:
         results_dir = Path(args.results_dir).resolve().as_posix()
@@ -110,6 +127,9 @@ def main(argv: list[str] | None = None, environ: dict[str, str] | None = None) -
     )
 
     env = child_env(environ, sets, unset)
+    # Only the flags select retry mode: an inherited export must not turn a build into a retry.
+    for var in ("LME_RETRY_FAILED", "LME_RETRY_DRAIN_TIMEOUT"):
+        env.pop(var, None)
     env.update(run_control)
     bash = shutil.which("bash")
     if not bash:

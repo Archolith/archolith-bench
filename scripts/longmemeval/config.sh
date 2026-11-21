@@ -17,7 +17,7 @@ ARCH_DIR="${ARCH_DIR:-${BENCH_DIR%/*}}"  # parent of archolith-bench
 MENHIR_MAIN="${MENHIR_MAIN:-${ARCH_DIR}/menhir}"
 # menhir-frontier merged into main (2026-07); that checkout no longer exists. Default
 # MENHIR_FRONTIER to MENHIR_MAIN so every consuming script (build_graph.sh, lme.sh
-# backfill-dates/presence/ir-gate, retry.sh, analysis/*) works without a manual override.
+# backfill-dates, analysis/*) works without a manual override.
 # Still overridable if a real frontier fork ever returns.
 MENHIR_FRONTIER="${MENHIR_FRONTIER:-${MENHIR_MAIN}}"
 
@@ -82,7 +82,7 @@ LME_SCORER="${LME_SCORER:-llm-judge}"
 LME_OPENAI_SERVICE_TIER="${LME_OPENAI_SERVICE_TIER:-flex}"
 export BENCHMARK_SERVICE_TIER="${BENCHMARK_SERVICE_TIER:-${LME_OPENAI_SERVICE_TIER}}"
 # Every wrapper that serves Menhir sources this file, so the recall/analysis serves get the same
-# tier as the build. build_graph.sh and retry.sh still export it explicitly (provenance parity).
+# tier as the build. The build pipeline (and its --retry-failed mode) still exports it explicitly (provenance parity).
 export MENHIR_OPENAI_SERVICE_TIER="${MENHIR_OPENAI_SERVICE_TIER:-${LME_OPENAI_SERVICE_TIER}}"
 
 # ---- Anchored time (ingest-time; part of the graph's identity) ----

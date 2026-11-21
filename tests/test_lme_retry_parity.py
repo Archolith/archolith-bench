@@ -1,7 +1,7 @@
 """Anchored-time identity and retry parity for the LongMemEval build.
 
 The failure each test guards: one graph holding two ingest configurations. A resume or a
-retry.sh pass that enriches with anchored time (or a different model) on a graph built
+build --retry-failed pass that enriches with anchored time (or a different model) on a graph built
 without it leaves nothing in the scores to show it happened.
 """
 
@@ -10,7 +10,6 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -225,59 +224,6 @@ def test_cli_check_retry_refuses_without_provenance(tmp_path: Path) -> None:
 # Script parity (static)
 # ---------------------------------------------------------------------------
 
-# Every Menhir setting that changes what enrichment writes. retry.sh re-enriches episodes in a
-# graph build_graph.sh made, so each must be exported with the same value expression.
-INGEST_ENV = (
-    "MENHIR_PERSONAL_MEMORY_SCALAR_STATE_ENABLED",
-    "MENHIR_PERSONAL_MEMORY_SCALAR_HISTORY_ENABLED",
-    "MENHIR_PERSONAL_MEMORY_SCALAR_THRESHOLD",
-    "MENHIR_CANONICAL_SELF_BINDING_MODE",
-    "MENHIR_PERSONAL_MEMORY_CHAT_MODEL",
-    "LME_REQUIRE_TURN_EVIDENCE",
-    "MENHIR_MAX_LLM_CALLS_PER_JOB",
-    "MENHIR_ANCHORED_TIME_RESOLVER",
-    "MENHIR_ANCHORED_TIME_MODEL",
-    "MENHIR_ANCHORED_TIME_ATTACH_MODEL",
-    "MENHIR_OPENAI_SERVICE_TIER",
-    "MENHIR_PERSONAL_MEMORY_CONSOLIDATION_AUDIT_ENABLED",
-    "MENHIR_PERSONAL_MEMORY_RECALL_AUDIT_ENABLED",
-    "MENHIR_LOG_LEVEL",
-    "MENHIR_MCP_TELEMETRY_DB",
-    "OPENAI_CHAT_MODEL",
-    "OPENAI_EMBED_MODEL",
-)
-
-_ASSIGN = re.compile(r'([A-Z_][A-Z0-9_]*)(?:=("(?:[^"\\]|\\.)*"|\S+))?')
-
-
-def _exports(script: str) -> dict[str, str | None]:
-    """NAME -> value expression for every `export` line (None for a bare `export NAME`)."""
-    found: dict[str, str | None] = {}
-    for line in script.splitlines():
-        stripped = line.strip()
-        if not stripped.startswith("export "):
-            continue
-        body = stripped[len("export "):].split(";")[0]
-        for name, value in _ASSIGN.findall(body):
-            found[name] = value or None
-    return found
-
-
-def _build_exports() -> dict[str, str]:
-    """NAME -> shell expression for every export the build pipeline makes for an openai build."""
-    return dict((*pipeline.MENHIR_ENV, *pipeline._PROVIDER_ENV["openai"], *pipeline._EMBED_ENV))
-
-
-def test_retry_exports_the_same_ingest_settings_as_the_build() -> None:
-    build = _build_exports()
-    retry = _exports((LME / "retry.sh").read_text(encoding="utf-8"))
-    for name in INGEST_ENV:
-        assert name in build, f"pipeline.py does not export {name}"
-        assert name in retry, f"retry.sh does not export {name}"
-        # retry.sh keeps the quotes around each value expression.
-        assert retry[name] == f'"{build[name]}"', f"{name}: build={build[name]!r} retry={retry[name]!r}"
-
-
 # Retired by the #168 freeze; Menhir ignores them, so exporting one would record a setting
 # that does not apply.
 RETIRED_ENV = (
@@ -293,37 +239,37 @@ RETIRED_ENV = (
 )
 
 
-@pytest.mark.parametrize("script", ["retry.sh"])
-def test_build_and_retry_export_no_retired_flag(script) -> None:
-    exports = _exports((LME / script).read_text(encoding="utf-8"))
-    assert not set(RETIRED_ENV) & set(exports)
-
-
 def test_build_pipeline_exports_no_retired_flag() -> None:
     names = {name for name, _ in (*pipeline.MENHIR_ENV, *pipeline._EMBED_ENV,
                                   *pipeline._PROVIDER_ENV["openai"], *pipeline._PROVIDER_ENV["local"])}
     assert not set(RETIRED_ENV) & names
 
 
-def test_retry_record_lines_match_the_build_attempt_record() -> None:
-    """The check compares JSON values, so each key must be rendered the same way (quoted or not)."""
-    retry = (LME / "retry.sh").read_text(encoding="utf-8")
-    for key in provenance.RETRY_BEHAVIOR_KEYS:
-        pattern = re.compile(rf'^\s*"{key}": .*$', re.MULTILINE)
-        entries = [(expr, kind) for k, expr, kind in pipeline.ATTEMPT_RECORD if k == key]
-        assert len(entries) == 1, f"{key}: {entries}"
-        expr, kind = entries[0]
-        build_lines = {f'"{key}": "{expr}"' if kind == "str" else f'"{key}": {expr}'}
-        retry_lines = {m.group(0).strip().rstrip(",") for m in pattern.finditer(retry)}
-        assert len(build_lines) == 1, f"{key}: {build_lines}"
-        assert retry_lines == build_lines, f"{key}: build={build_lines} retry={retry_lines}"
+def test_retry_record_keys_are_what_check_retry_compares() -> None:
+    assert set(pipeline.RETRY_RECORD_KEYS) == {
+        *provenance.RETRY_BEHAVIOR_KEYS, *provenance.COMMIT_KEYS, "surface_digest"}
 
 
-def test_retry_checks_provenance_before_starting_menhir() -> None:
-    retry = (LME / "retry.sh").read_text(encoding="utf-8")
-    assert retry.index('"check-retry"') < retry.index("serve --port")
-    assert 'phase-start "${GRAPH_PROVENANCE_PATH}"' in retry
-    assert "--phase retry-failed" in retry
+def test_retry_record_renders_each_key_as_the_build_attempt_record_does() -> None:
+    """check-retry compares JSON values, so retry and build must render each key identically."""
+    s = {
+        "LME_NEO4J_NAME": "g", "LME_NEO4J_VOL": "v", "VOLUME_PRE_EXISTED": "true", "GRAPH_FRESH": "false",
+        "LME_REQUIRE_FRESH": "0", "LME_RESUME": "0", "LME_DATASET": "d", "LONGMEMEVAL_VARIANT": "oracle",
+        "LIMIT": "1", "INGEST_TARGET": "1", "LME_NS_PREFIX": "lme-", "LME_SEGMENTATION": "adaptive",
+        "LME_INGEST_CONCURRENCY": "8", "LME_COUNTER_STATE_ENABLED": "0", "LME_EVENT_HISTORY_ENABLED": "0",
+        "LME_SCALAR_STATE_ENABLED": "1", "LME_SCALAR_HISTORY_ENABLED": "0", "LME_SCALAR_CONSOLIDATION_K": "3",
+        "LME_SCALAR_THRESHOLD": "2/3", "LME_CANONICAL_SELF_BINDING_MODE": "off", "LME_EXTRACT_MODEL": "m",
+        "LME_ANCHORED_TIME_RESOLVER": "1", "LME_ANCHORED_TIME_MODEL": "a", "LME_ANCHORED_TIME_ATTACH_MODEL": "a",
+        "LME_OPENAI_SERVICE_TIER": "flex", "LME_MAX_LLM_CALLS_PER_JOB": "100", "LME_REQUIRE_SCALAR_OUTPUT": "1",
+        "LME_REQUIRE_TURN_EVIDENCE": "1", "LME_CONSOLIDATION_AUDIT_ENABLED": "1", "LME_RECALL_AUDIT_ENABLED": "1",
+        "LME_MENHIR_LOG_LEVEL": "INFO", "MENHIR_COMMIT": "c1", "BENCH_COMMIT": "c2",
+        "GRAPH_SURFACE_DIGEST": "dg", "STARTED_AT": "t", "WRITER_MODEL_RECORD": "",
+        "WRITER_GRANULARITY_RECORD": "", "WRITER_PROMPT_SHA": "",
+    }
+    build = pipeline.attempt_record(s)
+    retry = pipeline.retry_record(s)
+    assert set(retry) == set(pipeline.RETRY_RECORD_KEYS)
+    assert retry == {k: build[k] for k in retry}
 
 
 # ---------------------------------------------------------------------------
