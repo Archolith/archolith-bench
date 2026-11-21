@@ -31,6 +31,7 @@ Sliding namespace pool (--namespace-window = pool size):
 from __future__ import annotations
 
 import argparse
+import asyncio
 import hashlib
 import json
 import math
@@ -65,7 +66,7 @@ import httpx  # noqa: E402
 from ingest_state import IngestStateLog  # noqa: E402
 from validate_run import consolidation_errors  # noqa: E402
 from archolith_bench.harness.longmemeval import LongMemEvalMemoryAdapter  # noqa: E402
-from archolith_bench.harness.menhir_client import HttpMenhirClient  # noqa: E402
+from archolith_bench.staged.menhir_system import MenhirSystem, load_backend_client  # noqa: E402
 
 import memory_writer  # noqa: E402
 from claim_segmenter import (  # noqa: E402
@@ -198,7 +199,7 @@ def _parse_lme_date(date_str: str | None) -> str | None:
 
 
 def _ingest_turn(
-    client: HttpMenhirClient,
+    client: SyncMenhir,
     ns: str,
     role: str,
     content: str,
@@ -541,12 +542,74 @@ def _check_menhir_health(admin: httpx.Client, menhir_url: str) -> bool:
     return isinstance(body, dict)
 
 
+_BACKEND_PATH = "/api/internal/backend/"
+_IDEMPOTENCY_CONFLICT_DETAIL = "idempotency_key was already used with a different request"
+
+
+def _status_error(status: int, detail: str, url: str) -> httpx.HTTPStatusError:
+    """Build the httpx error the REST path raised for this status."""
+    request = httpx.Request("POST", url)
+    response = httpx.Response(status, request=request, json={"detail": detail})
+    return httpx.HTTPStatusError(f"HTTP {status}: {detail}", request=request, response=response)
+
+
+class SyncMenhir:
+    """Sync facade over MenhirSystem: one persistent event loop, httpx-compatible errors.
+
+    BackendClient (Menhir) raises httpx transport errors and httpx.HTTPStatusError (5xx and other
+    statuses) unchanged, but turns the dispatch's 400 into ValueError(detail) and 403 into
+    PermissionError(detail), and an IdempotencyKeyConflict arrives as the 400 ValueError
+    "idempotency_key was already used with a different request". Callers here were written for the
+    REST client, so those are re-raised as httpx.HTTPStatusError with the original status (409 for
+    the conflict).
+    """
+
+    def __init__(self, system: MenhirSystem, base_url: str = "") -> None:
+        self.system = system
+        self._base_url = base_url.rstrip("/")
+        self._loop = asyncio.new_event_loop()
+
+    def _run(self, coro, path: str):
+        try:
+            return self._loop.run_until_complete(coro)
+        except httpx.HTTPError:
+            raise
+        except PermissionError as exc:
+            raise _status_error(403, str(exc), self._base_url + path) from exc
+        except ValueError as exc:
+            status = 409 if _IDEMPOTENCY_CONFLICT_DETAIL in str(exc) else 400
+            raise _status_error(status, str(exc), self._base_url + path) from exc
+
+    def record_turn_evidence(self, namespace: str, text: str, **kw) -> dict:
+        return self._run(
+            self.system.record_turn_evidence(namespace, text, **kw), _BACKEND_PATH + "record_turn_evidence"
+        )
+
+    def ingest(self, namespace: str, role: str, content: str, **kw) -> dict | None:
+        return self._run(self.system.ingest(namespace, role, content, **kw), _BACKEND_PATH + "queue_episode")
+
+    def call(self, op: str, body: dict | None = None):
+        return self._run(getattr(self.system.backend, op)(**(body or {})), _BACKEND_PATH + op)
+
+    def close(self) -> None:
+        if self._loop.is_closed():
+            return
+        try:
+            aclose = getattr(self.system.backend, "aclose", None)
+            if aclose is not None:
+                self._loop.run_until_complete(aclose())
+        finally:
+            self._loop.close()
+
+
+_FACADE: SyncMenhir | None = None
+
+
 def _backend(admin: httpx.Client, menhir_url: str, op: str, body: dict | None = None):
-    """Invoke an internal backend operation; raises on HTTP error."""
-    url = menhir_url.rstrip("/") + "/api/internal/backend/" + op
-    resp = admin.post(url, json=(body or {}))
-    resp.raise_for_status()
-    return resp.json()
+    """Invoke an internal backend operation through Menhir's BackendClient; raises httpx errors."""
+    if _FACADE is None:
+        raise GraphUnreadable("menhir backend not bound")
+    return _FACADE.call(op, body or {})
 
 
 def _reset_namespace(admin: httpx.Client, menhir_url: str, namespace: str) -> None:
@@ -561,10 +624,11 @@ def _reset_namespace(admin: httpx.Client, menhir_url: str, namespace: str) -> No
 _BUILD_BACKEND: tuple[httpx.Client, str] | None = None
 
 
-def _bind_build_backend(admin: httpx.Client, menhir_url: str) -> None:
+def _bind_build_backend(admin: httpx.Client, menhir_url: str, facade: SyncMenhir | None = None) -> None:
     """Bind the Menhir backend the build-count readers use."""
-    global _BUILD_BACKEND
+    global _BUILD_BACKEND, _FACADE
     _BUILD_BACKEND = (admin, menhir_url)
+    _FACADE = facade
 
 
 def _build_op(op: str, body: dict):
@@ -956,7 +1020,7 @@ def _refuse_unrecorded_dirty(remaining: list[str], state: IngestStateLog, listed
 
 def _ingest_pool(
     runs: list[NamespaceRun],
-    client: HttpMenhirClient,
+    client: SyncMenhir,
     admin: httpx.Client,
     menhir_url: str,
     state: IngestStateLog,
@@ -1216,6 +1280,12 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ap = argparse.ArgumentParser()
     ap.add_argument("--limit", type=int, default=500)
     ap.add_argument("--menhir-url", default="http://localhost:8102")
+    ap.add_argument(
+        "--menhir-root",
+        default=None,
+        help="Menhir checkout whose BackendClient talks to --menhir-url; "
+        "defaults to MENHIR_FRONTIER, then MENHIR_MAIN",
+    )
     ap.add_argument("--manifest", default=DEFAULT_MANIFEST)
     ap.add_argument(
         "--fixture",
@@ -1297,6 +1367,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ap.add_argument("--writer-workers", type=_positive_int, default=16,
                     help="adaptive-writer: concurrent writer requests")
     args = ap.parse_args(argv)
+    args.menhir_root = args.menhir_root or os.getenv("MENHIR_FRONTIER") or os.getenv("MENHIR_MAIN") or None
     # argparse does not check an env-supplied default against `choices`.
     if args.segmentation == "adaptive-writer" and args.writer_granularity not in memory_writer.GRANULARITIES:
         ap.error(f"--writer-granularity must be one of {memory_writer.GRANULARITIES}")
@@ -1702,7 +1773,35 @@ def _require_no_failed_episodes(
         )
 
 
+_MENHIR_ROOT: str | None = None
+
+
+def HttpMenhirClient(menhir_url: str) -> SyncMenhir:  # noqa: N802
+    """Open the BackendClient facade for ``menhir_url`` (Menhir code from ``_MENHIR_ROOT``).
+
+    Kept under the old client's name only because the main() tests patch ``HttpMenhirClient``;
+    it no longer speaks REST.
+    """
+    if not _MENHIR_ROOT:
+        raise SystemExit("--menhir-root is required when neither MENHIR_FRONTIER nor MENHIR_MAIN is set")
+    return SyncMenhir(
+        MenhirSystem(load_backend_client(Path(_MENHIR_ROOT), menhir_url), user_id="remote-api"),
+        menhir_url,
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
+    closers: list = []
+    try:
+        return _main(argv, closers)
+    finally:
+        for closer in closers:
+            close = getattr(closer, "close", None)
+            if callable(close):
+                close()
+
+
+def _main(argv: list[str] | None, closers: list) -> int:
     args = _parse_args(argv)
     requested_lanes = {
         "scalar": args.consolidate_scalar,
@@ -1746,9 +1845,12 @@ def main(argv: list[str] | None = None) -> int:
     from archolith_bench.harness.memory_ab import assert_not_production
 
     assert_not_production(args.menhir_url)
+    global _MENHIR_ROOT
+    _MENHIR_ROOT = args.menhir_root
     client = HttpMenhirClient(args.menhir_url)
+    closers.append(client)
     admin = httpx.Client(timeout=120.0)
-    _bind_build_backend(admin, args.menhir_url)
+    _bind_build_backend(admin, args.menhir_url, client)
     t_all = time.time()
     target_items = (
         items[:args.manifest_item_limit]

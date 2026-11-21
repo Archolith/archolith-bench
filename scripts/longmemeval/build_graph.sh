@@ -462,6 +462,7 @@ INGEST_ARGS+=(--consolidation-k "${LME_SCALAR_CONSOLIDATION_K}" --consolidation-
 if [ "${LME_SCALAR_STATE_ENABLED}" = "1" ]; then
   INGEST_ARGS+=(--consolidate-scalar)
 fi
+export MENHIR_FRONTIER
 "${BENCH_PY}" "$(dirname "${BASH_SOURCE[0]}")/lib/ingest.py" "${INGEST_ARGS[@]}"
 
 # Benchmark mode runs no scheduler, so nothing repairs a READY episode whose content embedding the
