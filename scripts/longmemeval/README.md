@@ -137,7 +137,7 @@ commits, or surface differ. It never creates or starts the graph, and records it
 build's manifest namespaces only.
 
 1. **Build**: `python -m archolith_bench.build --build builds/<x>.yaml` (or `build_graph.sh [N]`) — ingest N items (default 30, full 500 in oracle mode takes ~1 day) into a fresh persistent Neo4j, then leave it up. Build finishes by promoting every manifest namespace to PERSISTENT scope through Menhir's `promote_namespace_scope` op (`lib/promote.py`), so builds end ready-to-recall. Idempotent and non-destructive. See [Memory scope](#memory-scope-regular-vs-session) below.
-2. **Recall A/B**: `python -m archolith_bench.staged run --serve <menhir tree> --graph builds/<x>.yaml ...` per tree, then `staged compare` — serves that tree's source over the built graph for the search stage; read-only, never resets it.
+2. **Recall A/B**: `python -m archolith_bench.staged run --serve <menhir tree> --graph builds/<x>.yaml ...` per tree, then `staged compare` — serves that tree's source over the built graph for the search stage; read-only, never resets it. The run records both commits: `menhir_commit` is the served tree, and `graph` is the build it read (build id, Neo4j name, and the build's `menhir_commit`, `bench_commit` and `surface_digest` from `graph-provenance-<name>.json` under `--graph-results-dir`, default `$LME_RESULTS_DIR`; null when that file is missing). Both are part of the run id.
 3. **Retry failed**: `python -m archolith_bench.build --build builds/<x>.yaml --retry-failed [--drain-timeout S]` — reset+drain this build's FAILED episodes.
 
 **Rule**: Never reset a built graph. The manifest (`results/lme-ingest/manifest.json` for the

@@ -7,6 +7,7 @@ stopped when the run ends.
 
 from __future__ import annotations
 
+import json
 import os
 import socket
 import subprocess
@@ -15,7 +16,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-from ..build.config import apply_env_overrides, resolve_yaml
+from ..build.config import apply_env_overrides, resolve_yaml, resolved_record
 from ..build.pipeline import http_ok, stop, wait_http
 
 # config.sh's default for LME_NEO4J_PW (a local throwaway graph password, not a credential).
@@ -36,6 +37,35 @@ def graph_settings(build_yaml: str | Path, environ: dict[str, str]) -> dict[str,
         "service_tier": str(config["extraction"]["service_tier"]),
         "neo4j_password": environ.get("LME_NEO4J_PW") or _DEFAULT_NEO4J_PW,
     }
+
+
+# The build-side facts a served run records about its graph (provenance identity keys).
+GRAPH_BUILD_KEYS = ("menhir_commit", "bench_commit", "surface_digest")
+
+
+def graph_record(build_yaml: str | Path, environ: dict[str, str], results_dir: str | Path | None) -> dict:
+    """What a served run read: the build id and Neo4j name of ``build_yaml``, plus the commits
+    and surface digest its build recorded in ``<results_dir>/graph-provenance-<name>.json``.
+
+    The served tree's commit is recorded separately (``menhir_commit``); this is the graph's
+    build. Facts that cannot be read are recorded as None (``provenance: None``), never guessed.
+    """
+    config, overrides, _ = apply_env_overrides(resolve_yaml(build_yaml), environ)
+    name = str(config["container"]["neo4j_name"])
+    record: dict = {"build_id": resolved_record(build_yaml, config, overrides)["build_id"], "neo4j_name": name,
+                    "provenance": None, **{f"build_{k}": None for k in GRAPH_BUILD_KEYS}}
+    if not results_dir:
+        return record
+    path = Path(results_dir) / f"graph-provenance-{name}.json"
+    try:
+        doc = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return record
+    ident = doc.get("identity") if isinstance(doc.get("identity"), dict) else doc
+    record["provenance"] = path.name
+    for key in GRAPH_BUILD_KEYS:
+        record[f"build_{key}"] = ident.get(key) or None
+    return record
 
 
 def serve_bin(tree: Path, fallback: str | None) -> str:

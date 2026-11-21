@@ -686,10 +686,15 @@ def retry_failed(s: dict[str, str], limit: str, base: dict[str, str]) -> int:
 
 
 def code_facts(s: dict[str, str], base: dict[str, str]) -> tuple[tuple, tuple]:
-    """Surface digest and both repos' git facts, recorded into ``s``."""
+    """Surface digest and both repos' git facts, recorded into ``s``.
+
+    The Menhir facts are the serving tree's (MENHIR_FRONTIER): it serves ingest and runs the
+    embedding backfill, so its commit is the code that wrote the graph. MENHIR_MAIN only lends
+    its interpreter to the optional bench-side date backfill.
+    """
     rc, digest = _out([s["BENCH_PY"], (LIB / "bench_surface.py").as_posix(), "fingerprint", "--digest-only"], env=base)
     s["GRAPH_SURFACE_DIGEST"] = digest if rc == 0 else ""
-    menhir_facts = git_facts(s["MENHIR_MAIN"], base, ["src/**/*.py", "scripts/**/*.py", "src/**/*.sh", "scripts/**/*.sh"])
+    menhir_facts = git_facts(s["MENHIR_FRONTIER"], base, ["src/**/*.py", "scripts/**/*.py", "src/**/*.sh", "scripts/**/*.sh"])
     bench_facts = git_facts(s["BENCH_DIR"], base, ["scripts/**/*.py", "archolith_bench/**/*.py", "scripts/**/*.sh"])
     s["MENHIR_COMMIT"], s["BENCH_COMMIT"] = menhir_facts[0], bench_facts[0]
     s["MENHIR_DIRTY"] = "true" if menhir_facts[1] else "false"
