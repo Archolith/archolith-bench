@@ -251,12 +251,11 @@ def test_cli_drain_timeout_needs_retry(capsys):
 def _launched_env(monkeypatch, tmp_path, argv, environ):
     seen = {}
 
-    def fake_run(cmd, env=None, cwd=None):
+    def fake_run(cmd, env=None, cwd=None, input=None):
         seen.update(env)
         return type("R", (), {"returncode": 0})()
 
     monkeypatch.setattr(build_cli.subprocess, "run", fake_run)
-    monkeypatch.setattr(build_cli.shutil, "which", lambda name: "bash")
     assert build_cli.main(["--build", DEFAULT_BUILD, "--results-dir", str(tmp_path), *argv], environ=environ) == 0
     return seen
 

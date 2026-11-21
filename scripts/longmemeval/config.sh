@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # LongMemEval framework configuration — centralized, environment-overridable.
 # Source this in every script; all values use ${VAR:-default} for override.
+# python -m archolith_bench.build does not source it: archolith_bench/build/settings.py restates the
+# lines the build pipeline reads, and tests/test_build_settings.py checks the two agree. Change both.
 #
 # Usage:
 #   source "$(dirname "${BASH_SOURCE[0]}")/config.sh"

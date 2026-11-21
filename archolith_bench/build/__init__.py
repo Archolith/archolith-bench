@@ -1,1 +1,1 @@
-"""Build YAML for LongMemEval graph builds (resolved into the LME_* variables build_graph.sh reads)."""
+"""Build YAML for LongMemEval graph builds (resolved into the LME_* settings pipeline.py reads)."""

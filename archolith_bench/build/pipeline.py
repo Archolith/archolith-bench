@@ -1,10 +1,11 @@
 """LongMemEval graph build: checks, Neo4j, provenance, Menhir serve, ingest and post-steps.
 
-Moved out of build_graph.sh (P4b step 5). build_graph.sh still sources config.sh, then hands every
-LME_*/MENHIR_*/BENCH_* shell variable over on stdin. os.environ stays exactly the set the shell
-exported: children (ingest.py takes argparse defaults from it) see what they saw before.
+Moved out of build_graph.sh (P4b step 5). Two callers hand it every LME_*/MENHIR_*/BENCH_* setting
+on stdin: ``python -m archolith_bench.build``, which resolves them in Python (settings.py), and
+build_graph.sh, which sources config.sh (the KU buildout and the smokes). os.environ stays exactly
+the set config.sh exported: children (ingest.py takes argparse defaults from it) see what they saw before.
 
-Usage (from build_graph.sh only): <NUL-separated name/value pairs on stdin> pipeline.py <limit>
+Usage: <NUL-separated name/value pairs on stdin> pipeline.py <limit>
 
 The settings Menhir, the attempt record and the ingest phase receive are tables of the shell
 expressions build_graph.sh used. LME_RETRY_FAILED=1 (build --retry-failed) runs retry_failed instead of a build.
@@ -77,7 +78,7 @@ def read_settings(stream, environ: dict[str, str]) -> dict[str, str]:
         data = data.encode("utf-8", "surrogateescape")
     parts = data.split(b"\0")
     if not data or len(parts) % 2 != 1 or parts[-1] != b"":
-        raise Die("no settings on stdin; run scripts/longmemeval/build_graph.sh, not this module")
+        raise Die("no settings on stdin; run python -m archolith_bench.build, not this module")
     s = dict(environ)
     for i in range(0, len(parts) - 1, 2):
         s[parts[i].decode("utf-8")] = native(parts[i + 1].decode("utf-8", "surrogateescape"))

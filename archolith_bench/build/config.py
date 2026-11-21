@@ -1,8 +1,8 @@
 """Build config schema, YAML loading, resolved-config record and build id.
 
 A build YAML is the user-facing way to configure a LongMemEval graph build. It is resolved into
-the existing LME_* variables, which scripts/longmemeval/build_graph.sh (via config.sh) reads
-unchanged. Secrets never live in the YAML: ``extraction.api_key_env`` names an environment
+the existing LME_* variables; settings.py fills in the rest as config.sh would and hands them to
+pipeline.py. Secrets never live in the YAML: ``extraction.api_key_env`` names an environment
 variable that is read at run time.
 """
 

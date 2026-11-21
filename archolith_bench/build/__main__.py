@@ -9,7 +9,6 @@ from __future__ import annotations
 import argparse
 import logging
 import os
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -28,7 +27,7 @@ from .config import (
 log = logging.getLogger("archolith_bench.build")
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-BUILD_SCRIPT = REPO_ROOT / "scripts" / "longmemeval" / "build_graph.sh"
+PIPELINE = Path(__file__).resolve().parent / "pipeline.py"
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -169,13 +168,13 @@ def main(argv: list[str] | None = None, environ: dict[str, str] | None = None) -
     for var in ("LME_RETRY_FAILED", "LME_RETRY_DRAIN_TIMEOUT"):
         env.pop(var, None)
     env.update(run_control)
-    bash = shutil.which("bash")
-    if not bash:
-        print("error: bash not found on PATH", file=sys.stderr)
-        return 2
+    from . import settings
+
+    pipeline_settings, pipeline_env = settings.resolve(env)
     limit = str(config["dataset"]["limit"])
     log.info("build_id=%s results_dir=%s", record["build_id"], results_dir)
-    return subprocess.run([bash, BUILD_SCRIPT.as_posix(), limit], env=env, cwd=REPO_ROOT).returncode
+    return subprocess.run([sys.executable, PIPELINE.as_posix(), limit], input=settings.stdin_pairs(pipeline_settings),
+                          env=pipeline_env, cwd=REPO_ROOT).returncode
 
 
 if __name__ == "__main__":
