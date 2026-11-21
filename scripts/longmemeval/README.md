@@ -521,7 +521,10 @@ so live graph queries work during the recall/QA scoring phase.
 
 ## Configuration Reference
 
-All hardcoded values are centralized in `config.sh` and environment-overridable:
+All hardcoded values are centralized in `config.sh` and environment-overridable. The build CLI
+(`python -m archolith_bench.build`) does not source `config.sh`: it resolves the same defaults in
+`archolith_bench/build/settings.py`, which must be kept in sync with `config.sh`
+(`tests/test_build_settings.py` checks parity). The shell tools below still read `config.sh`:
 
 ```bash
 # Neo4j
