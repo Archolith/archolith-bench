@@ -5,7 +5,6 @@
 # Usage:
 #   source "$(dirname "${BASH_SOURCE[0]}")/config.sh"
 #   echo "Build port: $LME_PORT_BUILD"
-#   LME_ANSWER_MODEL=gpt-4-turbo ./recall_ab.sh main 30
 
 # ---- Paths (derived from script location, not hardcoded absolutes) ----
 # All path derivations should use git rev-parse --show-toplevel where possible.
@@ -52,7 +51,6 @@ lme_container_running() {
 
 # ---- Menhir serve ports (one per workflow) ----
 LME_PORT_BUILD="${LME_PORT_BUILD:-8102}"               # build_graph.sh
-LME_PORT_RECALL="${LME_PORT_RECALL:-8103}"             # recall_ab.sh (shared persistent graph)
 
 # ---- Analysis ports (answer matrix, MSC sweep, retrieval quality) ----
 LME_PORT_MATRIX="${LME_PORT_MATRIX:-8112}"             # analysis/answer_matrix.sh

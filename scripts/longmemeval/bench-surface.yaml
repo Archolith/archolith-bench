@@ -136,8 +136,6 @@ stages:
       - repo: bench
         glob: "scripts/longmemeval/lib/validate_run.py"
       - repo: bench
-        glob: "scripts/longmemeval/recall_ab.sh"
-      - repo: bench
         glob: "scripts/longmemeval/analysis/answer_ab.py"
       - repo: bench
         glob: "scripts/longmemeval/analysis/brief_ab.py"

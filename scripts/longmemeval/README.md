@@ -7,7 +7,7 @@ A self-contained testing framework for LongMemEval (LME) Mode-B evaluations of m
 ### Recall-Only A/B
 Compares `no_memory` vs `menhir_recall` on a **shared, pre-built persistent graph**. Tests whether a menhir variant can correctly rank relevant episodic facts during retrieval. This is **blind to ingest-code changes** — both variants retrieve from the same graph, so only the recall/ranking path is tested.
 
-Workflow: `build` → `recall-ab` (across multiple branches)
+Workflow: build → `python -m archolith_bench.staged run --serve <menhir tree> --graph builds/<x>.yaml` (once per tree) → `staged compare`
 
 ### Buildout A/B
 Compares main vs frontier branch **ingest code** by building two fresh graphs from the same question slice, then running recall+QA on each. Isolates the contribution of ingest-time temporal reasoning, belief gate, and other graph-construction features. This **reveals ingest-code quality** that recall-only cannot see.
@@ -36,7 +36,7 @@ The LongMemEval dataset is grouped by `question_type`:
 
 **⚠️ Bare `--limit N` takes the first N items, which are 100% `temporal-reasoning`.** This is a sampling trap. All fair runs **MUST** sweep all 6 types via `--subset <type>` with `LME_PER_TYPE` items each (configurable, default 15/type).
 
-The built-in analysis harnesses (`matrix`, `msc`) already loop across all 6 types. The runbook scripts (`recall-ab`, `buildout-ab`) accept `--subset` to run a single type.
+The built-in analysis harnesses (`matrix`, `msc`) already loop across all 6 types. `staged run` accepts `--subset` to run a single type.
 
 ## Prerequisites
 
@@ -67,8 +67,9 @@ python -m archolith_bench.build --build builds/default.yaml   # or: ./build_grap
 ./lme.sh status
 
 # 3. Recall-only A/B: main vs frontier on the built graph
-./lme.sh recall-ab main 30
-./lme.sh recall-ab frontier 30
+python -m archolith_bench.staged run --arm arms/menhir_recall.yaml --fixture <fixture.json> \
+  --serve ../menhir --graph builds/default.yaml        # one run per Menhir tree
+python -m archolith_bench.staged compare runs/<a> runs/<b>
 
 # 4. Analysis (stratified, all 6 types)
 ./analysis/answer_matrix.sh             # answer accuracy
@@ -82,7 +83,8 @@ python -m archolith_bench.build --build builds/default.yaml   # or: ./build_grap
 For individual types:
 
 ```bash
-LME_RECALL_LIMIT=5 ./lme.sh recall-ab main 30 --subset temporal-reasoning
+python -m archolith_bench.staged run --arm arms/menhir_recall.yaml --fixture <fixture.json> \
+  --serve <menhir tree> --graph builds/default.yaml --subset temporal-reasoning
 ```
 
 ## Explicit consolidation lanes
@@ -133,7 +135,7 @@ or that sets them on a graph whose record predates them, is refused.
 commits, or surface differ. It records its pass as a `retry-failed` phase.
 
 1. **Build**: `python -m archolith_bench.build --build builds/<x>.yaml` (or `build_graph.sh [N]`) — ingest N items (default 30, full 500 in oracle mode takes ~1 day) into a fresh persistent Neo4j, then leave it up. Build finishes by promoting every manifest namespace to PERSISTENT scope through Menhir's `promote_namespace_scope` op (`lib/promote.py`), so builds end ready-to-recall. Idempotent and non-destructive. See [Memory scope](#memory-scope-regular-vs-session) below.
-2. **Recall A/B**: `lme.sh recall-ab <branch> [N]` — read-only against the persistent graph; never resets it.
+2. **Recall A/B**: `python -m archolith_bench.staged run --serve <menhir tree> --graph builds/<x>.yaml ...` per tree, then `staged compare` — serves that tree's source over the built graph for the search stage; read-only, never resets it.
 3. **Retry failed**: `lme.sh retry` — reset+drain episodic nodes in FAILED state.
 
 **Rule**: Never reset a built graph. The manifest (`results/lme-ingest/manifest.json` for the
@@ -187,24 +189,16 @@ The backfill remains available for an explicitly chosen legacy repair, with a dr
 Do not use a backfill as proof that a new ingest handles historical dates. A repair writes a
 revert snapshot under `results/lme-ingest/`; see `config.sh:LME_REVERT_SNAPSHOT_PATH`.
 
-## run_manifest.json Contract
+## Recall run record
 
-Every `recall-ab` run writes `results/lme-recall-<variant>/run_manifest.json` — a reproducibility record that captures:
-- Menhir source (branch, commit, dirty state)
-- Bench branch/commit
-- Neo4j container, image, bolt port
-- LME variant (oracle/s/m) and dataset snapshot
-- Recall settings (top_k, include_session)
-- Answer model + scorer (containment or llm-judge)
-- Episodic state counts in the graph at run time
-- Parsed scores from the harness output
-
-Reproduce a run from the manifest alone (modulo API randomness).
+Every staged run writes `runs/<arm>-<hash>/config.resolved.yaml`: the arm, fixture path and sha256,
+prompt fingerprints and prompt-file hashes, renderer hash, the served Menhir commit (`+dirty` for
+uncommitted changes), answer model and judge. The run id hashes it, so a changed setting is a new run.
 
 ## Per-run Telemetry
 
-Both `build_graph.sh` and `recall_ab.sh` export `MENHIR_MCP_TELEMETRY_DB` to a run-local SQLite
-path (`$LME_RESULTS_DIR/mcp_telemetry.db` for builds, `$RUN_OUTPUT_DIR/mcp_telemetry.db` for
+The build and `staged run --serve` export `MENHIR_MCP_TELEMETRY_DB` to a run-local SQLite
+path (`$LME_RESULTS_DIR/mcp_telemetry.db` for builds, `<run dir>/mcp_telemetry.db` for
 recall). This preserves vote receipts, lifecycle events, and scalar audit trails alongside results
 so the dashboard's `ScalarTaskReader` can display them and the acceptance validator can check for
 their presence.
@@ -537,7 +531,6 @@ LME_NEO4J_IMAGE=neo4j:5.26-community
 
 # Ports (one per workflow + analysis)
 LME_PORT_BUILD=8102             # build_graph.sh
-LME_PORT_RECALL=8103            # recall_ab.sh
 LME_PORT_MATRIX=8112            # analysis/answer_matrix.sh
 LME_PORT_MSC=8113               # analysis/msc_sweep.sh
 LME_PORT_RQ=8109                # analysis/lib/retrieval_quality.py
@@ -685,8 +678,8 @@ development probes; results produced with it are not canonical benchmark evidenc
 
 ## Troubleshooting
 
-### "pre-built menhir-lme-neo4j not found"
-`recall-ab` requires a persistent graph. Run a build first (`python -m archolith_bench.build --build builds/<x>.yaml`).
+### "no Neo4j on bolt ..."
+`staged run --serve` requires the built graph to be up on the `--graph` build's bolt port. Run a build first (`python -m archolith_bench.build --build builds/<x>.yaml`).
 
 ### "Neo4j not ready"
 The Docker container takes 10-20s to start. If it persists, check `docker ps` and `docker logs menhir-lme-neo4j`.
@@ -732,7 +725,7 @@ the timeout — the build **raises** rather than resetting anyway. Re-running co
 under a live writer costs a corrupted namespace whose numbers still look plausible.
 
 ### Per-branch venv guard
-If a menhir variant enforces interpreter identity (e.g., frontier's `runtime.py`), `recall-ab` auto-detects and uses the variant's own `.venv` if it has one. Explicitly pass a worktree path to override: `lme.sh recall-ab /path/to/worktree 30`.
+If a menhir variant enforces interpreter identity (e.g., frontier's `runtime.py`), `staged run --serve <tree>` uses the tree's own `.venv` if it has one, else `--menhir-bin` (default `$MENHIR_MAIN_BIN`).
 
 ### Empty recall / empty build_context
 If recall returns 0 results (or `build_context` returns an empty brief) on a graph you know has data, the memories are almost certainly still `SESSION`-scoped — `recall_service.py:937` drops `SESSION` nodes unless `include_session=True`. Fix: `lib/promote.py <manifest.json> <menhir_url>` (Menhir's `promote_namespace_scope` per namespace). See [Memory scope](#memory-scope-regular-vs-session). The recall-only harness sidesteps this by always passing `include_session=True`, but that flag only masks the scope issue for that one path — promotion is the real fix and is part of every build.

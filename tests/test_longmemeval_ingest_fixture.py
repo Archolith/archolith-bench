@@ -192,7 +192,6 @@ def test_longmemeval_container_guards_do_not_use_pipefail_sensitive_grep() -> No
 
     for relative_path in (
         "build_graph.sh",
-        "recall_ab.sh",
         "retry.sh",
         "run_knowledge_update_buildout.sh",
         "run_suburbs_fixture.sh",

@@ -3,14 +3,13 @@
 #
 # Usage:
 #   lme.sh backfill-dates [--dry-run]  # repair valid_at from real session dates (no re-ingest)
-#   lme.sh recall-ab <branch|path> [N] # recall-only A/B on built graph
 #   lme.sh status [watch [secs]]       # read-only progress tracker
 #   lme.sh retry                       # reset+drain FAILED episodes
 #   lme.sh validate --expected N       # final acceptance report (provenance + manifest + telemetry)
 #   lme.sh -h|--help                   # show this help
 #
 # Builds:  python -m archolith_bench.build --build builds/<x>.yaml  (promotion runs inside it)
-# Recall:  python -m archolith_bench.staged run|rerun|compare
+# Recall:  python -m archolith_bench.staged run [--serve <menhir tree> --graph builds/<x>.yaml]|rerun|compare
 # Research tools run directly: analysis/answer_matrix.sh, analysis/msc_sweep.sh, analysis/brief_ab.sh,
 # analysis/entropy.sh, analysis/lib/retrieval_quality.py (presence / ir-gate).
 
@@ -19,7 +18,7 @@ set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/config.sh"
 
 usage(){
-  sed -n '2,16p' "${BASH_SOURCE[0]}" | sed 's/^#//; s/^ //'
+  sed -n '2,15p' "${BASH_SOURCE[0]}" | sed 's/^#//; s/^ //'
   exit "${1:-0}"
 }
 
@@ -32,10 +31,6 @@ case "$COMMAND" in
     LME_BOLT="${LME_BOLT}" LME_NEO4J_PW="${LME_NEO4J_PW}" LME_NS_PREFIX="${LME_NS_PREFIX}" \
       LME_REVERT_SNAPSHOT="${LME_REVERT_SNAPSHOT:-${LME_REVERT_SNAPSHOT_PATH}}" \
       "${MENHIR_FRONTIER_PY}" "${_LONGMEMEVAL_DIR}/lib/backfill_dates.py"
-    ;;
-  recall-ab)
-    if [ -z "${2:-}" ]; then echo "usage: lme.sh recall-ab <branch|path> [limit]" >&2; exit 1; fi
-    "${_LONGMEMEVAL_DIR}/recall_ab.sh" "$2" "${3:-30}"
     ;;
   status)
     "${_LONGMEMEVAL_DIR}/status.sh" "${2:-}" "${3:-}"
