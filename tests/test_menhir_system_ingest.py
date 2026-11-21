@@ -256,4 +256,8 @@ def test_idempotency_conflict_text_matches_menhir() -> None:
     source = Path(root or "../menhir") / "src" / "menhir" / "services" / "ingest_intake.py"
     if not source.is_file():
         pytest.skip("Menhir checkout not available (set MENHIR_ROOT)")
-    assert ingest._IDEMPOTENCY_CONFLICT_DETAIL in source.read_text(encoding="utf-8")
+    text = source.read_text(encoding="utf-8")
+    # CI pins a Menhir from before idempotency keys; there is no conflict to map there.
+    if "IdempotencyKeyConflict" not in text:
+        pytest.skip("this Menhir checkout predates IdempotencyKeyConflict")
+    assert ingest._IDEMPOTENCY_CONFLICT_DETAIL in text
