@@ -9,11 +9,12 @@ of dataset text that is already on disk in the HuggingFace cache.
            ingest backdating works with LME_BACKFILL_DATES=0.
   multi  : 2 items x each of the 6 question types, to check a fix across categories rather than
            on one item. Includes single-session-assistant, which is the category that depends on
-           assistant-turn content surviving ingestion.
+           assistant-turn content surviving ingestion. `--per-type N` takes N per type instead
+           (N=1 writes multi-smoke-6.json, the fixture builds/per-type-1-acceptance.yaml pins).
 
 Usage:
   python scripts/longmemeval/lib/make_smoke_fixture.py date
-  python scripts/longmemeval/lib/make_smoke_fixture.py multi
+  python scripts/longmemeval/lib/make_smoke_fixture.py multi [--per-type N]
 """
 from __future__ import annotations
 
@@ -53,6 +54,11 @@ def write(name: str, items: list[dict]) -> str:
 
 def main(argv: list[str]) -> int:
     which = argv[1] if len(argv) > 1 else "date"
+    per_type = PER_TYPE
+    if argv[2:3] == ["--per-type"] and len(argv) == 4 and argv[3].isdigit() and int(argv[3]) > 0:
+        per_type = int(argv[3])
+    elif len(argv) > 2:
+        raise SystemExit("usage: make_smoke_fixture.py date | multi [--per-type N]")
     items = load_oracle()
 
     if which == "date":
@@ -68,8 +74,8 @@ def main(argv: list[str]) -> int:
             by_type[str(item.get("question_type"))].append(item)
         picked: list[dict] = []
         for question_type in sorted(by_type):
-            picked.extend(by_type[question_type][:PER_TYPE])
-        write("multi-smoke-12.json", picked)
+            picked.extend(by_type[question_type][:per_type])
+        write(f"multi-smoke-{len(picked)}.json", picked)
         for item in picked:
             turns = sum(len(s) for s in item["haystack_sessions"])
             print(f"  {item['question_id']:<14} {str(item.get('question_type')):<28} turns={turns}")

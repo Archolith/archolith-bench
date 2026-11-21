@@ -1,8 +1,11 @@
-# One item per LongMemEval question type (6 types).
-# TODO(owner): fixture. No generator for a 1-per-type fixture exists today:
-# scripts/longmemeval/lib/make_smoke_fixture.py `multi` writes 2 per type (12 items,
-# fixtures/multi-smoke-12.json). Until a 6-item fixture is chosen, this only caps the build at 6 items.
+# One item per LongMemEval question type (6 types), the P4 acceptance build.
+# Fixture: generated, not committed. Regenerate with
+#   python scripts/longmemeval/lib/make_smoke_fixture.py multi --per-type 1
+# The sha pins the bytes written on Windows (json.dump through text mode); the build refuses others.
 extends: default.yaml
 
 dataset:
   limit: 6
+  fixture_path: scripts/longmemeval/fixtures/multi-smoke-6.json
+  fixture_count: 6
+  fixture_sha256: 151d2a962b013b1836292f8b1c34754d18a854ed4e896f9dc1a0fcb438551db6
