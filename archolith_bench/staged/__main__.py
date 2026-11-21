@@ -30,7 +30,7 @@ from .menhir_system import MenhirSystem, load_backend_client
 from .ops import RERUN_STAGES, compare_runs, derive_run, format_compare, load_resolved
 from .pipeline import build_report, run_answer, run_judge, run_search
 from .rundir import RunDir
-from .serve import ServeError, graph_settings, served_menhir
+from .serve import ServeError, graph_record, graph_settings, served_menhir
 
 
 def _add_judge_args(p: argparse.ArgumentParser) -> None:
@@ -60,6 +60,9 @@ def _parser() -> argparse.ArgumentParser:
     r.add_argument("--graph", default=None, metavar="BUILD_YAML",
                    help="build YAML whose graph --serve reads (bolt port, embedder)")
     r.add_argument("--serve-port", type=int, default=8098, help="loopback port; must be on the throwaway allow-list")
+    r.add_argument("--graph-results-dir", default=os.environ.get("LME_RESULTS_DIR"),
+                   help="the --graph build's --results-dir, for its graph-provenance file (default: $LME_RESULTS_DIR); "
+                        "the run records that build's commits beside the served tree's")
     r.add_argument("--menhir-bin", default=os.environ.get("MENHIR_MAIN_BIN"),
                    help="menhir executable when the tree has no .venv (default: $MENHIR_MAIN_BIN)")
     _add_judge_args(r)
@@ -148,6 +151,16 @@ def _cmd_run(args: argparse.Namespace) -> int:
         # The client refuses a non-allow-listed port; refuse before serving, not after.
         assert_not_production(f"http://127.0.0.1:{args.serve_port}")
         args.menhir_root = str(Path(args.serve).resolve())
+    graph_rec = None
+    if args.serve:
+        try:
+            graph_rec = graph_record(args.graph, dict(os.environ), args.graph_results_dir)
+        except (ValueError, OSError, yaml.YAMLError) as exc:
+            print(f"ERROR: --graph {args.graph}: {exc}", file=sys.stderr)
+            return 2
+        if graph_rec["provenance"] is None:
+            print(f"WARNING: no graph-provenance-{graph_rec['neo4j_name']}.json under --graph-results-dir "
+                  f"{args.graph_results_dir!r}; the run records the graph's build commits as unknown", file=sys.stderr)
     arm = load_arm(args.arm)
     adapter = LongMemEvalMemoryAdapter()
     items = adapter.load_items(args.subset, args.limit, args.fixture)
@@ -165,6 +178,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         model=model,
         judge=_judge_config(args),
         prompt_files=prompts.hashes(prompts.LONGMEMEVAL_RUN_PROMPTS),
+        graph=graph_rec,
     )
     rundir = RunDir(Path(args.runs_dir), run_id(resolved))
     rundir.write_config(resolved)

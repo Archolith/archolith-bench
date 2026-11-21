@@ -115,9 +115,14 @@ def resolve(
     model: str | None,
     judge: dict,
     prompt_files: dict[str, str] | None = None,
+    graph: dict | None = None,
 ) -> dict:
-    """Everything that determines a run's outputs, as a JSON-able dict."""
-    return {
+    """Everything that determines a run's outputs, as a JSON-able dict.
+
+    ``graph`` (``staged run --serve``) is the graph the served tree read; ``menhir_commit`` is
+    the served tree. Omitted when None, so runs without it keep their ids.
+    """
+    resolved = {
         "arm": asdict(arm),
         "benchmark": benchmark_id,
         "fixture": {"path": fixture_path, "sha256": fixture_sha256},
@@ -133,6 +138,9 @@ def resolve(
         # sha256 of every prompt file the run can send (answer + judges); see archolith_bench/prompts.
         "prompt_files": prompt_files,
     }
+    if graph is not None:
+        resolved["graph"] = graph
+    return resolved
 
 
 def run_id(resolved: dict) -> str:
