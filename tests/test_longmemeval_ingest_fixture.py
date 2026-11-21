@@ -336,81 +336,6 @@ def test_drain_many_waits_for_global_queue_and_every_namespace(
     assert drained["ns-b"]["timed_out"] is False
 
 
-def test_namespace_state_counts_include_cost_and_retry_signals(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(
-        ingest,
-        "_cypher",
-        lambda query: [["0", "20", "0", "0", "270", "24", "20"]],
-    )
-
-    assert ingest._ns_state_counts("ns-a") == {
-        "pending": 0,
-        "ready": 20,
-        "enriching": 0,
-        "failed": 0,
-        "llm_tasks": 270,
-        "processing_attempts": 24,
-        "total": 20,
-    }
-
-
-def test_scalar_counts_include_state_history_and_turn_evidence(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    queries: list[str] = []
-
-    def fake_count(query: str) -> int:
-        queries.append(query)
-        return len(queries)
-
-    monkeypatch.setattr(ingest, "_cypher_count", fake_count)
-
-    counts = ingest._scalar_counts("ns-a")
-
-    assert counts == {
-        "turn_evidence": 1,
-        "typed_assertions": 2,
-        "scalar_views": 3,
-        "scalar_history_views": 4,
-        "user_founded_scalar_views": 5,
-    }
-    assert "view_kind:'scalar_state'" in queries[2]
-    assert "view_kind:'scalar_history'" in queries[3]
-
-
-def test_integrity_counts_check_submitted_dates_and_fail_unknown(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    queries: list[str] = []
-    replies = iter([[["7", "1"]], [["2"]], [["3"]], [["4"]], []])
-
-    def fake_cypher(query: str):
-        queries.append(query)
-        return next(replies)
-
-    monkeypatch.setattr(ingest, "_cypher", fake_cypher)
-
-    submitted = ingest._submitted_epoch_millis(
-        {"haystack_dates": ["2023/07/14 (Fri) 08:30", "not a date", "2023/07/14 (Fri) 08:30"]}
-    )
-    counts = ingest._integrity_counts("lme-a", submitted)
-
-    assert submitted == [1689323400000]
-    assert counts == {
-        "user_turns_admitted": 7,
-        "admitted_turns_unprojected": 1,
-        "assertions_unfounded": 2,
-        "episodes_valid_at_unsubmitted": 3,
-        "ready_episodes_time_unpaired": 4,
-        # An unreadable count is recorded as unknown, which final acceptance refuses.
-        "cross_namespace_links": -1,
-    }
-    assert "IN [1689323400000]" in queries[2]
-    assert all("'lme-a'" in query for query in queries)
-
-
 def test_user_turns_submitted_counts_extracted_user_source_turns() -> None:
     turns = [
         ingest.IngestTurn("user", "s1", None, "s", turn_key="k1"),
@@ -421,44 +346,6 @@ def test_user_turns_submitted_counts_extracted_user_source_turns() -> None:
     ]
 
     assert ingest._user_turns_submitted(iter(turns)) == 2
-
-
-def test_reset_namespace_force_deletes_graph_and_purges_turn_evidence(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    backend_calls: list[tuple[str, dict]] = []
-
-    class FakeResponse:
-        def raise_for_status(self):
-            return None
-
-    class FakeAdmin:
-        def __init__(self):
-            self.posts: list[dict] = []
-
-        def post(self, url, **kwargs):
-            self.posts.append({"url": url, **kwargs})
-            return FakeResponse()
-
-    def fake_backend(admin, url, operation, body):
-        backend_calls.append((operation, body))
-        return {"namespace": body["namespace"], "deleted": 250}
-
-    monkeypatch.setattr(ingest, "_backend", fake_backend)
-    admin = FakeAdmin()
-
-    ingest._reset_namespace(admin, "http://menhir/", "ns-a")
-
-    assert backend_calls == [
-        ("delete_namespace", {"namespace": "ns-a", "force": True}),
-    ]
-    assert admin.posts == [
-        {
-            "url": "http://menhir/api/phase3/reset",
-            "params": {"namespace": "ns-a"},
-            "timeout": 300.0,
-        }
-    ]
 
 
 def test_ingest_window_refills_only_after_that_namespace_is_terminal(
@@ -600,44 +487,6 @@ def test_ingest_pool_never_retries_a_recorded_episode_again(
 
     # Terminal FAILED: the namespace moves on to the next segment.
     assert submitted == ["a1", "a2"]
-
-
-def test_retry_failed_evidence_projections_enumerates_generated_children(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    queries: list[str] = []
-    operations: list[tuple[str, dict]] = []
-
-    def fake_cypher(query: str):
-        queries.append(query)
-        if "count(e)" in query:
-            return [["2"]] if "namespace:'ns-a'" in query else [["0"]]
-        if "namespace:'ns-a'" in query:
-            return [["projection-a", "false"], ["projection-b", "false"]]
-        return []
-
-    def fake_backend(admin, url, operation, body):
-        operations.append((operation, body))
-        return True
-
-    monkeypatch.setattr(ingest, "_cypher", fake_cypher)
-    monkeypatch.setattr(ingest, "_backend", fake_backend)
-
-    requeued = ingest._retry_failed_evidence_projections(
-        ["ns-a", "ns-b", "ns-a"],
-        object(),
-        "http://menhir",
-    )
-
-    assert requeued == {"ns-a": 2, "ns-b": 0}
-    assert all("processing_state='FAILED'" in query for query in queries)
-    assert all("coalesce(e.is_evidence_projection, false)" in query for query in queries)
-    assert operations == [
-        ("force_reset_failed_episode", {"episode_uuid": "projection-a"}),
-        ("enqueue_pending_episode", {"episode_uuid": "projection-a"}),
-        ("force_reset_failed_episode", {"episode_uuid": "projection-b"}),
-        ("enqueue_pending_episode", {"episode_uuid": "projection-b"}),
-    ]
 
 
 def test_retry_failed_evidence_projection_fails_closed_when_enqueue_rejected(

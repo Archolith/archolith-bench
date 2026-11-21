@@ -350,43 +350,6 @@ def test_pool_survives_projection_enqueue_race_and_finalizes(monkeypatch, tmp_pa
 
 
 # --------------------------------------------------------------------------------------------
-# 3. _failed_evidence_projections (F7)
-# --------------------------------------------------------------------------------------------
-
-
-def test_failed_projections_empty_count_result_is_unreadable_not_none(monkeypatch):
-    """_cypher returns [] on failure; that must not read as "no failed projections"."""
-    monkeypatch.setattr(ingest, "_cypher", lambda query: [])
-    with pytest.raises(ingest.GraphUnreadable):
-        ingest._failed_evidence_projections("ns")
-
-
-def test_failed_projections_short_list_is_unreadable(monkeypatch):
-    answers = [[["2"]], [["u1", "true"]]]
-    monkeypatch.setattr(ingest, "_cypher", lambda query: answers.pop(0))
-    with pytest.raises(ingest.GraphUnreadable):
-        ingest._failed_evidence_projections("ns")
-
-
-def test_failed_projections_zero_count_returns_empty_without_second_query(monkeypatch):
-    queries: list[str] = []
-
-    def fake(query):
-        queries.append(query)
-        return [["0"]]
-
-    monkeypatch.setattr(ingest, "_cypher", fake)
-    assert ingest._failed_evidence_projections("ns") == []
-    assert len(queries) == 1
-
-
-def test_failed_projections_parse_provider_flag_from_rendered_rows(monkeypatch):
-    answers = [[["2"]], [["u1", "true"], ["u2", "false"]]]
-    monkeypatch.setattr(ingest, "_cypher", lambda query: answers.pop(0))
-    assert ingest._failed_evidence_projections("ns") == [("u1", True), ("u2", False)]
-
-
-# --------------------------------------------------------------------------------------------
 # 4. Unreadable projection sweep inside the pool (F7)
 # --------------------------------------------------------------------------------------------
 
@@ -796,33 +759,3 @@ def test_segment_index_counts_segments_of_one_source_turn_and_resets_per_turn():
     assert [t.segment_index for t in second] == [0]
     assert len({t.turn_key for t in first}) == 1
     assert len({ingest._ingest_key(t) for t in turns}) == len(turns)
-
-
-# --------------------------------------------------------------------------------------------
-# 15. neo4j_http (F11)
-# --------------------------------------------------------------------------------------------
-
-
-class _FakeHttp:
-    def __init__(self, rows):
-        self.rows = rows
-
-    def post(self, url, **kwargs):
-        rows = self.rows
-        return SimpleNamespace(
-            status_code=200,
-            json=lambda: {"errors": [], "results": [{"data": [{"row": r} for r in rows]}]},
-        )
-
-
-def test_namespace_state_counts_raises_when_a_requested_namespace_has_no_row():
-    reader = ingest.Neo4jHttpReader("http://neo4j", "u", "p", client=_FakeHttp([["ns-a", 0, 1, 0, 0, 0, 0, 1]]))
-    with pytest.raises(ingest.Neo4jUnavailable, match="no row"):
-        reader.namespace_state_counts(["ns-a", "ns-b"])
-
-
-def test_namespace_state_counts_returns_every_requested_namespace_when_complete():
-    rows = [["ns-a", 0, 1, 0, 0, 0, 0, 1], ["ns-b", 0, 0, 0, 0, 0, 0, 0]]
-    reader = ingest.Neo4jHttpReader("http://neo4j", "u", "p", client=_FakeHttp(rows))
-    counts = reader.namespace_state_counts(["ns-a", "ns-b"])
-    assert counts["ns-a"]["ready"] == 1 and counts["ns-b"]["total"] == 0

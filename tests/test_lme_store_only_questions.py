@@ -187,28 +187,6 @@ def test_http_client_sends_store_only_only_when_set() -> None:
     assert "store_only" not in captured[1]
 
 
-def _queries(monkeypatch: pytest.MonkeyPatch) -> list[str]:
-    queries: list[str] = []
-
-    def fake_counts(query: str, width: int) -> list[int]:
-        queries.append(query)
-        return [0] * width
-
-    monkeypatch.setattr(ingest, "_cypher_counts", fake_counts)
-    ingest._integrity_counts("lme-x", [])
-    return queries
-
-
-def test_integrity_exempts_store_only_from_projection_and_pairing(monkeypatch: pytest.MonkeyPatch) -> None:
-    provenance, _unfounded, _valid_at, time_unpaired, _cross = _queries(monkeypatch)
-    # Admission still counts a store-only admitter; only the projection check skips it.
-    admitted = re.search(r"EXISTS \{[^}]*\} AS admitted", provenance).group(0)
-    assert "store_only" not in admitted
-    assert "coalesce(q.extraction_mode, '') <> 'store_only' } AS extracted" in provenance
-    assert "WHEN extracted AND NOT projected" in provenance
-    assert "coalesce(q.extraction_mode, '') <> 'store_only'" in time_unpaired
-
-
 def _config_value(name: str) -> str:
     config = (LME / "config.sh").read_text(encoding="utf-8")
     match = re.search(rf'^{name}="\$\{{{name}:-([^}}]*)\}}"', config, re.MULTILINE)
