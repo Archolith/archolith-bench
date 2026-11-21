@@ -1,0 +1,8 @@
+# One item per LongMemEval question type (6 types).
+# TODO(owner): fixture. No generator for a 1-per-type fixture exists today:
+# scripts/longmemeval/lib/make_smoke_fixture.py `multi` writes 2 per type (12 items,
+# fixtures/multi-smoke-12.json). Until a 6-item fixture is chosen, this only caps the build at 6 items.
+extends: default.yaml
+
+dataset:
+  limit: 6

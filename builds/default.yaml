@@ -1,0 +1,64 @@
+# Default LongMemEval graph build. Every key is stated explicitly with the value
+# scripts/longmemeval/config.sh produces today with no LME_* variable set.
+# Secrets never go here: extraction.api_key_env names an environment variable.
+dataset:
+  dataset: xiaowu0162/longmemeval   # LME_DATASET
+  fixture_path: null                # LME_FIXTURE_PATH (null: the full dataset)
+  fixture_count: null               # LME_FIXTURE_COUNT
+  fixture_sha256: null              # LME_FIXTURE_SHA256
+  ns_prefix: lme-                   # LME_NS_PREFIX
+  limit: 30                         # build_graph.sh positional arg (item limit)
+
+container:
+  neo4j_name: menhir-lme-neo4j      # LME_NEO4J_NAME
+  neo4j_vol: menhir-lme-data        # LME_NEO4J_VOL
+  neo4j_image: neo4j:5.26-community # LME_NEO4J_IMAGE
+  neo4j_heap: 2G                    # LME_NEO4J_HEAP
+  bolt: 7689                        # LME_BOLT
+  http: 7476                        # LME_HTTP
+  menhir_port: 8102                 # LME_PORT_BUILD
+
+extraction:
+  provider: openai                  # LME_EXTRACT_PROVIDER
+  model: gpt-6-luna                 # LME_EXTRACT_MODEL
+  base_url: null                    # LME_EXTRACT_BASE_URL (required for provider: local)
+  service_tier: flex                # LME_OPENAI_SERVICE_TIER
+  embed_model: text-embedding-3-small  # LME_EMBED_MODEL
+  max_llm_calls_per_job: 100        # LME_MAX_LLM_CALLS_PER_JOB
+  api_key_env: null                 # env var NAME read into LME_EXTRACT_API_KEY (local provider only)
+
+ingest:
+  segmentation: adaptive            # LME_SEGMENTATION
+  store_only_context: true          # LME_STORE_ONLY_CONTEXT
+  assistant_store_only: false       # LME_ASSISTANT_STORE_ONLY
+  writer_model: gpt-6-luna          # LME_WRITER_MODEL (adaptive-writer only)
+  writer_granularity: turn          # LME_WRITER_GRANULARITY (adaptive-writer only)
+  writer_max_usd: null              # LME_WRITER_MAX_USD
+  writer_rates: null                # LME_WRITER_RATES ("IN,OUT" $/1M)
+  concurrency: 30                   # LME_INGEST_CONCURRENCY
+  require_turn_evidence: true       # LME_REQUIRE_TURN_EVIDENCE
+
+consolidation:
+  scalar_state: false               # LME_SCALAR_STATE_ENABLED
+  scalar_history: false             # LME_SCALAR_HISTORY_ENABLED
+  counter_state: false              # LME_COUNTER_STATE_ENABLED (build_graph.sh refuses true)
+  event_history: false              # LME_EVENT_HISTORY_ENABLED (build_graph.sh refuses true)
+  consolidation_k: 3                # LME_SCALAR_CONSOLIDATION_K
+  call_budget: 50                   # LME_SCALAR_CALL_BUDGET
+  scalar_threshold: 2/3             # LME_SCALAR_THRESHOLD (ratio form, never 0.67)
+  require_scalar_output: true       # LME_REQUIRE_SCALAR_OUTPUT
+  consolidation_audit: true         # LME_CONSOLIDATION_AUDIT_ENABLED
+  recall_audit: true                # LME_RECALL_AUDIT_ENABLED
+
+time:
+  anchored_time_resolver: true      # LME_ANCHORED_TIME_RESOLVER
+  anchored_time_model: gpt-6-luna   # LME_ANCHORED_TIME_MODEL
+  anchored_time_attach_model: null  # LME_ANCHORED_TIME_ATTACH_MODEL (null: follows anchored_time_model, as config.sh does)
+  canonical_self_binding_mode: "off"  # LME_CANONICAL_SELF_BINDING_MODE (off | observe | enforce)
+
+post:
+  embed_backfill: true              # LME_EMBED_BACKFILL
+  backfill_dates: false             # LME_BACKFILL_DATES
+
+menhir:
+  log_level: INFO                   # LME_MENHIR_LOG_LEVEL

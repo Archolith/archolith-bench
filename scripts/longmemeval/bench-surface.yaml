@@ -164,6 +164,11 @@ stages:
         glob: "archolith_bench/staged/*.py"
       - repo: bench
         glob: "arms/*.yaml"
+      # Build YAMLs (python -m archolith_bench.build): resolved into the LME_* build settings.
+      - repo: bench
+        glob: "builds/*.yaml"
+      - repo: bench
+        glob: "archolith_bench/build/*.py"
 
   harness:
     description: >
