@@ -35,6 +35,9 @@ class FlexResult:
     completion_tokens: int
     cost_usd: float
     error: str | None = None
+    service_tier: str | None = None  # as reported by the response; None if absent
+    response_model: str | None = None
+    fell_back: bool = False
 
 
 class FlexError(RuntimeError):
@@ -53,6 +56,9 @@ def _row_from_result(result: FlexResult) -> dict:
         "completion_tokens": result.completion_tokens,
         "cost_usd": result.cost_usd,
         "error": result.error,
+        "service_tier": result.service_tier,
+        "response_model": result.response_model,
+        "fell_back": result.fell_back,
     }
 
 
@@ -64,6 +70,9 @@ def _result_from_row(row: dict) -> FlexResult:
         completion_tokens=int(row.get("completion_tokens") or 0),
         cost_usd=float(row.get("cost_usd") or 0.0),
         error=row.get("error"),
+        service_tier=row.get("service_tier"),
+        response_model=row.get("response_model"),
+        fell_back=bool(row.get("fell_back", False)),
     )
 
 
@@ -109,6 +118,10 @@ def run_flex(
     client: httpx.Client | None = None,
     sleep: Callable[[float], None] = time.sleep,
     log: Callable[[str], None] = print,
+    fallback_tier: str | None = None,
+    fallback_after_s: float | None = None,
+    fallback_rates: tuple[float, float] | None = None,
+    clock: Callable[[], float] = time.monotonic,
 ) -> tuple[dict[str, FlexResult], dict]:
     """Run chat-completion requests through OpenAI flex processing.
 
@@ -117,7 +130,14 @@ def run_flex(
     ``service_tier="flex"`` are always set by this client; caller body fields
     are never overridden. Rates are (input $/1M, output $/1M) at flex prices
     and must be passed in explicitly.
+
+    Opt-in fallback: when ``fallback_tier`` is set (requires ``fallback_rates``),
+    a request whose capacity 429s last ``fallback_after_s`` seconds (or exhaust
+    ``max_capacity_retries``) is resent once on ``fallback_tier`` and costed at
+    ``fallback_rates``.
     """
+    if fallback_tier is not None and fallback_rates is None:
+        raise ValueError("fallback_rates is required when fallback_tier is set")
     ids = [req["custom_id"] for req in requests]
     if len(ids) != len(set(ids)):
         raise ValueError("duplicate custom_id in requests")
@@ -149,6 +169,8 @@ def run_flex(
         body = {**req["body"], "model": model, "service_tier": "flex"}
         url = f"{base_url.rstrip('/')}/chat/completions"
         attempt = 0
+        fell_back = False
+        first_attempt = clock()
         while True:
             if stop_event.is_set():
                 raise _RunStopped()
@@ -176,11 +198,27 @@ def run_flex(
                     choices = data.get("choices") or []
                     if choices:
                         content = (choices[0].get("message") or {}).get("content")
+                    tier = data.get("service_tier")
+                    resp_model = data.get("model")
                 except Exception as exc:
                     return FlexResult(custom_id, None, 0, 0, 0.0, error=f"bad response: {type(exc).__name__}")
-                return FlexResult(custom_id, content, pt, ct, _cost(pt, ct, rates))
+                # A response that reports a different tier or model breaks the flex-only contract.
+                allowed_tiers = {"flex", fallback_tier} if fell_back else {"flex"}
+                if tier is not None and tier not in allowed_tiers:
+                    raise FlexError(f"response service_tier {tier!r} != 'flex' for {custom_id}: stopping run")
+                if resp_model is not None and not str(resp_model).startswith(model):
+                    raise FlexError(f"response model {resp_model!r} != {model!r} for {custom_id}: stopping run")
+                used_rates = fallback_rates if fell_back else rates
+                return FlexResult(custom_id, content, pt, ct, _cost(pt, ct, used_rates),
+                                  service_tier=tier, response_model=resp_model, fell_back=fell_back)
             body_text = resp.text or ""
             if resp.status_code == 429 and _classify_capacity(body_text):
+                if fallback_tier is not None and not fell_back:
+                    timed_out = fallback_after_s is not None and clock() - first_attempt >= fallback_after_s
+                    if timed_out or attempt >= max_capacity_retries:
+                        body = {**body, "service_tier": fallback_tier}
+                        fell_back = True
+                        continue
                 if attempt >= max_capacity_retries:
                     raise FlexError(f"capacity retries exhausted for {custom_id}")
                 delay = min(120, 5 * 2**attempt)
@@ -244,5 +282,6 @@ def run_flex(
         "cost_usd": sum(r.cost_usd for r in results.values()),
         "seconds": time.monotonic() - started,
         "model": model,
+        "fallbacks": sum(1 for r in results.values() if r.fell_back),
     }
     return results, summary

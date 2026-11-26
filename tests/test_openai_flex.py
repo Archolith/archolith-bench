@@ -371,3 +371,160 @@ def test_api_key_never_logged(tmp_path: Path) -> None:
     _, _, _, logged = _run(handler, tmp_path, requests=reqs, workers=8)
     assert any("done" in line for line in logged)
     assert all("sk-secret" not in line for line in logged)
+
+
+def _tiered_response(tier: str | None, model: str | None) -> httpx.Response:
+    body: dict = {
+        "choices": [{"message": {"content": "hi"}}],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+    }
+    if tier is not None:
+        body["service_tier"] = tier
+    if model is not None:
+        body["model"] = model
+    return httpx.Response(200, json=body,
+                          request=httpx.Request("POST", "https://api.openai.com/v1/chat/completions"))
+
+
+def test_response_tier_and_model_recorded(tmp_path: Path) -> None:
+    results, _, _, _ = _run(lambda _r: _tiered_response("flex", "gpt-6-luna-2026-10-01"), tmp_path)
+    assert results["r1"].service_tier == "flex"
+    assert results["r1"].response_model == "gpt-6-luna-2026-10-01"
+
+
+def test_response_non_flex_tier_stops_run(tmp_path: Path) -> None:
+    with pytest.raises(FlexError, match="service_tier"):
+        _run(lambda _r: _tiered_response("default", "gpt-6-luna"), tmp_path)
+
+
+def test_response_other_model_stops_run(tmp_path: Path) -> None:
+    with pytest.raises(FlexError, match="response model"):
+        _run(lambda _r: _tiered_response("flex", "gpt-4o"), tmp_path)
+
+
+_CAP = '{"error": {"code": "resource_unavailable"}}'
+
+
+def _fb_kwargs(**extra):
+    return {"fallback_tier": "default", "fallback_rates": (1.0, 4.0), "workers": 1, **extra}
+
+
+def _fb_handler(tier: str = "default"):
+    def handler(request: httpx.Request) -> httpx.Response:
+        if json.loads(request.read().decode())["service_tier"] == "flex":
+            return _status_response(429, _CAP)
+        return _tiered_response(tier, "gpt-6-luna")
+
+    return handler
+
+
+def test_fallback_after_capacity_retries_exhausted(tmp_path: Path) -> None:
+    results, summary, calls, _ = _run(_fb_handler(), tmp_path, max_capacity_retries=2, **_fb_kwargs())
+    assert [c["service_tier"] for c in calls] == ["flex", "flex", "flex", "default"]
+    assert results["r1"].fell_back is True
+    assert results["r1"].service_tier == "default"
+    assert summary["fallbacks"] == 1
+
+
+def test_fallback_after_elapsed_seconds(tmp_path: Path) -> None:
+    ticks = iter(range(0, 1000, 10))
+    results, _, calls, _ = _run(
+        _fb_handler(), tmp_path, max_capacity_retries=50,
+        **_fb_kwargs(fallback_after_s=15.0, clock=lambda: float(next(ticks))),
+    )
+    # first_attempt=0; 429 at t=10 (<15, retry); 429 at t=20 (>=15, fall back)
+    assert [c["service_tier"] for c in calls] == ["flex", "flex", "default"]
+    assert results["r1"].fell_back is True
+
+
+def test_fallback_response_costed_at_fallback_rates(tmp_path: Path) -> None:
+    results, summary, _, _ = _run(_fb_handler(), tmp_path, max_capacity_retries=0, **_fb_kwargs())
+    # 10 prompt * 1.0/1e6 + 5 completion * 4.0/1e6
+    assert results["r1"].cost_usd == pytest.approx(0.00003)
+    assert summary["cost_usd"] == pytest.approx(0.00003)
+
+
+def test_no_fallback_when_flex_succeeds(tmp_path: Path) -> None:
+    results, summary, calls, _ = _run(
+        lambda _r: _tiered_response("flex", "gpt-6-luna"), tmp_path, **_fb_kwargs()
+    )
+    assert len(calls) == 1
+    assert results["r1"].fell_back is False
+    assert results["r1"].cost_usd == pytest.approx(0.000012)
+    assert summary["fallbacks"] == 0
+
+
+def test_fallback_only_once(tmp_path: Path) -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return _status_response(429, _CAP)
+
+    with pytest.raises(FlexError, match="capacity retries exhausted"):
+        _run(handler, tmp_path, max_capacity_retries=1, **_fb_kwargs())
+
+
+def test_non_flex_tier_without_fallback_still_raises(tmp_path: Path) -> None:
+    with pytest.raises(FlexError, match="service_tier"):
+        _run(lambda _r: _tiered_response("default", "gpt-6-luna"), tmp_path)
+
+
+def test_fallback_unexpected_tier_after_fallback_raises(tmp_path: Path) -> None:
+    with pytest.raises(FlexError, match="service_tier"):
+        _run(_fb_handler(tier="priority"), tmp_path, max_capacity_retries=0, **_fb_kwargs())
+
+
+def test_fallback_tier_without_rates_raises_before_call(tmp_path: Path) -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        raise AssertionError("no HTTP call expected")
+
+    with pytest.raises(ValueError):
+        _run(handler, tmp_path, fallback_tier="default")
+
+
+def test_non_capacity_429_never_falls_back(tmp_path: Path) -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return _status_response(429, '{"error": {"code": "rate_limit_exceeded"}}')
+
+    with pytest.raises(FlexError):
+        _run(handler, tmp_path, **_fb_kwargs(fallback_after_s=0.0))
+
+
+def test_non_capacity_429_sends_single_flex_call(tmp_path: Path) -> None:
+    client, calls = _make_client(lambda _r: _status_response(429, '{"error": {"code": "rate_limit_exceeded"}}'))
+    with pytest.raises(FlexError):
+        run_flex(
+            [{"custom_id": "r1", "body": {"messages": []}}],
+            model="gpt-6-luna", checkpoint=tmp_path / "cp.jsonl", api_key="k", max_usd=10.0,
+            rates=(0.4, 1.6), client=client, sleep=lambda _s: None,
+            fallback_tier="default", fallback_after_s=0.0, fallback_rates=(1.0, 4.0),
+        )
+    assert [c["service_tier"] for c in calls] == ["flex"]
+
+
+def test_transport_errors_never_fall_back(tmp_path: Path) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("boom", request=request)
+
+    results, _, calls, _ = _run(handler, tmp_path, **_fb_kwargs(fallback_after_s=0.0))
+    assert {c["service_tier"] for c in calls} == {"flex"}
+    assert results["r1"].error is not None
+    assert results["r1"].fell_back is False
+
+
+def test_fell_back_checkpoint_round_trip_and_old_rows(tmp_path: Path) -> None:
+    _run(_fb_handler(), tmp_path, max_capacity_retries=0, **_fb_kwargs())
+    row = json.loads((tmp_path / "cp.jsonl").read_text(encoding="utf-8").splitlines()[0])
+    assert row["fell_back"] is True
+    results, summary, calls, _ = _run(lambda _r: _ok_response(), tmp_path)
+    assert calls == []
+    assert results["r1"].fell_back is True
+    assert summary["fallbacks"] == 1
+    old = tmp_path / "old"
+    old.mkdir()
+    (old / "cp.jsonl").write_text(
+        json.dumps({"custom_id": "r1", "content": "c", "prompt_tokens": 1, "completion_tokens": 1,
+                    "cost_usd": 0.0, "error": None}) + "\n",
+        encoding="utf-8",
+    )
+    results, summary, _, _ = _run(lambda _r: _ok_response(), old)
+    assert results["r1"].fell_back is False
+    assert summary["fallbacks"] == 0
