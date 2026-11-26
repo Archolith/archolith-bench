@@ -1,0 +1,20 @@
+{
+ "preview": {
+  "dry_run": true,
+  "scope": "global",
+  "max_age_hours": 0,
+  "session_nodes_found": 1834,
+  "ttl_expired_nodes_found": 0,
+  "empty_orphan_episodes_found": 0,
+  "age_rule": "max_age_hours applies to consolidation; TTL expiry and empty-episode cleanup use their own rules"
+ },
+ "result": {
+  "promoted": 1142,
+  "deleted": 0,
+  "conflicts_detected": 244,
+  "skipped_pending": 0,
+  "orphan_episodes_cleaned": 0,
+  "demoted": 692
+ },
+ "merge_failures_abstained": []
+}

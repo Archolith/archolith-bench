@@ -1,0 +1,38 @@
+{
+ "tally": {
+  "M-U": {
+   "current": {
+    "correct": 15,
+    "stale": 0,
+    "wrong": 1,
+    "abstained": 0
+   },
+   "before": {
+    "correct": 10,
+    "stale": 0,
+    "wrong": 0,
+    "abstained": 0
+   },
+   "control": {
+    "correct": 18,
+    "stale": 0,
+    "wrong": 4,
+    "abstained": 0
+   }
+  }
+ },
+ "flips_vs_B-U": {},
+ "reading_inputs": {
+  "stale_rate_diff_MU_minus_BU_current": {
+   "n_items": 0,
+   "diff": null,
+   "ci_low": null,
+   "ci_high": null,
+   "seed": 0,
+   "resamples": 10000
+  },
+  "control_correct_rate_diff_MU_minus_BU": null,
+  "stale_rate_diff_MUshuffled_minus_MU_current": null,
+  "mechanism_MU": null
+ }
+}
