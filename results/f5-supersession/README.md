@@ -99,5 +99,6 @@ The harness is `archolith-fixtures/scripts/f5/` (`f5_serve.sh up|consolidate|sto
 stages, `f5_flex_audit.py`). Set `PYTHONPATH` to the Graphiti tree, then Menhir's `src`, before
 `f5_serve.sh up`; set `F5_PY` to a Python with python-dotenv. For the eval serve, export
 `MENHIR_RECALL_RANKING_STRATEGY=reranker_only` and `MENHIR_RECALL_RERANK_MODEL_DIR`, and snapshot the
-run's telemetry DB first, since that serve writes to it. `f5_run.py retrieve --serve` does not work at
-present: it imports `archolith_bench.staged`, which no longer exists.
+run's telemetry DB first, since that serve writes to it. `f5_run.py retrieve --serve <menhir tree>`
+(after `f5_serve.sh neo4j`) serves a Menhir tree through `archolith_bench.staged`, which needs an
+archolith-bench checkout at or after `a19e5c5`.
