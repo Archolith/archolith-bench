@@ -1,0 +1,652 @@
+[
+ {
+  "item_id": "dito-P1-current",
+  "repo": "digitalservicebund/digitalcheck-dito",
+  "kind": "current",
+  "pair_id": "dito-P1",
+  "adr_new": "0027",
+  "adr_old": [
+   "0003"
+  ],
+  "question": "What framework does the Digitalcheck DiTo site use to build and serve its pages?",
+  "gold": {
+   "current": "Astro with static site generation; nginx serves pre-built files, with React only for interactive islands",
+   "stale": [
+    "Remix as the meta framework for React with a server/backend",
+    "React Router with a Node application server"
+   ]
+  }
+ },
+ {
+  "item_id": "dito-P1-before",
+  "repo": "digitalservicebund/digitalcheck-dito",
+  "kind": "before",
+  "pair_id": "dito-P1",
+  "adr_new": "0027",
+  "adr_old": [
+   "0003"
+  ],
+  "question": "What did the DiTo team previously decide about the framework for building and serving the site, and why did that change?",
+  "gold": {
+   "old": "Remix as the server-side meta framework for React",
+   "reason": "to align with zfl-website, which already uses Astro, and because an application server is no longer needed (no server-side emails or PDFs; user data is in localStorage)"
+  }
+ },
+ {
+  "item_id": "dito-P2-current",
+  "repo": "digitalservicebund/digitalcheck-dito",
+  "kind": "current",
+  "pair_id": "dito-P2",
+  "adr_new": "0028",
+  "adr_old": [
+   "0011",
+   "0025"
+  ],
+  "question": "How does the DiTo site decide whether an unfinished feature is visible?",
+  "gold": {
+   "current": "No individual feature flags: unfinished features are shown on staging and hidden in production, based on the stage the build is made for (PUBLIC_STAGE / isProduction / isStagingOnly)",
+   "stale": [
+    "Unleash feature flags",
+    "Kubernetes ConfigMaps as feature toggles"
+   ]
+  }
+ },
+ {
+  "item_id": "dito-P2-before",
+  "repo": "digitalservicebund/digitalcheck-dito",
+  "kind": "before",
+  "pair_id": "dito-P2",
+  "adr_new": "0028",
+  "adr_old": [
+   "0025"
+  ],
+  "question": "What mechanism did DiTo use for feature toggles before its current approach, and why was it dropped?",
+  "gold": {
+   "old": "Kubernetes ConfigMaps mounted per instance as feature toggles (which had replaced Unleash)",
+   "reason": "every toggle needed a change and deployment in the infrastructure repo, flags were in practice all-on in staging and all-off in production, and without an application server ConfigMaps cannot be read at runtime"
+  }
+ },
+ {
+  "item_id": "dito-P3-current",
+  "repo": "digitalservicebund/digitalcheck-dito",
+  "kind": "current",
+  "pair_id": "dito-P3",
+  "adr_new": "0027",
+  "adr_old": [
+   "0015"
+  ],
+  "question": "Where does the DiTo site's page content (such as the principles and example pages) come from?",
+  "gold": {
+   "current": "Astro content collections in the repository (e.g. src/content/prinzipien); the remaining Strapi content moved to zfl-website",
+   "stale": [
+    "a CMS (Strapi)"
+   ]
+  }
+ },
+ {
+  "item_id": "dito-P4-current",
+  "repo": "digitalservicebund/digitalcheck-dito",
+  "kind": "current",
+  "pair_id": "dito-P4",
+  "adr_new": "0027",
+  "adr_old": [
+   "0016"
+  ],
+  "question": "How does the DiTo site request its content data from Strapi?",
+  "gold": {
+   "current": "It no longer requests content from Strapi: Astro content collections replace Strapi",
+   "stale": [
+    "GraphQL requests to Strapi",
+    "REST requests to Strapi"
+   ]
+  }
+ },
+ {
+  "item_id": "dito-P5-current",
+  "repo": "digitalservicebund/digitalcheck-dito",
+  "kind": "current",
+  "pair_id": "dito-P5",
+  "adr_new": "0027",
+  "adr_old": [
+   "0017"
+  ],
+  "question": "How does the DiTo site cache fetched content on the server?",
+  "gold": {
+   "current": "There is no server-side caching: there is no application server, the site is statically generated and nginx serves the pre-built files",
+   "stale": [
+    "NodeCache in-memory server-side caching of Strapi responses"
+   ]
+  }
+ },
+ {
+  "item_id": "dito-P5-before",
+  "repo": "digitalservicebund/digitalcheck-dito",
+  "kind": "before",
+  "pair_id": "dito-P5",
+  "adr_new": "0027",
+  "adr_old": [
+   "0017"
+  ],
+  "question": "How did DiTo previously cache data on the server, and why is that no longer the approach?",
+  "gold": {
+   "old": "NodeCache in-memory server-side caching of whole Strapi responses",
+   "reason": "the move to Astro static site generation removed the application server, whose only remaining job was fetching and caching Strapi content"
+  }
+ },
+ {
+  "item_id": "dito-P6-current",
+  "repo": "digitalservicebund/digitalcheck-dito",
+  "kind": "current",
+  "pair_id": "dito-P6",
+  "adr_new": "0027",
+  "adr_old": [
+   "0022"
+  ],
+  "question": "How are routes generated in the DiTo site?",
+  "gold": {
+   "current": "with astro-route-generator, which derives route metadata (titles, parents, breadcrumbs) from Astro's file-based routing",
+   "stale": [
+    "file-based routing with route metadata centralized in staticRoutes.ts and breadcrumbs built with useMatches()"
+   ]
+  }
+ },
+ {
+  "item_id": "dito-P7-current",
+  "repo": "digitalservicebund/digitalcheck-dito",
+  "kind": "current",
+  "pair_id": "dito-P7",
+  "adr_new": "0018",
+  "adr_old": [
+   "0009"
+  ],
+  "question": "Is the Digitalcheck application code kept in a monorepo or in separate repositories?",
+  "gold": {
+   "current": "separate repositories (polyrepo): this repository only contains the Digital Touchpoint application",
+   "stale": [
+    "a monorepo with all Digitalcheck applications under /packages"
+   ]
+  }
+ },
+ {
+  "item_id": "dito-P7-before",
+  "repo": "digitalservicebund/digitalcheck-dito",
+  "kind": "before",
+  "pair_id": "dito-P7",
+  "adr_new": "0018",
+  "adr_old": [
+   "0009"
+  ],
+  "question": "How was the Digitalcheck application code organized before, and why did that change?",
+  "gold": {
+   "old": "a monorepo with all Digitalcheck applications under /packages and a shared pipeline",
+   "reason": "the Tool Finder was sunset and removed, leaving no other packages and no plans for new applications"
+  }
+ },
+ {
+  "item_id": "ris-P8-current",
+  "repo": "digitalservicebund/ris-search",
+  "kind": "current",
+  "pair_id": "ris-P8",
+  "adr_new": "0025",
+  "adr_old": [
+   "0003",
+   "0012"
+  ],
+  "question": "Which Java version does the ris-search backend use?",
+  "gold": {
+   "current": "JDK 25 (Java 25)",
+   "stale": [
+    "Java 17",
+    "JDK 21"
+   ]
+  }
+ },
+ {
+  "item_id": "ris-P8-before",
+  "repo": "digitalservicebund/ris-search",
+  "kind": "before",
+  "pair_id": "ris-P8",
+  "adr_new": "0025",
+  "adr_old": [
+   "0012"
+  ],
+  "question": "Which Java version did the ris-search backend use before its current one, and why did it move?",
+  "gold": {
+   "old": "JDK 21",
+   "reason": "JDK 25 is the next long-term-support release (support until at least 2033), keeping the project eligible for security patches and newer language, API and JVM improvements"
+  }
+ },
+ {
+  "item_id": "ris-P9-current",
+  "repo": "digitalservicebund/ris-search",
+  "kind": "current",
+  "pair_id": "ris-P9",
+  "adr_new": "0019",
+  "adr_old": [
+   "0007"
+  ],
+  "question": "How does ris-search verify that the frontend and the backend API stay compatible?",
+  "gold": {
+   "current": "backend integration tests (e.g. MockMvc) and Playwright end-to-end tests; no contract testing",
+   "stale": [
+    "Pact consumer-driven contract testing"
+   ]
+  }
+ },
+ {
+  "item_id": "ris-P9-before",
+  "repo": "digitalservicebund/ris-search",
+  "kind": "before",
+  "pair_id": "ris-P9",
+  "adr_new": "0019",
+  "adr_old": [
+   "0007"
+  ],
+  "question": "What did ris-search previously use to check frontend-backend API compatibility, and why was it removed?",
+  "gold": {
+   "old": "Pact contract testing",
+   "reason": "maintaining it in both frontend and backend caused friction, it never grew beyond one test, and it added complexity without proportional benefit, so E2E tests became the source of truth"
+  }
+ },
+ {
+  "item_id": "ris-P10-current",
+  "repo": "digitalservicebund/ris-search",
+  "kind": "current",
+  "pair_id": "ris-P10",
+  "adr_new": "0015",
+  "adr_old": [
+   "0013"
+  ],
+  "question": "Where does the ris-search S3-to-OpenSearch import service keep the timestamp of the last processed changelog file?",
+  "gold": {
+   "current": "in a status entry in an application-level metadata index in OpenSearch",
+   "stale": [
+    "in a status file in an S3 bucket"
+   ]
+  }
+ },
+ {
+  "item_id": "supa-P11-current",
+  "repo": "supabase/cli",
+  "kind": "current",
+  "pair_id": "supa-P11",
+  "adr_new": "0028",
+  "adr_old": [
+   "0011"
+  ],
+  "question": "Which npm dist-tags does the Supabase CLI publish releases under?",
+  "gold": {
+   "current": "latest (main), beta (develop), next (the next-major branch) and v<N>.stable for maintenance lines of past majors",
+   "stale": [
+    "latest, beta and alpha, with alpha for the TypeScript-native next shell"
+   ]
+  }
+ },
+ {
+  "item_id": "supa-P11-before",
+  "repo": "supabase/cli",
+  "kind": "before",
+  "pair_id": "supa-P11",
+  "adr_new": "0028",
+  "adr_old": [
+   "0011"
+  ],
+  "question": "What npm dist-tag scheme did the Supabase CLI use before its current release channels, and why did it change?",
+  "gold": {
+   "old": "three dist-tags: latest, beta and alpha (alpha for the TypeScript-native next shell)",
+   "reason": "the next shell behind alpha no longer exists, and there was no channel for breaking majors or for maintaining past majors"
+  }
+ },
+ {
+  "item_id": "supa-P12-current",
+  "repo": "supabase/cli",
+  "kind": "current",
+  "pair_id": "supa-P12",
+  "adr_new": "0031",
+  "adr_old": [
+   "0016"
+  ],
+  "question": "What role does the Go CLI code (apps/cli-go) play in the Supabase CLI?",
+  "gold": {
+   "current": "none: apps/cli-go is deleted and the CLI ships as a single TypeScript-built binary per platform with no Go compilation",
+   "stale": [
+    "apps/cli-go remains authoritative for the remaining commands proxied to the Go binary"
+   ]
+  }
+ },
+ {
+  "item_id": "supa-P12-before",
+  "repo": "supabase/cli",
+  "kind": "before",
+  "pair_id": "supa-P12",
+  "adr_new": "0031",
+  "adr_old": [
+   "0016"
+  ],
+  "question": "What role did the Go CLI code previously have in the Supabase CLI, and why did that change?",
+  "gold": {
+   "old": "apps/cli-go stayed authoritative for the remaining wrapped commands that proxied to the Go binary",
+   "reason": "the remaining deprecated surfaces were removed rather than ported, so nothing spawns the Go binary and the Go tree only carried toolchain, CI and release costs"
+  }
+ },
+ {
+  "item_id": "supa-P13-current",
+  "repo": "supabase/cli",
+  "kind": "current",
+  "pair_id": "supa-P13",
+  "adr_new": "0024",
+  "adr_old": [
+   "0004"
+  ],
+  "question": "Does `supabase pull` run its sub-syncs in parallel or one after another?",
+  "gold": {
+   "current": "sequentially, in a fixed order: config, migration history (conditional), db, functions",
+   "stale": [
+    "all sub-syncs in parallel"
+   ]
+  }
+ },
+ {
+  "item_id": "supa-P13-before",
+  "repo": "supabase/cli",
+  "kind": "before",
+  "pair_id": "supa-P13",
+  "adr_new": "0024",
+  "adr_old": [
+   "0004"
+  ],
+  "question": "How was `supabase pull` originally meant to run its sub-syncs, and why was that changed?",
+  "gold": {
+   "old": "running all sub-syncs in parallel",
+   "reason": "the db step depends on the freshly pulled config and on the migration history being populated first, and concurrent steps would garble the shared terminal output"
+  }
+ },
+ {
+  "item_id": "fiware-P14-current",
+  "repo": "FIWARE/data-space-connector",
+  "kind": "current",
+  "pair_id": "fiware-P14",
+  "adr_new": "0008",
+  "adr_old": [
+   "0001"
+  ],
+  "question": "Which consent-manager service and database does the FIWARE data space connector's trust anchor deploy?",
+  "gold": {
+   "current": "dsc-consent-manager (Java) on PostgreSQL",
+   "stale": [
+    "the Prometheus-X consent-manager (Node) with MongoDB"
+   ]
+  }
+ },
+ {
+  "item_id": "fiware-P14-before",
+  "repo": "FIWARE/data-space-connector",
+  "kind": "before",
+  "pair_id": "fiware-P14",
+  "adr_new": "0008",
+  "adr_old": [
+   "0001"
+  ],
+  "question": "Which consent-manager did the FIWARE data space connector previously build on, and why was it replaced?",
+  "gold": {
+   "old": "the Prometheus-X consent-manager (Node, MongoDB) with OID4VP added in front of it",
+   "reason": "it authenticated with one shared consent key that carried no caller identity, and closing its gaps required changes in a codebase the project does not own"
+  }
+ },
+ {
+  "item_id": "fiware-P15-current",
+  "repo": "FIWARE/data-space-connector",
+  "kind": "current",
+  "pair_id": "fiware-P15",
+  "adr_new": "0008",
+  "adr_old": [
+   "0001"
+  ],
+  "question": "How do callers authenticate to the consent-manager in the FIWARE data space connector?",
+  "gold": {
+   "current": "with a JWT issued by the authority's VCVerifier (audience consent-manager) that the consent-manager validates on every call, taking identity and role from the token claims",
+   "stale": [
+    "an APISIX facade validates the caller's OID4VP token and injects a shared consent key"
+   ]
+  }
+ },
+ {
+  "item_id": "phel-P16-current",
+  "repo": "phel-lang/phel-lang",
+  "kind": "current",
+  "pair_id": "phel-P16",
+  "adr_new": "0021",
+  "adr_old": [
+   "0005"
+  ],
+  "question": "Are Phel's CLI and internal tooling types part of its public PHP API for embedding hosts?",
+  "gold": {
+   "current": "No: internal tooling is excluded; only the runtime, embedding facades and contracts, Lang, Config and Shared are public (exceptions pinned by PublicApiSurface), and an internal type named in a public signature is an opaque handle",
+   "stale": [
+    "Yes: six rules make whole namespaces public (every module facade and everything under Shared, Lang and Config), gated by a snapshot"
+   ]
+  }
+ },
+ {
+  "item_id": "dito-C0002",
+  "repo": "digitalservicebund/digitalcheck-dito",
+  "kind": "control",
+  "adr_control": "0002",
+  "question": "Which JavaScript framework did the DiTo team choose as the frontend framework for the site?",
+  "gold": {
+   "current": "React"
+  },
+  "question_v1": "Which frontend library does the DiTo site use for its interactive components?",
+  "question_changed": "2026-11-19 after pilot: v1 'frontend library for interactive components' is truthfully answered by Headless UI"
+ },
+ {
+  "item_id": "dito-C0024",
+  "repo": "digitalservicebund/digitalcheck-dito",
+  "kind": "control",
+  "adr_control": "0024",
+  "question": "Where does DiTo store users' form data?",
+  "gold": {
+   "current": "in the browser's localStorage on the client"
+  }
+ },
+ {
+  "item_id": "dito-C0026",
+  "repo": "digitalservicebund/digitalcheck-dito",
+  "kind": "control",
+  "adr_control": "0026",
+  "question": "Which library does DiTo use for accessible UI primitives such as dialogs and tabs?",
+  "gold": {
+   "current": "Headless UI (@headlessui/react)"
+  }
+ },
+ {
+  "item_id": "ris-C0002",
+  "repo": "digitalservicebund/ris-search",
+  "kind": "control",
+  "adr_control": "0002",
+  "question": "Which build tool does ris-search use?",
+  "gold": {
+   "current": "Gradle"
+  }
+ },
+ {
+  "item_id": "ris-C0004",
+  "repo": "digitalservicebund/ris-search",
+  "kind": "control",
+  "adr_control": "0004",
+  "question": "How is the ris-search development environment for the backend and frontend set up?",
+  "gold": {
+   "current": "containerized with Docker images managed through docker-compose"
+  }
+ },
+ {
+  "item_id": "ris-C0011",
+  "repo": "digitalservicebund/ris-search",
+  "kind": "control",
+  "adr_control": "0011",
+  "question": "Does ris-search run its end-to-end tests in the CI pipeline?",
+  "gold": {
+   "current": "yes, end-to-end tests run in the pipeline"
+  }
+ },
+ {
+  "item_id": "ris-C0014",
+  "repo": "digitalservicebund/ris-search",
+  "kind": "control",
+  "adr_control": "0014",
+  "question": "What does ris-search use to stop secrets from being pushed to the repository?",
+  "gold": {
+   "current": "GitHub Secrets push prevention (replacing Talisman)"
+  }
+ },
+ {
+  "item_id": "ris-C0017",
+  "repo": "digitalservicebund/ris-search",
+  "kind": "control",
+  "adr_control": "0017",
+  "question": "How is the ris-search staging environment protected?",
+  "gold": {
+   "current": "with basic auth (OAuth2 was removed)"
+  }
+ },
+ {
+  "item_id": "ris-C0020",
+  "repo": "digitalservicebund/ris-search",
+  "kind": "control",
+  "adr_control": "0020",
+  "question": "Which package manager does the ris-search frontend use?",
+  "gold": {
+   "current": "pnpm"
+  }
+ },
+ {
+  "item_id": "ris-C0021",
+  "repo": "digitalservicebund/ris-search",
+  "kind": "control",
+  "adr_control": "0021",
+  "question": "Which linter does the ris-search frontend use?",
+  "gold": {
+   "current": "Oxlint"
+  }
+ },
+ {
+  "item_id": "ris-C0022",
+  "repo": "digitalservicebund/ris-search",
+  "kind": "control",
+  "adr_control": "0022",
+  "question": "How are the ris-search frontend's API TypeScript types maintained?",
+  "gold": {
+   "current": "generated from the committed OpenAPI spec with openapi-typescript"
+  }
+ },
+ {
+  "item_id": "ris-C0024",
+  "repo": "digitalservicebund/ris-search",
+  "kind": "control",
+  "adr_control": "0024",
+  "question": "Which language does ris-search use for domain-specific terms in code?",
+  "gold": {
+   "current": "German"
+  }
+ },
+ {
+  "item_id": "supa-C0013",
+  "repo": "supabase/cli",
+  "kind": "control",
+  "adr_control": "0013-live",
+  "question": "Do the Supabase CLI's live end-to-end tests go through the replay server?",
+  "gold": {
+   "current": "no, live tests run directly against a configured platform URL and never route through the replay server"
+  }
+ },
+ {
+  "item_id": "supa-C0014",
+  "repo": "supabase/cli",
+  "kind": "control",
+  "adr_control": "0014",
+  "question": "How are the Supabase CLI's macOS binaries code-signed?",
+  "gold": {
+   "current": "in the build pipeline on the Linux build runner using rcodesign (apple-codesign)"
+  }
+ },
+ {
+  "item_id": "supa-C0034",
+  "repo": "supabase/cli",
+  "kind": "control",
+  "adr_control": "0034",
+  "question": "Do Supabase CLI config diagnostics print source text or configured values?",
+  "gold": {
+   "current": "no, they identify problems by key path and file:line:column and never print source text or values"
+  }
+ },
+ {
+  "item_id": "supa-C0030",
+  "repo": "supabase/cli",
+  "kind": "control",
+  "adr_control": "0030",
+  "question": "What qualifies a problem for a Supabase CLI hotfix release?",
+  "gold": {
+   "current": "a problem in the current stable that users cannot work around and that should not wait for the next promotion: a regression from the last release, a security fix, or breakage caused by a platform change"
+  }
+ },
+ {
+  "item_id": "fiware-C0006",
+  "repo": "FIWARE/data-space-connector",
+  "kind": "control",
+  "adr_control": "0006",
+  "question": "Where are eIDAS certificate chains validated in the FIWARE data space connector?",
+  "gold": {
+   "current": "inside VCVerifier using its built-in trust-list validation, not in an external DSS service"
+  }
+ },
+ {
+  "item_id": "fiware-C0007",
+  "repo": "FIWARE/data-space-connector",
+  "kind": "control",
+  "adr_control": "0007",
+  "question": "How are the FIWARE data space connector's Helm charts tested in integration tests?",
+  "gold": {
+   "current": "both ways: rendered and applied (template and apply), and installed as Helm releases"
+  }
+ },
+ {
+  "item_id": "phel-C0002",
+  "repo": "phel-lang/phel-lang",
+  "kind": "control",
+  "adr_control": "0002",
+  "question": "What does the Phel compiler compile Phel code into?",
+  "gold": {
+   "current": "PHP source code"
+  }
+ },
+ {
+  "item_id": "phel-C0003",
+  "repo": "phel-lang/phel-lang",
+  "kind": "control",
+  "adr_control": "0003",
+  "question": "How do Phel's internal modules communicate with each other?",
+  "gold": {
+   "current": "through facades"
+  }
+ },
+ {
+  "item_id": "phel-C0011",
+  "repo": "phel-lang/phel-lang",
+  "kind": "control",
+  "adr_control": "0011",
+  "question": "How are Phel's persistent collections implemented?",
+  "gold": {
+   "current": "in PHP"
+  }
+ },
+ {
+  "item_id": "phel-C0012",
+  "repo": "phel-lang/phel-lang",
+  "kind": "control",
+  "adr_control": "0012",
+  "question": "Are Phel's macros hygienic?",
+  "gold": {
+   "current": "no, they are non-hygienic, with auto-gensym to avoid symbol capture"
+  }
+ }
+]

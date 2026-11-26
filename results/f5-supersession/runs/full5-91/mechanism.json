@@ -1,0 +1,443 @@
+[
+ {
+  "arm": "M-U",
+  "pairs": [
+   {
+    "repo": "digitalservicebund/digitalcheck-dito",
+    "pair_id": "dito-P1",
+    "adr_new": "0027",
+    "adr_old": [
+     "0003"
+    ],
+    "o_edges": 9,
+    "o_expired": 0,
+    "expired_during_N": 0,
+    "verdict": "not_retired",
+    "via": null,
+    "missing_ingest": []
+   },
+   {
+    "repo": "digitalservicebund/digitalcheck-dito",
+    "pair_id": "dito-P2",
+    "adr_new": "0028",
+    "adr_old": [
+     "0011",
+     "0025"
+    ],
+    "o_edges": 22,
+    "o_expired": 2,
+    "expired_during_N": 1,
+    "verdict": "retired_by_N",
+    "via": "N_ingest",
+    "missing_ingest": []
+   },
+   {
+    "repo": "digitalservicebund/digitalcheck-dito",
+    "pair_id": "dito-P3",
+    "adr_new": "0027",
+    "adr_old": [
+     "0015"
+    ],
+    "o_edges": 10,
+    "o_expired": 0,
+    "expired_during_N": 0,
+    "verdict": "not_retired",
+    "via": null,
+    "missing_ingest": []
+   },
+   {
+    "repo": "digitalservicebund/digitalcheck-dito",
+    "pair_id": "dito-P4",
+    "adr_new": "0027",
+    "adr_old": [
+     "0016"
+    ],
+    "o_edges": 2,
+    "o_expired": 1,
+    "expired_during_N": 1,
+    "verdict": "retired_by_N",
+    "via": "N_ingest",
+    "missing_ingest": []
+   },
+   {
+    "repo": "digitalservicebund/digitalcheck-dito",
+    "pair_id": "dito-P5",
+    "adr_new": "0027",
+    "adr_old": [
+     "0017"
+    ],
+    "o_edges": 13,
+    "o_expired": 2,
+    "expired_during_N": 2,
+    "verdict": "retired_by_N",
+    "via": "N_ingest",
+    "missing_ingest": []
+   },
+   {
+    "repo": "digitalservicebund/digitalcheck-dito",
+    "pair_id": "dito-P6",
+    "adr_new": "0027",
+    "adr_old": [
+     "0022"
+    ],
+    "o_edges": 13,
+    "o_expired": 3,
+    "expired_during_N": 3,
+    "verdict": "retired_by_N",
+    "via": "N_ingest",
+    "missing_ingest": []
+   },
+   {
+    "repo": "digitalservicebund/digitalcheck-dito",
+    "pair_id": "dito-P7",
+    "adr_new": "0018",
+    "adr_old": [
+     "0009"
+    ],
+    "o_edges": 19,
+    "o_expired": 2,
+    "expired_during_N": 1,
+    "verdict": "retired_by_N",
+    "via": "N_ingest",
+    "missing_ingest": []
+   },
+   {
+    "repo": "digitalservicebund/ris-search",
+    "pair_id": "ris-P8",
+    "adr_new": "0025",
+    "adr_old": [
+     "0003",
+     "0012"
+    ],
+    "o_edges": 14,
+    "o_expired": 0,
+    "expired_during_N": 0,
+    "verdict": "not_retired",
+    "via": null,
+    "missing_ingest": []
+   },
+   {
+    "repo": "digitalservicebund/ris-search",
+    "pair_id": "ris-P9",
+    "adr_new": "0019",
+    "adr_old": [
+     "0007"
+    ],
+    "o_edges": 12,
+    "o_expired": 6,
+    "expired_during_N": 6,
+    "verdict": "retired_by_N",
+    "via": "N_ingest",
+    "missing_ingest": []
+   },
+   {
+    "repo": "digitalservicebund/ris-search",
+    "pair_id": "ris-P10",
+    "adr_new": "0015",
+    "adr_old": [
+     "0013"
+    ],
+    "o_edges": 22,
+    "o_expired": 1,
+    "expired_during_N": 1,
+    "verdict": "retired_by_N",
+    "via": "N_ingest",
+    "missing_ingest": []
+   },
+   {
+    "repo": "supabase/cli",
+    "pair_id": "supa-P11",
+    "adr_new": "0028",
+    "adr_old": [
+     "0011"
+    ],
+    "o_edges": 26,
+    "o_expired": 1,
+    "expired_during_N": 1,
+    "verdict": "retired_by_N",
+    "via": "N_ingest",
+    "missing_ingest": []
+   },
+   {
+    "repo": "supabase/cli",
+    "pair_id": "supa-P12",
+    "adr_new": "0031",
+    "adr_old": [
+     "0016"
+    ],
+    "o_edges": 11,
+    "o_expired": 1,
+    "expired_during_N": 1,
+    "verdict": "retired_by_N",
+    "via": "N_ingest",
+    "missing_ingest": []
+   },
+   {
+    "repo": "supabase/cli",
+    "pair_id": "supa-P13",
+    "adr_new": "0024",
+    "adr_old": [
+     "0004"
+    ],
+    "o_edges": 35,
+    "o_expired": 4,
+    "expired_during_N": 1,
+    "verdict": "retired_by_N",
+    "via": "N_ingest",
+    "missing_ingest": []
+   },
+   {
+    "repo": "FIWARE/data-space-connector",
+    "pair_id": "fiware-P14",
+    "adr_new": "0008",
+    "adr_old": [
+     "0001"
+    ],
+    "o_edges": 28,
+    "o_expired": 3,
+    "expired_during_N": 3,
+    "verdict": "retired_by_N",
+    "via": "N_ingest",
+    "missing_ingest": []
+   },
+   {
+    "repo": "FIWARE/data-space-connector",
+    "pair_id": "fiware-P15",
+    "adr_new": "0008",
+    "adr_old": [
+     "0001"
+    ],
+    "o_edges": 28,
+    "o_expired": 3,
+    "expired_during_N": 3,
+    "verdict": "retired_by_N",
+    "via": "N_ingest",
+    "missing_ingest": []
+   },
+   {
+    "repo": "phel-lang/phel-lang",
+    "pair_id": "phel-P16",
+    "adr_new": "0021",
+    "adr_old": [
+     "0005"
+    ],
+    "o_edges": 22,
+    "o_expired": 3,
+    "expired_during_N": 3,
+    "verdict": "retired_by_N",
+    "via": "N_ingest",
+    "missing_ingest": []
+   }
+  ],
+  "controls": [
+   {
+    "repo": "digitalservicebund/digitalcheck-dito",
+    "adr_control": "0002",
+    "edges": 9,
+    "expired": 1,
+    "expired_during": [
+     "0018"
+    ],
+    "false_retirement": true,
+    "missing_ingest": false
+   },
+   {
+    "repo": "digitalservicebund/digitalcheck-dito",
+    "adr_control": "0024",
+    "edges": 19,
+    "expired": 0,
+    "expired_during": [],
+    "false_retirement": false,
+    "missing_ingest": false
+   },
+   {
+    "repo": "digitalservicebund/digitalcheck-dito",
+    "adr_control": "0026",
+    "edges": 9,
+    "expired": 0,
+    "expired_during": [],
+    "false_retirement": false,
+    "missing_ingest": false
+   },
+   {
+    "repo": "digitalservicebund/ris-search",
+    "adr_control": "0002",
+    "edges": 11,
+    "expired": 0,
+    "expired_during": [],
+    "false_retirement": false,
+    "missing_ingest": false
+   },
+   {
+    "repo": "digitalservicebund/ris-search",
+    "adr_control": "0004",
+    "edges": 24,
+    "expired": 0,
+    "expired_during": [],
+    "false_retirement": false,
+    "missing_ingest": false
+   },
+   {
+    "repo": "digitalservicebund/ris-search",
+    "adr_control": "0011",
+    "edges": 15,
+    "expired": 0,
+    "expired_during": [],
+    "false_retirement": false,
+    "missing_ingest": false
+   },
+   {
+    "repo": "digitalservicebund/ris-search",
+    "adr_control": "0014",
+    "edges": 15,
+    "expired": 0,
+    "expired_during": [],
+    "false_retirement": false,
+    "missing_ingest": false
+   },
+   {
+    "repo": "digitalservicebund/ris-search",
+    "adr_control": "0017",
+    "edges": 11,
+    "expired": 0,
+    "expired_during": [],
+    "false_retirement": false,
+    "missing_ingest": false
+   },
+   {
+    "repo": "digitalservicebund/ris-search",
+    "adr_control": "0020",
+    "edges": 10,
+    "expired": 0,
+    "expired_during": [],
+    "false_retirement": false,
+    "missing_ingest": false
+   },
+   {
+    "repo": "digitalservicebund/ris-search",
+    "adr_control": "0021",
+    "edges": 14,
+    "expired": 0,
+    "expired_during": [],
+    "false_retirement": false,
+    "missing_ingest": false
+   },
+   {
+    "repo": "digitalservicebund/ris-search",
+    "adr_control": "0022",
+    "edges": 13,
+    "expired": 0,
+    "expired_during": [],
+    "false_retirement": false,
+    "missing_ingest": false
+   },
+   {
+    "repo": "digitalservicebund/ris-search",
+    "adr_control": "0024",
+    "edges": 5,
+    "expired": 0,
+    "expired_during": [],
+    "false_retirement": false,
+    "missing_ingest": false
+   },
+   {
+    "repo": "supabase/cli",
+    "adr_control": "0013-live",
+    "edges": 42,
+    "expired": 0,
+    "expired_during": [],
+    "false_retirement": false,
+    "missing_ingest": false
+   },
+   {
+    "repo": "supabase/cli",
+    "adr_control": "0014",
+    "edges": 42,
+    "expired": 0,
+    "expired_during": [],
+    "false_retirement": false,
+    "missing_ingest": false
+   },
+   {
+    "repo": "supabase/cli",
+    "adr_control": "0034",
+    "edges": 14,
+    "expired": 0,
+    "expired_during": [],
+    "false_retirement": false,
+    "missing_ingest": false
+   },
+   {
+    "repo": "supabase/cli",
+    "adr_control": "0030",
+    "edges": 25,
+    "expired": 0,
+    "expired_during": [],
+    "false_retirement": false,
+    "missing_ingest": false
+   },
+   {
+    "repo": "FIWARE/data-space-connector",
+    "adr_control": "0006",
+    "edges": 34,
+    "expired": 0,
+    "expired_during": [],
+    "false_retirement": false,
+    "missing_ingest": false
+   },
+   {
+    "repo": "FIWARE/data-space-connector",
+    "adr_control": "0007",
+    "edges": 32,
+    "expired": 1,
+    "expired_during": [
+     "0007"
+    ],
+    "false_retirement": true,
+    "missing_ingest": false
+   },
+   {
+    "repo": "phel-lang/phel-lang",
+    "adr_control": "0002",
+    "edges": 22,
+    "expired": 0,
+    "expired_during": [],
+    "false_retirement": false,
+    "missing_ingest": false
+   },
+   {
+    "repo": "phel-lang/phel-lang",
+    "adr_control": "0003",
+    "edges": 25,
+    "expired": 0,
+    "expired_during": [],
+    "false_retirement": false,
+    "missing_ingest": false
+   },
+   {
+    "repo": "phel-lang/phel-lang",
+    "adr_control": "0011",
+    "edges": 35,
+    "expired": 0,
+    "expired_during": [],
+    "false_retirement": false,
+    "missing_ingest": false
+   },
+   {
+    "repo": "phel-lang/phel-lang",
+    "adr_control": "0012",
+    "edges": 26,
+    "expired": 0,
+    "expired_during": [],
+    "false_retirement": false,
+    "missing_ingest": false
+   }
+  ],
+  "verdict_counts": {
+   "not_retired": 3,
+   "retired_by_N": 13
+  },
+  "n_pairs": 16,
+  "controls_retired": 2
+ }
+]
