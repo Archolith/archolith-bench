@@ -10,9 +10,11 @@ from __future__ import annotations
 import json
 import os
 import time
+import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
+from urllib.parse import urlsplit, urlunsplit
 
 from archolith_bench.beacon_eval.isolation import (
     MEMORY_KEY_ENV,
@@ -81,6 +83,35 @@ def apply_drift_patch(repo_root: Path, patch: DriftPatch) -> Path:
     updated = original.replace(patch.find, patch.replace, 1)
     target.write_text(updated, encoding="utf-8")
     return target
+
+
+def notify_menhir_file_changed(
+    mcp_url: str,
+    *,
+    path: str,
+    project: str,
+    api_key: str = "",
+    timeout_s: float = 10.0,
+) -> dict[str, Any]:
+    """Notify Menhir's `/api/tool-events` hook that *path* changed after anchoring."""
+    parts = urlsplit(mcp_url)
+    origin = urlunsplit((parts.scheme, parts.netloc, "", "", ""))
+    url = f"{origin}/api/tool-events"
+    payload = json.dumps(
+        {
+            "event_type": "file_changed",
+            "operation": "edit",
+            "path": path,
+            "project": project,
+            "source_client": "archolith-bench-sprint",
+        }
+    ).encode("utf-8")
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    req = urllib.request.Request(url, data=payload, headers=headers, method="POST")
+    with urllib.request.urlopen(req, timeout=timeout_s) as resp:
+        return json.loads(resp.read().decode("utf-8"))
 
 
 def _normalize_repo_path(raw_path: str, repo_root: Path | None) -> str:
@@ -191,12 +222,14 @@ class OpenCodeSprintExecutor:
         export_fn: Callable[..., Path] = export_commit,
         resolve_cmd_fn: Callable[[], list[str]] = resolve_opencode,
         check_memory_fn: Callable[[str], None] = check_memory_ready,
+        notify_file_dirty_fn: Callable[..., dict[str, Any]] = notify_menhir_file_changed,
     ) -> None:
         self.config = config
         self._stream_fn = stream_fn
         self._export_fn = export_fn
         self._resolve_cmd_fn = resolve_cmd_fn
         self._check_memory_fn = check_memory_fn
+        self._notify_file_dirty_fn = notify_file_dirty_fn
         self._arm_checkouts: dict[str, Path] = {}
         self._memory_checked = False
 
@@ -230,6 +263,13 @@ class OpenCodeSprintExecutor:
         checkout = self._ensure_checkout(fixture, arm)
         if session.drift_patch is not None:
             apply_drift_patch(checkout, session.drift_patch)
+            if arm != "no_menhir" and self.config.menhir_mcp_url:
+                self._notify_file_dirty_fn(
+                    self.config.menhir_mcp_url,
+                    path=session.drift_patch.path,
+                    project=fixture.repo.name,
+                    api_key=self.config.menhir_api_key,
+                )
 
         mcp = self._mcp_for_arm(arm)
         run_dir = self.config.work_dir / "runs" / arm / f"{session_index:02d}-{session.session_id}"

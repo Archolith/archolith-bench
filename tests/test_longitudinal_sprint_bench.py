@@ -31,10 +31,11 @@ def test_simonw_llm_sprint_fixture_loads_with_drift_patch() -> None:
     fixture = SprintFixture.from_file(FIXTURE_PATH)
     assert fixture.repo.name == "llm"
     assert fixture.repo.commit == "764dc386c58b625f3ad9d203e699715ad208455f"
-    assert len(fixture.sessions) == 4
+    assert len(fixture.sessions) == 5
     assert fixture.sessions[2].phase == "drift_check"
     assert fixture.sessions[2].drift_patch is not None
     assert fixture.sessions[2].drift_patch.path == "llm/default_plugins/openai_models.py"
+    assert fixture.sessions[4].phase == "comprehension"
 
 
 def test_build_session_prompt_scopes_tool_guidance_by_arm() -> None:
@@ -59,7 +60,7 @@ def test_dry_run_longitudinal_sprint_scores_and_tracks_downstream_tokens() -> No
     assert set(report["arms"].keys()) == set(SPRINT_ARMS)
     for arm in SPRINT_ARMS:
         arm_rep = report["arms"][arm]
-        assert len(arm_rep["sessions"]) == 4
+        assert len(arm_rep["sessions"]) == 5
         assert arm_rep["mean_accuracy"] == 1.0
 
     # Verify longitudinal arm records memories/todos and tracks token & redundant-read deltas
@@ -194,18 +195,25 @@ def test_live_executor_applies_drift_patch_and_stops_fail_closed_on_429(
         log.rate_limited = True
         return log, "rate_limited", 1
 
+    dirty_calls: list[dict] = []
+
+    def fake_notify_dirty(mcp_url: str, *, path: str, project: str, api_key: str = "") -> dict:
+        dirty_calls.append({"mcp_url": mcp_url, "path": path, "project": project})
+        return {"accepted": True, "marked_dirty": True}
+
     fixture = SprintFixture.from_file(FIXTURE_PATH)
     executor = OpenCodeSprintExecutor(
         LiveSprintConfig(
             work_dir=tmp_path / "work",
             cache_dir=tmp_path / "cache",
             source_config=src_cfg,
-            menhir_mcp_url="http://127.0.0.1:9999/mcp",
+            menhir_mcp_url="http://127.0.0.1:9999/mcp-http",
         ),
         stream_fn=fake_stream_429,
         export_fn=fake_export,
         resolve_cmd_fn=lambda: ["opencode"],
         check_memory_fn=lambda url: None,
+        notify_file_dirty_fn=fake_notify_dirty,
     )
 
     with pytest.raises(RateLimited):
@@ -216,6 +224,13 @@ def test_live_executor_applies_drift_patch_and_stops_fail_closed_on_429(
             session_index=2,
             namespace="sprint-test",
         )
+    assert dirty_calls == [
+        {
+            "mcp_url": "http://127.0.0.1:9999/mcp-http",
+            "path": "llm/default_plugins/openai_models.py",
+            "project": "llm",
+        }
+    ]
     # Confirm drift patch was applied to the isolated checkout before the session ran
     patched = (
         tmp_path

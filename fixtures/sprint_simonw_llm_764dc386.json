@@ -71,7 +71,7 @@
           "tests/test_llm.py"
         ],
         "commands": [
-          "uv run pytest tests/test_openai_responses.py"
+          "pytest tests/test_openai_responses.py"
         ],
         "allowed_flags": [
           "-q",
@@ -187,6 +187,60 @@
           [
             "fragments.md version",
             "update docs/fragments.md"
+          ]
+        ],
+        "verdict": "",
+        "risky": []
+      }
+    },
+    {
+      "session_id": "s5-comprehension-check",
+      "phase": "comprehension",
+      "prompt": "Session 5 (Comprehension Check): In a fresh session, summarize the architectural picture from Sessions 1-4 in as few tool calls as possible without re-reading the codebase from scratch: (1) why `Chat` and `AsyncChat` must remain unchanged, (2) what changed in `llm/default_plugins/openai_models.py` during Session 3 and what the supported fallback option is, (3) which 3 test files are structurally impacted by `llm/default_plugins/openai_models.py`, and (4) what open TODO remains for Responses/fallback test coverage.",
+      "memory_instruction": "Answer primarily from `recall_memories`, `list_todos`, and `query_structure` (aim for <=3 tool calls total).",
+      "gold": {
+        "docs": [],
+        "files": [
+          "llm/default_plugins/openai_models.py",
+          "tests/test_openai_responses.py",
+          "tests/test_openai_messages.py",
+          "tests/test_llm.py"
+        ],
+        "acceptable_files": [
+          "docs/changelog.md",
+          "docs/openai-models.md"
+        ],
+        "commands": [],
+        "guardrails": [
+          [
+            "Chat and AsyncChat unchanged",
+            "keep Chat classes unchanged",
+            "other plugins import Chat"
+          ],
+          [
+            "-o chat_completions 1",
+            "chat_completions fallback"
+          ]
+        ],
+        "points": [
+          [
+            "Chat and AsyncChat",
+            "plugins import"
+          ],
+          [
+            "DEPRECATED fallback",
+            "legacy_chat",
+            "chat_completions"
+          ],
+          [
+            "test_openai_responses.py",
+            "test_openai_messages.py",
+            "test_llm.py"
+          ],
+          [
+            "TODO",
+            "test coverage",
+            "Responses"
           ]
         ],
         "verdict": "",
