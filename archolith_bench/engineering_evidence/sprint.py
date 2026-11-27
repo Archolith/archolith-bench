@@ -122,6 +122,7 @@ class SessionExecution:
     todos_saved: int = 0
     seconds: float = 0.0
     error: str = ""
+    repo_root: Path | None = None
 
     @property
     def total_tokens(self) -> int:
@@ -275,7 +276,9 @@ def run_longitudinal_sprint(
             )
             parsed = extract_answer(exec_res.response_text)
             if parsed is not None:
-                scored = score(parsed, session.gold, repo_root=repo_root)
+                scored = score(
+                    parsed, session.gold, repo_root=exec_res.repo_root or repo_root
+                )
                 positive_vals = [
                     float(v) for k, v in scored.items() if k != "risky_false_positive"
                 ]

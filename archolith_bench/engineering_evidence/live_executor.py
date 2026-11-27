@@ -84,9 +84,11 @@ def apply_drift_patch(repo_root: Path, patch: DriftPatch) -> Path:
 
 
 def _normalize_repo_path(raw_path: str, repo_root: Path | None) -> str:
-    cleaned = raw_path.strip().replace("\\", "/")
+    cleaned = raw_path.strip().replace("\\", "/").rstrip("/")
     if repo_root is not None:
         root_norm = str(repo_root.resolve()).replace("\\", "/").rstrip("/")
+        if cleaned.lower() == root_norm.lower():
+            return ""
         if cleaned.lower().startswith(root_norm.lower() + "/"):
             cleaned = cleaned[len(root_norm) + 1 :]
     while cleaned.startswith("./"):
@@ -135,7 +137,7 @@ def parse_sprint_tool_telemetry(
             )
             if isinstance(raw_fp, str) and raw_fp.strip():
                 norm = _normalize_repo_path(raw_fp, repo_root)
-                if norm not in seen_files:
+                if norm and norm not in seen_files:
                     seen_files.add(norm)
                     files_read.append(norm)
 
@@ -302,4 +304,5 @@ class OpenCodeSprintExecutor:
             todos_saved=telemetry["todos_saved"],
             seconds=elapsed,
             error=error,
+            repo_root=checkout,
         )
