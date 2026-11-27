@@ -41,26 +41,29 @@ def _print_table(report: dict) -> None:
         f"({report['repo']['url']})"
     )
     print(
-        f"\n{'Arm':22s} {'MeanAcc':>9s} {'TotalTok':>10s} {'S2-S4Tok':>10s} "
-        f"{'Tools':>7s} {'RedundRd':>9s} {'MemSaved':>9s}"
+        f"\n{'Arm':22s} {'MeanAcc':>8s} {'TotalTok':>10s} {'S2-S4Tok':>10s} "
+        f"{'Turns':>6s} {'Tools':>6s} {'RedundRd':>8s} {'MemSaved':>8s}"
     )
-    print("-" * 82)
+    print("-" * 86)
     for arm in SPRINT_ARMS:
         if arm not in report["arms"]:
             continue
         r = report["arms"][arm]
         print(
-            f"{arm:22s} {r['mean_accuracy']:>9.4f} {r['total_tokens']:>10d} "
-            f"{r['downstream_tokens_s2_to_end']:>10d} {r['total_tool_calls']:>7d} "
-            f"{r['total_redundant_file_reads']:>9d} {r['total_memories_saved']:>9d}"
+            f"{arm:22s} {r['mean_accuracy']:>8.4f} {r['total_tokens']:>10d} "
+            f"{r['downstream_tokens_s2_to_end']:>10d} {r['total_turns']:>6d} "
+            f"{r['total_tool_calls']:>6d} {r['total_redundant_file_reads']:>8d} "
+            f"{r['total_memories_saved']:>8d}"
         )
     if report["comparisons_vs_no_menhir"]:
-        print("\nDeltas vs no_menhir:")
+        print("\nRubric vs no_menhir (accuracy-gated tokens + turns):")
         for arm, cmp in report["comparisons_vs_no_menhir"].items():
             print(
-                f"  {arm:20s}: acc={cmp['accuracy_delta']:+.4f}, "
+                f"  {arm:20s}: [{cmp['verdict']}] acc={cmp['accuracy_delta']:+.4f}, "
                 f"total_tok={cmp['total_tokens_delta_pct']:+.2f}%, "
                 f"s2_s4_tok={cmp['downstream_tokens_delta_pct']:+.2f}%, "
+                f"turns={cmp['total_turns_delta_pct']:+.2f}%, "
+                f"tools={cmp['total_tool_calls_delta_pct']:+.2f}%, "
                 f"redundant_reads={cmp['redundant_reads_delta']:+d}"
             )
 

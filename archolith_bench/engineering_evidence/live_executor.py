@@ -298,6 +298,7 @@ class OpenCodeSprintExecutor:
             output_tokens=log.output_tokens,
             cache_read_tokens=log.cache_read_tokens,
             cache_write_tokens=log.cache_write_tokens,
+            turns=log.usage_events,
             tool_calls=log.tool_calls,
             files_read=telemetry["files_read"],
             memories_saved=telemetry["memories_saved"],

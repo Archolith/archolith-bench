@@ -68,7 +68,44 @@ def test_dry_run_longitudinal_sprint_scores_and_tracks_downstream_tokens() -> No
     assert long_rep["total_todos_saved"] == 1
     cmp_long = report["comparisons_vs_no_menhir"]["menhir_longitudinal"]
     assert cmp_long["downstream_tokens_delta_pct"] < 0
+    assert cmp_long["total_turns_delta_pct"] < 0
     assert cmp_long["redundant_reads_delta"] < 0
+    assert cmp_long["accuracy_non_regression"] is True
+    assert cmp_long["verdict"] == "WIN_EFFICIENCY_AT_PARITY"
+
+
+def test_rubric_flags_accuracy_drop_even_when_tokens_and_turns_drop() -> None:
+    from archolith_bench.engineering_evidence.sprint import DryRunExecutor, SessionExecution
+
+    class _CheapButWrongExecutor(DryRunExecutor):
+        def run_session(self, *, fixture, session, arm, session_index, namespace):
+            if arm == "menhir_structure":
+                return SessionExecution(
+                    response_text="```json\n{}\n```",
+                    input_tokens=1_000,
+                    output_tokens=100,
+                    turns=1,
+                    tool_calls=1,
+                )
+            return super().run_session(
+                fixture=fixture,
+                session=session,
+                arm=arm,
+                session_index=session_index,
+                namespace=namespace,
+            )
+
+    fixture = SprintFixture.from_file(FIXTURE_PATH)
+    report = run_longitudinal_sprint(
+        fixture,
+        executor=_CheapButWrongExecutor(),
+        arms=("no_menhir", "menhir_structure"),
+        dry_run=True,
+    )
+    cmp = report["comparisons_vs_no_menhir"]["menhir_structure"]
+    assert cmp["total_tokens_delta_pct"] < -80.0
+    assert cmp["accuracy_non_regression"] is False
+    assert cmp["verdict"] == "TRADEOFF_ACCURACY_DROP"
 
 
 def test_apply_drift_patch_modifies_file_and_fails_closed(tmp_path: Path) -> None:

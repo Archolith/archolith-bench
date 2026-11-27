@@ -116,6 +116,7 @@ class SessionExecution:
     output_tokens: int = 0
     cache_read_tokens: int = 0
     cache_write_tokens: int = 0
+    turns: int = 0
     tool_calls: int = 0
     files_read: list[str] = field(default_factory=list)
     memories_saved: int = 0
@@ -146,6 +147,7 @@ class SessionOutcome:
     total_tokens: int
     input_tokens: int
     output_tokens: int
+    turns: int
     tool_calls: int
     files_read: list[str]
     redundant_file_reads: int
@@ -203,6 +205,7 @@ class DryRunExecutor:
                 response_text=f"```json\n{json.dumps(payload, indent=2)}\n```",
                 input_tokens=18_000 + 2_000 * session_index,
                 output_tokens=1_200,
+                turns=8,
                 tool_calls=12,
                 files_read=base_files + ["docs/changelog.md", "llm/default_plugins/openai_models.py"],
                 seconds=0.01,
@@ -212,6 +215,7 @@ class DryRunExecutor:
                 response_text=f"```json\n{json.dumps(payload, indent=2)}\n```",
                 input_tokens=13_000 + 1_000 * session_index,
                 output_tokens=1_100,
+                turns=5,
                 tool_calls=8,
                 files_read=base_files,
                 seconds=0.01,
@@ -222,6 +226,7 @@ class DryRunExecutor:
             response_text=f"```json\n{json.dumps(payload, indent=2)}\n```",
             input_tokens=14_500 if session_index == 0 else 8_500,
             output_tokens=1_100,
+            turns=6 if session_index == 0 else 3,
             tool_calls=9 if session_index == 0 else 5,
             files_read=files_read,
             memories_saved=2 if session_index == 0 else (1 if session_index == 2 else 0),
@@ -304,6 +309,7 @@ def run_longitudinal_sprint(
                     total_tokens=exec_res.total_tokens,
                     input_tokens=exec_res.input_tokens,
                     output_tokens=exec_res.output_tokens,
+                    turns=exec_res.turns,
                     tool_calls=exec_res.tool_calls,
                     files_read=unique_this_session,
                     redundant_file_reads=redundant,
@@ -319,10 +325,13 @@ def run_longitudinal_sprint(
         )
         total_tokens = sum(o.total_tokens for o in outcomes)
         downstream_tokens = sum(o.total_tokens for o in outcomes[1:])
+        total_turns = sum(o.turns for o in outcomes)
+        downstream_turns = sum(o.turns for o in outcomes[1:])
         total_tool_calls = sum(o.tool_calls for o in outcomes)
         total_redundant_reads = sum(o.redundant_file_reads for o in outcomes)
         total_memories_saved = sum(o.memories_saved for o in outcomes)
         total_todos_saved = sum(o.todos_saved for o in outcomes)
+        denom = max(mean_accuracy, 0.01)
 
         arm_reports[arm] = {
             "arm": arm,
@@ -330,7 +339,11 @@ def run_longitudinal_sprint(
             "mean_accuracy": mean_accuracy,
             "total_tokens": total_tokens,
             "downstream_tokens_s2_to_end": downstream_tokens,
+            "total_turns": total_turns,
+            "downstream_turns_s2_to_end": downstream_turns,
             "total_tool_calls": total_tool_calls,
+            "tokens_per_accuracy_point": round(total_tokens / denom, 1),
+            "turns_per_accuracy_point": round(total_turns / denom, 2),
             "total_redundant_file_reads": total_redundant_reads,
             "total_memories_saved": total_memories_saved,
             "total_todos_saved": total_todos_saved,
@@ -338,26 +351,54 @@ def run_longitudinal_sprint(
         }
 
     baseline = arm_reports.get("no_menhir")
-    comparisons: dict[str, dict[str, float]] = {}
+    comparisons: dict[str, dict[str, Any]] = {}
     if baseline and baseline["total_tokens"] > 0:
+        base_turns = baseline["total_turns"] or 1
+        base_tools = baseline["total_tool_calls"] or 1
+        ds_base = baseline["downstream_tokens_s2_to_end"] or 1
         for arm, rep in arm_reports.items():
             if arm == "no_menhir":
                 continue
+            acc_delta = round(rep["mean_accuracy"] - baseline["mean_accuracy"], 4)
             tok_delta_pct = round(
                 (rep["total_tokens"] - baseline["total_tokens"]) / baseline["total_tokens"] * 100.0,
                 2,
             )
-            ds_base = baseline["downstream_tokens_s2_to_end"] or 1
             ds_delta_pct = round(
                 (rep["downstream_tokens_s2_to_end"] - ds_base) / ds_base * 100.0,
                 2,
             )
+            turns_delta_pct = round(
+                (rep["total_turns"] - baseline["total_turns"]) / base_turns * 100.0,
+                2,
+            )
+            tools_delta_pct = round(
+                (rep["total_tool_calls"] - baseline["total_tool_calls"]) / base_tools * 100.0,
+                2,
+            )
+            acc_ok = acc_delta >= -0.02
+            eff_improved = (tok_delta_pct <= -10.0) or (turns_delta_pct <= -10.0)
+            if not acc_ok:
+                verdict = "TRADEOFF_ACCURACY_DROP"
+            elif acc_delta >= 0.02 and eff_improved:
+                verdict = "WIN_ACCURACY_AND_EFFICIENCY"
+            elif eff_improved:
+                verdict = "WIN_EFFICIENCY_AT_PARITY"
+            elif acc_delta >= 0.02:
+                verdict = "WIN_ACCURACY_ONLY"
+            else:
+                verdict = "NEUTRAL_OR_REGRESSION"
+
             comparisons[arm] = {
-                "accuracy_delta": round(rep["mean_accuracy"] - baseline["mean_accuracy"], 4),
+                "accuracy_delta": acc_delta,
+                "accuracy_non_regression": acc_ok,
                 "total_tokens_delta_pct": tok_delta_pct,
                 "downstream_tokens_delta_pct": ds_delta_pct,
+                "total_turns_delta_pct": turns_delta_pct,
+                "total_tool_calls_delta_pct": tools_delta_pct,
                 "redundant_reads_delta": rep["total_redundant_file_reads"]
                 - baseline["total_redundant_file_reads"],
+                "verdict": verdict,
             }
 
     return {
