@@ -1,0 +1,197 @@
+{
+  "name": "simonw-llm-764dc386-4session-sprint",
+  "description": "4-session longitudinal coding sprint over external OSS repo simonw/llm at frozen commit 764dc386c58b625f3ad9d203e699715ad208455f. Tests code-graph blast_radius/affected_tests, cross-session memory accumulation, stale-anchor drift detection, and follow-up release planning.",
+  "repo": {
+    "name": "llm",
+    "url": "https://github.com/simonw/llm.git",
+    "commit": "764dc386c58b625f3ad9d203e699715ad208455f",
+    "local_path": ""
+  },
+  "sessions": [
+    {
+      "session_id": "s1-investigate-responses",
+      "phase": "investigate",
+      "prompt": "Session 1 (Discovery): You are about to add a new reasoning-capable OpenAI model in the default OpenAI plugin. Which OpenAI API endpoint does the project currently use by default for reasoning-capable OpenAI models, what did it replace, how can a user fall back to the older path for a single prompt, and what happened to the older model classes? Name the docs and source files that establish this decision.",
+      "memory_instruction": "Before finishing, store the key OpenAI Responses-API routing invariant with `add_memory` (citing `llm/default_plugins/openai_models.py` and `docs/changelog.md`) and record a follow-up `add_todo` for adding tests in `tests/test_openai_responses.py`.",
+      "gold": {
+        "docs": [
+          "docs/changelog.md",
+          "docs/openai-models.md"
+        ],
+        "files": [
+          "llm/default_plugins/openai_models.py",
+          "tests/test_openai_responses.py"
+        ],
+        "acceptable_files": [
+          "docs/plugins/advanced-model-plugins.md",
+          "tests/conftest.py"
+        ],
+        "commands": [],
+        "guardrails": [],
+        "points": [
+          [
+            "most reasoning models use Responses",
+            "Responses API by default",
+            "v1/responses"
+          ],
+          [
+            "instead of chat completions",
+            "replaced chat completions",
+            "v1/chat/completions"
+          ],
+          [
+            "-o chat_completions 1",
+            "chat_completions 1"
+          ],
+          [
+            "Chat classes unchanged",
+            "Chat and AsyncChat unchanged",
+            "Chat classes remain available"
+          ]
+        ],
+        "verdict": "",
+        "risky": []
+      }
+    },
+    {
+      "session_id": "s2-blast-radius-plan",
+      "phase": "impact_plan",
+      "prompt": "Session 2 (Impact & Test Plan): In a fresh session, plan registering a new reasoning-capable OpenAI model in `llm/default_plugins/openai_models.py` without breaking existing plugins that import `Chat` or `AsyncChat`. Identify the impacted files, exact test command to verify the Responses path, and the fallback option guardrail.",
+      "memory_instruction": "Start by calling `recall_memories`, `list_todos`, and `blast_radius` / `affected_tests` on `llm/default_plugins/openai_models.py` rather than re-reading changelog/docs from scratch.",
+      "gold": {
+        "docs": [
+          "docs/openai-models.md"
+        ],
+        "files": [
+          "llm/default_plugins/openai_models.py",
+          "tests/test_openai_responses.py"
+        ],
+        "acceptable_files": [
+          "docs/changelog.md",
+          "tests/test_llm.py"
+        ],
+        "commands": [
+          "uv run pytest tests/test_openai_responses.py"
+        ],
+        "allowed_flags": [
+          "-q",
+          "-x",
+          "-vv"
+        ],
+        "guardrails": [
+          [
+            "Chat and AsyncChat unchanged",
+            "keep Chat classes unchanged",
+            "do not break Chat"
+          ],
+          [
+            "-o chat_completions 1",
+            "preserve chat_completions fallback"
+          ]
+        ],
+        "points": [
+          [
+            "Responses class",
+            "v1/responses"
+          ],
+          [
+            "tests/test_openai_responses.py"
+          ]
+        ],
+        "verdict": "",
+        "risky": []
+      }
+    },
+    {
+      "session_id": "s3-drift-stale-anchor",
+      "phase": "drift_check",
+      "prompt": "Session 3 (Drift Check): Before editing `llm/default_plugins/openai_models.py`, verify whether the `chat_completions` fallback option and Responses routing note in `llm/default_plugins/openai_models.py` are still current or have drifted since Session 1. Report your verdict (`current` or `drifted`) and cite the exact file.",
+      "memory_instruction": "Check `recall_memories` for any `stale_anchor` advisory on `llm/default_plugins/openai_models.py`, inspect the current file to verify, and update/supersede the memory if it drifted.",
+      "drift_patch": {
+        "path": "llm/default_plugins/openai_models.py",
+        "find": "# GPT-5.5 — routes through the Responses API by default; pass",
+        "replace": "# GPT-5.5 — routes through the Responses API by default (DEPRECATED fallback: legacy_chat); pass",
+        "description": "Simulates an upstream edit to the anchored file between Session 2 and Session 3 to trigger stale-anchor detection."
+      },
+      "gold": {
+        "docs": [],
+        "files": [
+          "llm/default_plugins/openai_models.py"
+        ],
+        "acceptable_files": [
+          "tests/test_openai_responses.py"
+        ],
+        "commands": [],
+        "guardrails": [
+          [
+            "verify current file",
+            "inspect current file",
+            "re-check openai_models.py"
+          ]
+        ],
+        "points": [
+          [
+            "DEPRECATED fallback",
+            "legacy_chat",
+            "file changed"
+          ]
+        ],
+        "verdict": "drifted",
+        "risky": []
+      }
+    },
+    {
+      "session_id": "s4-release-followup",
+      "phase": "followup",
+      "prompt": "Session 4 (Release Follow-Up): Now prepare the version bump commit for release `0.37` (from `0.36`) after the OpenAI model work. Name the contributing doc, the files touched by the version bump, the commands to regenerate derived docs and run tests/lint, and the `cog --check` guardrail.",
+      "memory_instruction": "Recall prior session memories/TODOs and check `docs/contributing.md` to assemble the release plan cleanly with minimal redundant reads.",
+      "gold": {
+        "docs": [
+          "docs/contributing.md"
+        ],
+        "files": [
+          "docs/changelog.md",
+          "pyproject.toml",
+          "docs/fragments.md"
+        ],
+        "acceptable_files": [
+          "Justfile",
+          "llm/default_plugins/openai_models.py"
+        ],
+        "commands": [
+          "just cog",
+          "uv run pytest",
+          "just lint"
+        ],
+        "allowed_flags": [
+          "-x",
+          "-q",
+          "-vv"
+        ],
+        "guardrails": [
+          [
+            "cog --check",
+            "cog check fails",
+            "cog needs to be run"
+          ]
+        ],
+        "points": [
+          [
+            "update docs/changelog.md",
+            "changelog entry"
+          ],
+          [
+            "version in pyproject.toml",
+            "bump pyproject.toml"
+          ],
+          [
+            "fragments.md version",
+            "update docs/fragments.md"
+          ]
+        ],
+        "verdict": "",
+        "risky": []
+      }
+    }
+  ]
+}
