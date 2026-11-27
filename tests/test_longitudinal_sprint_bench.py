@@ -242,3 +242,19 @@ def test_live_executor_applies_drift_patch_and_stops_fail_closed_on_429(
         / "openai_models.py"
     )
     assert "DEPRECATED fallback: legacy_chat" in patched.read_text(encoding="utf-8")
+
+
+def test_smolagents_sprint_fixture_loads_and_dry_runs() -> None:
+    smol_path = (
+        Path(__file__).resolve().parent.parent / "fixtures" / "sprint_smolagents_227ef5e4.json"
+    )
+    fixture = SprintFixture.from_file(smol_path)
+    assert fixture.repo.name == "smolagents"
+    assert fixture.repo.commit == "227ef5e49ddd82339295939072f0223249aa8d38"
+    assert len(fixture.sessions) == 5
+    assert fixture.sessions[2].drift_patch is not None
+    report = run_longitudinal_sprint(fixture, dry_run=True)
+    assert report["arms"]["menhir_longitudinal"]["mean_accuracy"] == 1.0
+    assert report["comparisons_vs_no_menhir"]["menhir_longitudinal"]["verdict"] == (
+        "WIN_EFFICIENCY_AT_PARITY"
+    )

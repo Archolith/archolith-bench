@@ -1,0 +1,270 @@
+{
+  "name": "huggingface-smolagents-227ef5e4-5session-sprint",
+  "description": "5-session longitudinal coding sprint over external OSS repo huggingface/smolagents at frozen commit 227ef5e49ddd82339295939072f0223249aa8d38. Tests RemotePythonExecutor serialization security policy, blast_radius/affected_tests, live /api/tool-events stale-anchor detection, contributor docs planning, and S5 comprehension.",
+  "repo": {
+    "name": "smolagents",
+    "url": "https://github.com/huggingface/smolagents.git",
+    "commit": "227ef5e49ddd82339295939072f0223249aa8d38",
+    "local_path": ""
+  },
+  "sessions": [
+    {
+      "session_id": "s1-investigate-serialization",
+      "phase": "investigate",
+      "prompt": "Session 1 (Discovery): You are about to change how `RemotePythonExecutor` passes variables into the remote sandbox and reads the final answer back. What serialization policy is currently in force for that channel, what did it replace or rule out, how are payload formats distinguished, and which source and test files state and verify that policy?",
+      "memory_instruction": "Before finishing, store the `RemotePythonExecutor` safe-JSON serialization invariant with `add_memory` (citing `src/smolagents/serialization.py` and `src/smolagents/remote_executors.py`) and record a follow-up `add_todo` for adding regression coverage in `tests/test_serialization.py` and `tests/test_remote_executors.py`.",
+      "gold": {
+        "docs": [],
+        "files": [
+          "src/smolagents/serialization.py",
+          "src/smolagents/remote_executors.py",
+          "tests/test_serialization.py",
+          "tests/test_remote_executors.py"
+        ],
+        "acceptable_files": [
+          "src/smolagents/__init__.py",
+          "tests/test_agents.py",
+          "tests/test_cli.py",
+          "tests/test_gradio_ui.py",
+          "tests/test_vision_web_browser.py",
+          "docs/source/en/tutorials/secure_code_execution.md",
+          "docs/source/en/reference/python_executors.md"
+        ],
+        "commands": [],
+        "guardrails": [],
+        "points": [
+          [
+            "safe JSON by default",
+            "allow_pickle defaults to False",
+            "allow_pickle default False",
+            "JSON-only by default"
+          ],
+          [
+            "pickle is legacy",
+            "legacy pickle fallback",
+            "pickle only when allow_pickle True",
+            "pickle is opt-in"
+          ],
+          [
+            "pickle data rejected",
+            "rejects pickle data",
+            "raises SerializationError",
+            "pickle payloads rejected"
+          ],
+          [
+            "safe: and pickle: prefixes",
+            "prefix distinguishes safe and pickle",
+            "safe: prefix and pickle: prefix",
+            "safe prefix pickle prefix"
+          ]
+        ],
+        "verdict": "",
+        "risky": []
+      }
+    },
+    {
+      "session_id": "s2-blast-radius-plan",
+      "phase": "impact_plan",
+      "prompt": "Session 2 (Impact & Test Plan): In a fresh session, plan extending `SafeSerializer` in `src/smolagents/serialization.py` for a new structured type without weakening `RemotePythonExecutor`'s security defaults. Identify the impacted source and test files, exact pytest command to verify serialization and remote executors, and the security guardrails that must hold.",
+      "memory_instruction": "Start by calling `recall_memories`, `list_todos`, and `query_structure` (`blast_radius` / `affected_tests`) on `src/smolagents/serialization.py` rather than re-reading the codebase from scratch.",
+      "gold": {
+        "docs": [],
+        "files": [
+          "src/smolagents/serialization.py",
+          "src/smolagents/remote_executors.py",
+          "tests/test_serialization.py",
+          "tests/test_remote_executors.py"
+        ],
+        "acceptable_files": [
+          "src/smolagents/__init__.py",
+          "tests/test_agents.py",
+          "tests/test_cli.py",
+          "tests/test_gradio_ui.py",
+          "tests/test_vision_web_browser.py",
+          "docs/source/en/tutorials/secure_code_execution.md",
+          "docs/source/en/reference/python_executors.md"
+        ],
+        "commands": [
+          "pytest tests/test_serialization.py tests/test_remote_executors.py"
+        ],
+        "allowed_flags": [
+          "-q",
+          "-x",
+          "-vv"
+        ],
+        "guardrails": [
+          [
+            "allow_pickle=False",
+            "allow_pickle defaults to False",
+            "safe JSON by default"
+          ],
+          [
+            "reject pickle",
+            "SerializationError",
+            "pickle only when allow_pickle=True"
+          ]
+        ],
+        "points": [
+          [
+            "SafeSerializer",
+            "safe: prefix"
+          ],
+          [
+            "test_serialization.py",
+            "test_remote_executors.py"
+          ]
+        ],
+        "verdict": "",
+        "risky": []
+      }
+    },
+    {
+      "session_id": "s3-drift-stale-anchor",
+      "phase": "drift_check",
+      "prompt": "Session 3 (Drift Check): Before editing `src/smolagents/remote_executors.py`, verify whether the `allow_pickle: bool = False` policy and comment in `src/smolagents/remote_executors.py` are still current or have drifted since Session 1. Report your verdict (`current` or `drifted`) and cite the exact file.",
+      "memory_instruction": "Check `recall_memories` for any `stale_anchor` advisory on `src/smolagents/remote_executors.py`, inspect the current file to verify, and note any change.",
+      "drift_patch": {
+        "path": "src/smolagents/remote_executors.py",
+        "find": "allow_pickle: bool = False,",
+        "replace": "allow_pickle: bool = False,  # AUDIT: legacy pickle scheduled for removal in v2",
+        "description": "Simulates an upstream audit note added to remote_executors.py between Session 2 and Session 3 to trigger stale-anchor detection."
+      },
+      "gold": {
+        "docs": [],
+        "files": [
+          "src/smolagents/remote_executors.py"
+        ],
+        "acceptable_files": [
+          "src/smolagents/serialization.py",
+          "tests/test_remote_executors.py"
+        ],
+        "commands": [],
+        "guardrails": [
+          [
+            "verify current file",
+            "inspect current file",
+            "allow_pickle=False"
+          ]
+        ],
+        "points": [
+          [
+            "AUDIT",
+            "scheduled for removal in v2",
+            "legacy pickle"
+          ]
+        ],
+        "verdict": "drifted",
+        "risky": []
+      }
+    },
+    {
+      "session_id": "s4-docs-contribution-plan",
+      "phase": "followup",
+      "prompt": "Session 4 (Docs & Contribution Plan): `docs/README.md` tells contributors to link new pages in `docs/source/_toctree.yml` rather than per-language files like `docs/source/en/_toctree.yml`. Write a safe first-step plan to fix this: which project docs to read, which file changes, the doc-builder check command, and the contribution guardrails (built docs, AI disclosure, issues/PRs).",
+      "memory_instruction": "Recall prior session memories/TODOs and check `CONTRIBUTING.md` and `docs/README.md` cleanly with minimal redundant reads.",
+      "gold": {
+        "docs": [
+          "CONTRIBUTING.md",
+          "docs/README.md"
+        ],
+        "files": [
+          "docs/README.md"
+        ],
+        "acceptable_files": [
+          "docs/source/en/_toctree.yml"
+        ],
+        "commands": [],
+        "guardrails": [
+          [
+            "do not commit built documentation",
+            "don't commit built docs",
+            "not commit the build output"
+          ],
+          [
+            "disclose AI assistant",
+            "used an AI assistant",
+            "tell us AI assistant",
+            "mention AI assistant"
+          ]
+        ],
+        "points": [
+          [
+            "docs/source/en/_toctree.yml",
+            "en/_toctree.yml",
+            "per-language _toctree.yml"
+          ],
+          [
+            "typos and broken links exempt",
+            "broken link no issue",
+            "no issue needed for broken links"
+          ],
+          [
+            "doc-builder build smolagents docs/source/en/",
+            "doc-builder preview smolagents docs/source/en/"
+          ]
+        ],
+        "verdict": "",
+        "risky": []
+      }
+    },
+    {
+      "session_id": "s5-comprehension-check",
+      "phase": "comprehension",
+      "prompt": "Session 5 (Comprehension Check): In a fresh session, summarize the architectural picture from Sessions 1-4 in as few tool calls as possible without re-reading the codebase from scratch: (1) why `allow_pickle=False` is the default security policy in `RemotePythonExecutor`, (2) what audit note appeared in `src/smolagents/remote_executors.py` during Session 3, (3) which 4 source and test files implement and verify serialization, and (4) what open TODO remains from Session 1.",
+      "memory_instruction": "Answer primarily from `recall_memories`, `list_todos`, and `query_structure` (aim for <=3 tool calls total).",
+      "gold": {
+        "docs": [],
+        "files": [
+          "src/smolagents/serialization.py",
+          "src/smolagents/remote_executors.py",
+          "tests/test_serialization.py",
+          "tests/test_remote_executors.py"
+        ],
+        "acceptable_files": [
+          "docs/README.md",
+          "CONTRIBUTING.md"
+        ],
+        "commands": [],
+        "guardrails": [
+          [
+            "allow_pickle=False",
+            "safe JSON by default",
+            "safe JSON",
+            "arbitrary code",
+            "execute code"
+          ],
+          [
+            "SerializationError",
+            "reject pickle",
+            "pickle is legacy",
+            "pickle opt-in",
+            "falling back to pickle"
+          ]
+        ],
+        "points": [
+          [
+            "arbitrary code",
+            "safe JSON",
+            "allow_pickle"
+          ],
+          [
+            "removal in v2",
+            "AUDIT",
+            "legacy pickle"
+          ],
+          [
+            "test_serialization.py",
+            "test_remote_executors.py"
+          ],
+          [
+            "TODO",
+            "regression coverage",
+            "serialization"
+          ]
+        ],
+        "verdict": "",
+        "risky": []
+      }
+    }
+  ]
+}

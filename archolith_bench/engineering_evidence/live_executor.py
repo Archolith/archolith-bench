@@ -317,10 +317,8 @@ class OpenCodeSprintExecutor:
             raise RateLimited(
                 f"rate limit hit during {arm}/{session.session_id}; stopping fail-closed"
             )
-        if stop_reason == "over_reserve":
-            raise BudgetExhausted(
-                f"token reserve ({self.config.reserve_tokens}) exceeded in {arm}/{session.session_id}"
-            )
+        # On over_reserve, record the killed session honestly (error='over_reserve', actual
+        # tokens/turns burned) instead of aborting the other arms in a multi-arm A/B run.
 
         events_path = run_dir / "events.jsonl"
         events_text = events_path.read_text(encoding="utf-8") if events_path.is_file() else ""
