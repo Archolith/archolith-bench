@@ -19,6 +19,11 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from archolith_bench.beacon_eval.runner import DEFAULT_MODEL, DEFAULT_RUN_RESERVE  # noqa: E402
+from archolith_bench.engineering_evidence.live_executor import (  # noqa: E402
+    LiveSprintConfig,
+    OpenCodeSprintExecutor,
+)
 from archolith_bench.engineering_evidence.sprint import (  # noqa: E402
     SPRINT_ARMS,
     SprintFixture,
@@ -72,8 +77,58 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        default=True,
-        help="Run with deterministic zero-LLM DryRunExecutor (default: True).",
+        default=False,
+        help="Run with deterministic zero-LLM DryRunExecutor (default when --live is not set).",
+    )
+    parser.add_argument(
+        "--live",
+        action="store_true",
+        default=False,
+        help="Run live sessions via isolated OpenCode + Menhir MCP (spends LLM tokens).",
+    )
+    parser.add_argument("--model", default=DEFAULT_MODEL, help="OpenCode model id for --live.")
+    parser.add_argument(
+        "--menhir-mcp-url",
+        default="",
+        help="Menhir Streamable HTTP MCP URL for menhir_structure/menhir_longitudinal arms.",
+    )
+    parser.add_argument(
+        "--reserve-tokens",
+        type=int,
+        default=DEFAULT_RUN_RESERVE,
+        help="Per-session token reserve kill-switch for --live.",
+    )
+    parser.add_argument(
+        "--timeout-s",
+        type=float,
+        default=300.0,
+        help="Per-session timeout in seconds for --live.",
+    )
+    parser.add_argument(
+        "--work-dir",
+        default="results/longitudinal-sprint-work",
+        help="Working directory for isolated checkouts and session logs in --live mode.",
+    )
+    parser.add_argument(
+        "--cache-dir",
+        default="results/repo-cache",
+        help="Git clone cache directory for pinned frozen-repo exports in --live mode.",
+    )
+    parser.add_argument(
+        "--arms",
+        default=",".join(SPRINT_ARMS),
+        help="Comma-separated arms to run (subset of: no_menhir,menhir_structure,menhir_longitudinal).",
+    )
+    parser.add_argument(
+        "--max-sessions",
+        type=int,
+        default=None,
+        help="Optional cap on how many sessions to run from the fixture (e.g. 1 for Phase 1 smoke).",
+    )
+    parser.add_argument(
+        "--env-file",
+        default=str(REPO_ROOT / ".env"),
+        help="Optional .env file supplying provider API keys for --live.",
     )
     parser.add_argument(
         "--out",
@@ -83,7 +138,30 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     fixture = SprintFixture.from_file(args.fixture)
-    report = run_longitudinal_sprint(fixture, dry_run=args.dry_run)
+    if args.max_sessions is not None:
+        from dataclasses import replace
+
+        fixture = replace(fixture, sessions=fixture.sessions[: args.max_sessions])
+    selected_arms = tuple(a.strip() for a in args.arms.split(",") if a.strip())
+
+    if args.live and not args.dry_run:
+        env_path = Path(args.env_file) if args.env_file else None
+        executor = OpenCodeSprintExecutor(
+            LiveSprintConfig(
+                work_dir=Path(args.work_dir),
+                cache_dir=Path(args.cache_dir),
+                model=args.model,
+                menhir_mcp_url=args.menhir_mcp_url,
+                env_file=env_path,
+                reserve_tokens=args.reserve_tokens,
+                timeout_s=args.timeout_s,
+            )
+        )
+        report = run_longitudinal_sprint(
+            fixture, executor=executor, arms=selected_arms, dry_run=False
+        )
+    else:
+        report = run_longitudinal_sprint(fixture, arms=selected_arms, dry_run=True)
     _print_table(report)
 
     if args.out:
