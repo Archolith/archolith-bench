@@ -117,6 +117,7 @@ def test_has_lean_profile(tmp_path: Path) -> None:
 
 
 def test_live_sprint_refuses_a_served_tree_without_the_lean_profile(tmp_path: Path, capsys) -> None:
+    pytest.importorskip("menhir")  # the sprint CLI imports engineering_evidence, which imports menhir
     cli = _load("sprint_cli_rel", "scripts/run_longitudinal_sprint_bench.py")
     rc = cli.main(["--fixture", str(ROOT / "fixtures" / "sprint_simonw_llm_764dc386.json"), "--repeats", "1",
                    "--live", "--max-usd", "5", "--est-usd-per-session", "0.01", "--server-rates", "0.1,0.01,0.5",

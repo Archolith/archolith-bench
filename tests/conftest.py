@@ -21,6 +21,18 @@ collect_ignore_glob: list[str] = []
 if importlib.util.find_spec("menhir") is None:
     # r3/ and r5/ bench subpackages import menhir at module import time.
     collect_ignore_glob += ["test_r3_*.py", "test_r5_*.py"]
+    # engineering_evidence (S4+S5 suite and the longitudinal sprint) does too.
+    collect_ignore_glob += [
+        "test_engineering_evidence_bench.py",
+        "test_longitudinal_sprint_bench.py",
+        "test_sprint_v2.py",
+        "test_sprint_prompts_v21.py",
+        "test_harness_executor.py",
+    ]
+
+if importlib.util.find_spec("cth_flex") is None:
+    # The archolith-harness agent runs model calls through the private cth.flex package.
+    collect_ignore_glob += ["test_harness_executor.py"]
 
 # The suite smoke test exercises the optional audit/filter integrations, which
 # import the private sibling packages `archolith_mcp_audit` / `archolith_filter`
