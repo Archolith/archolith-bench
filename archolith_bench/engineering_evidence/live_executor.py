@@ -11,6 +11,8 @@ import gzip
 import hashlib
 import json
 import os
+import shutil
+import subprocess
 import threading
 import time
 import urllib.request
@@ -313,7 +315,10 @@ class OpenCodeSprintExecutor:
             # mistyping long checkout paths that repeated the fixture name at two levels.
             dest = root / short_checkout_id(fixture, arm, repeat)
         with self._export_lock:  # the repo cache is shared; clone and archive one at a time
-            checkout = self._export_fn(fixture.repo, dest, self.config.cache_dir)
+            if fixture.sparse_paths:
+                checkout = self._export_sparse_commit(fixture, dest)
+            else:
+                checkout = self._export_fn(fixture.repo, dest, self.config.cache_dir)
         with self._lock:
             self._checkouts[key] = checkout
             if repeat is not None:
@@ -321,6 +326,65 @@ class OpenCodeSprintExecutor:
                 (root / "checkouts.json").write_text(json.dumps(mapping, indent=2, sort_keys=True),
                                                      encoding="utf-8")
         return checkout
+
+    def _export_sparse_commit(self, fixture: SprintFixture, dest: Path) -> Path:
+        """Blobless sparse export for massive repos (e.g. torvalds/linux subsystems).
+
+        Uses its own ``<name>.sparse`` clone: it moves HEAD, which the shared cache that
+        ``export_commit`` reads must never see. Fails if a sparse path is missing at the pin.
+        """
+        pin = fixture.repo
+        source = Path(pin.local_path) if pin.local_path else self.config.cache_dir / f"{pin.name}.sparse"
+        if not (source / ".git").exists():
+            source.parent.mkdir(parents=True, exist_ok=True)
+            subprocess.run(
+                [
+                    "git", "clone", "--quiet", "--depth=1",
+                    "--filter=blob:none", "--sparse", pin.url, str(source),
+                ],
+                check=True,
+            )
+        # Every time, so a cached clone made for other paths still gets this fixture's.
+        subprocess.run(
+            ["git", "-C", str(source), "sparse-checkout", "set", *fixture.sparse_paths],
+            check=True,
+        )
+        present = subprocess.run(
+            ["git", "-C", str(source), "cat-file", "-e", f"{pin.commit}^{{commit}}"],
+            check=False,
+            capture_output=True,
+        )
+        if present.returncode != 0:
+            subprocess.run(
+                ["git", "-C", str(source), "fetch", "--quiet", "--depth=1", "origin", pin.commit],
+                check=False,
+                capture_output=True,
+            )
+        head = subprocess.run(
+            ["git", "-C", str(source), "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        if head != pin.commit:
+            subprocess.run(
+                ["git", "-C", str(source), "checkout", "--quiet", pin.commit],
+                check=True,
+            )
+        if dest.exists():
+            shutil.rmtree(dest)
+        dest.mkdir(parents=True, exist_ok=True)
+        for sp in fixture.sparse_paths:
+            src_sub = source / sp
+            dst_sub = dest / sp
+            if src_sub.is_dir():
+                shutil.copytree(src_sub, dst_sub)
+            elif src_sub.is_file():
+                dst_sub.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src_sub, dst_sub)
+            else:
+                raise FileNotFoundError(f"sparse path {sp!r} is not in {pin.name} at {pin.commit}")
+        return dest
 
     def _run_dir(self, arm: str, repeat: int | None, session_index: int, session_id: str) -> Path:
         base = self.config.runs_dir or (self.config.work_dir / "runs")
