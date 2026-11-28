@@ -166,6 +166,8 @@ def summarize_chain(
         "files_read": sum(len(o.files_read) for o in ran),
         "redundant_file_reads": sum(o.redundant_file_reads for o in ran),
         "notes_violations": sum(len(o.notes_violations) for o in ran),
+        "refused_reads": sum(o.refused_reads for o in ran),
+        "sessions_with_refused_reads": sum(1 for o in ran if o.refused_reads),
     }
 
 

@@ -282,6 +282,7 @@ class Campaign:
                 memories_saved=res.memories_saved, todos_saved=res.todos_saved,
                 seconds=round(res.seconds, 3), error=res.error, censored=res.censored,
                 notes_violations=list(res.notes_violations),
+                refused_reads=getattr(res, "refused_reads", 0),
                 enrichment_wait_s=res.enrichment_wait_s, enrichment_drained=res.enrichment_drained,
                 repeat=chain.repeat,
             )
