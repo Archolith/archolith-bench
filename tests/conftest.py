@@ -27,6 +27,7 @@ if importlib.util.find_spec("menhir") is None:
         "test_longitudinal_sprint_bench.py",
         "test_sprint_v2.py",
         "test_sprint_prompts_v21.py",
+        "test_sprint_sparse_export.py",
         "test_harness_executor.py",
     ]
 
