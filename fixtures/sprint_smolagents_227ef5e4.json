@@ -67,7 +67,7 @@
       "session_id": "s2-blast-radius-plan",
       "phase": "impact_plan",
       "prompt": "Session 2 (Impact & Test Plan): In a fresh session, plan extending `SafeSerializer` in `src/smolagents/serialization.py` for a new structured type without weakening `RemotePythonExecutor`'s security defaults. Identify the impacted source and test files, exact pytest command to verify serialization and remote executors, and the security guardrails that must hold.",
-      "memory_instruction": "Start by calling `recall_memories`, `list_todos`, and `query_structure` (`blast_radius` / `affected_tests`) on `src/smolagents/serialization.py` rather than re-reading the codebase from scratch.",
+      "memory_instruction": "Start by calling `recall_memories`, `list_todos`, and `query_structure` (`blast_radius` / `affected_tests`) on `src/smolagents/serialization.py` rather than re-reading the codebase from scratch, then store what you learn about `src/smolagents/serialization.py` with `add_memory`.",
       "notes_instruction": "Start by reading `SPRINT_NOTES.md` rather than re-reading the codebase from scratch, then add what you learn about `src/smolagents/serialization.py` to it.",
       "gold": {
         "docs": [],
@@ -124,7 +124,7 @@
       "session_id": "s3-drift-stale-anchor",
       "phase": "drift_check",
       "prompt": "Session 3 (Drift Check): Before editing `src/smolagents/remote_executors.py`, verify whether the `allow_pickle: bool = False` policy and comment in `src/smolagents/remote_executors.py` are still current or have drifted since Session 1. Report your verdict (`current` or `drifted`) and cite the exact file.",
-      "memory_instruction": "Check `recall_memories` for any `stale_anchor` advisory on `src/smolagents/remote_executors.py`, inspect the current file to verify, and note any change.",
+      "memory_instruction": "Check `recall_memories` for any `stale_anchor` advisory on `src/smolagents/remote_executors.py`, inspect the current file to verify, and if it changed store a corrected memory with `add_memory` that says what it replaces.",
       "notes_instruction": "Read `SPRINT_NOTES.md` for any note about `src/smolagents/remote_executors.py`, inspect the current file to verify, and update the note in `SPRINT_NOTES.md` if it changed.",
       "drift_patch": {
         "path": "src/smolagents/remote_executors.py",

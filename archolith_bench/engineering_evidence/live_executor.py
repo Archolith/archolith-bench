@@ -486,7 +486,8 @@ class OpenCodeSprintExecutor:
         run_dir = self._run_dir(arm, repeat, session_index, session.session_id)
         run_dir.mkdir(parents=True, exist_ok=True)
 
-        full_prompt = compose_full_prompt(session, arm, namespace, self.config.cache_shaping)
+        full_prompt = compose_full_prompt(session, arm, namespace, self.config.cache_shaping,
+                                          project=fixture.repo.name)
         (run_dir / "prompt.txt").write_text(full_prompt, encoding="utf-8")
 
         notes_before = snapshot_tree(checkout) if arm == "notes_file" else None

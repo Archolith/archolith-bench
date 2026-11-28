@@ -58,7 +58,7 @@
       "session_id": "s2-blast-radius-plan",
       "phase": "impact_plan",
       "prompt": "Session 2 (Impact & Test Plan): In a fresh session, plan registering a new reasoning-capable OpenAI model in `llm/default_plugins/openai_models.py` without breaking existing plugins that import `Chat` or `AsyncChat`. Identify the impacted files, exact test command to verify the Responses path, and the fallback option guardrail.",
-      "memory_instruction": "Start by calling `recall_memories`, `list_todos`, and `blast_radius` / `affected_tests` on `llm/default_plugins/openai_models.py` rather than re-reading changelog/docs from scratch.",
+      "memory_instruction": "Start by calling `recall_memories`, `list_todos`, and `query_structure` (`blast_radius` / `affected_tests`) on `llm/default_plugins/openai_models.py` rather than re-reading changelog/docs from scratch, then store what you learn about `llm/default_plugins/openai_models.py` with `add_memory`.",
       "notes_instruction": "Start by reading `SPRINT_NOTES.md` rather than re-reading changelog/docs from scratch, then add what you learn about `llm/default_plugins/openai_models.py` to it.",
       "gold": {
         "docs": [
@@ -108,7 +108,7 @@
       "session_id": "s3-drift-stale-anchor",
       "phase": "drift_check",
       "prompt": "Session 3 (Drift Check): Before editing `llm/default_plugins/openai_models.py`, verify whether the `chat_completions` fallback option and Responses routing note in `llm/default_plugins/openai_models.py` are still current or have drifted since Session 1. Report your verdict (`current` or `drifted`) and cite the exact file.",
-      "memory_instruction": "Check `recall_memories` for any `stale_anchor` advisory on `llm/default_plugins/openai_models.py`, inspect the current file to verify, and update/supersede the memory if it drifted.",
+      "memory_instruction": "Check `recall_memories` for any `stale_anchor` advisory on `llm/default_plugins/openai_models.py`, inspect the current file to verify, and if it drifted store a corrected memory with `add_memory` that says what it replaces.",
       "notes_instruction": "Read `SPRINT_NOTES.md` for any note about `llm/default_plugins/openai_models.py`, inspect the current file to verify, and update the note in `SPRINT_NOTES.md` if it drifted.",
       "drift_patch": {
         "path": "llm/default_plugins/openai_models.py",

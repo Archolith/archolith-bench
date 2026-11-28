@@ -41,6 +41,7 @@ from archolith_bench.engineering_evidence.server_usage import ServerRates  # noq
 from archolith_bench.engineering_evidence.sprint import (  # noqa: E402
     SPRINT_ARMS,
     V2_ARMS,
+    PROMPT_SET,
     DryRunExecutor,
     SprintFixture,
     run_longitudinal_sprint,
@@ -181,7 +182,8 @@ def _run_v2(args: argparse.Namespace, fixture: SprintFixture) -> int:
     manifest = prompt_manifest(fixture, arms, args.cache_shaping)
     fixture_sha = hashlib.sha256(Path(args.fixture).read_bytes()).hexdigest()
     resolved = {
-        "rubric_version": RUBRIC_VERSION, "fixture": fixture.name, "fixture_sha256": fixture_sha,
+        "rubric_version": RUBRIC_VERSION, "prompt_set": PROMPT_SET,
+        "fixture": fixture.name, "fixture_sha256": fixture_sha,
         "arms": list(arms), "repeats": args.repeats, "run_id": run_id, "model": args.model,
         "reserve_tokens": args.reserve_tokens, "timeout_s": args.timeout_s,
         "prompt_sha256": prompt_hash(manifest), "dry_run": not live,
@@ -208,7 +210,7 @@ def _run_v2(args: argparse.Namespace, fixture: SprintFixture) -> int:
         "server_chat_model": args.server_chat_model if args.serve else None,
         # OpenCode's serviceTier (beacon_eval.isolation.SERVICE_TIER_ENV); its step cost is still
         # priced at the Standard catalog rate, so under flex client_cost_usd overstates the bill.
-        "cache_shaping": args.cache_shaping,
+        "cache_shaping": args.cache_shaping, "prompt_set": PROMPT_SET,
         "agent": args.agent, "agent_version": _agent_version(args.agent),
         "harness_flex": args.harness_flex if args.agent == "archolith-harness" else None,
         # archolith-harness requests Flex on every call and prices each step at its served tier
