@@ -9,42 +9,11 @@ All deterministic; nothing here needs a generation model.
 
 from __future__ import annotations
 
-import math
 from collections.abc import Sequence
 
+from archolith_bench.core.ir_metrics import mrr, ndcg_at_k, precision_at_k, recall_at_k  # noqa: F401  (runner uses M.*)
+
 from .models import SCOPE_KEYS, OracleMemory, OracleQuery
-
-
-def recall_at_k(ranked: Sequence[str], support_ids: Sequence[str], k: int) -> float:
-    if not support_ids:
-        return 0.0
-    top = set(ranked[:k])
-    return sum(1 for sid in support_ids if sid in top) / len(support_ids)
-
-
-def precision_at_k(ranked: Sequence[str], support_ids: Sequence[str], k: int) -> float:
-    if k <= 0 or not ranked[:k]:
-        return 0.0
-    support = set(support_ids)
-    return sum(1 for mid in ranked[:k] if mid in support) / len(ranked[:k])
-
-
-def mrr(ranked: Sequence[str], support_ids: Sequence[str]) -> float:
-    support = set(support_ids)
-    for position, mid in enumerate(ranked, start=1):
-        if mid in support:
-            return 1.0 / position
-    return 0.0
-
-
-def ndcg_at_k(ranked: Sequence[str], support_ids: Sequence[str], k: int) -> float:
-    support = set(support_ids)
-    if not support:
-        return 0.0
-    dcg = sum(1.0 / math.log2(pos + 1) for pos, mid in enumerate(ranked[:k], start=1) if mid in support)
-    ideal = min(len(support), k)
-    idcg = sum(1.0 / math.log2(pos + 1) for pos in range(1, ideal + 1))
-    return dcg / idcg if idcg else 0.0
 
 
 def stale_hit_rate(ranked: Sequence[str], by_id: dict[str, OracleMemory], query: OracleQuery, k: int) -> float:

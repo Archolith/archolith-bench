@@ -4,14 +4,14 @@ Headline metric is role-based intent-correct@1: did the top-1 ranked candidate c
 role that is PREFERRED for the query's classified intent? This is robust to ties among
 several preferred-role candidates (the design's point is that intent surfaces a
 *task-appropriate* artifact first, not one exact id). nDCG (for the no-harm arm) is
-reused from the oracle bench.
+reused from core.ir_metrics.
 """
 
 from __future__ import annotations
 
 from typing import Mapping
 
-from archolith_bench.oracle.metrics import ndcg_at_k  # re-exported for the no-harm arm
+from archolith_bench.core.ir_metrics import ndcg_at_k  # re-exported for the no-harm arm
 
 from .classifier import TaskIntent
 from .matrix import Affinity, affinity
