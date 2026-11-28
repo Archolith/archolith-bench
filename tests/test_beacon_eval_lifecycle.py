@@ -27,21 +27,24 @@ from typing import Any
 import pytest
 
 from archolith_bench.beacon_eval import runner as runner_mod
+from archolith_bench.core.opencode import process as process_mod
+from archolith_bench.core.opencode.process import (
+    _kill_live_children,
+    _kill_tree,
+    _register_child,
+    _unregister_child,
+    stream_opencode,
+)
 from archolith_bench.beacon_eval.models import Gold, RepoPin, RunResult, Task
 from archolith_bench.beacon_eval.runner import (
     Budget,
     BudgetExhausted,
     RunnerConfig,
-    _kill_live_children,
-    _kill_tree,
-    _register_child,
     _spend_result,
-    _unregister_child,
     build_beacon,
     export_beacon_snapshot,
     run_matrix,
     run_one,
-    stream_opencode,
 )
 
 GOLD = Gold()
@@ -305,7 +308,7 @@ def _spawn_tree(tmp_path: Path) -> tuple[subprocess.Popen[str], int]:
     read_fd, write_fd = os.pipe()
     kwargs: dict[str, Any] = {
         "stdout": subprocess.PIPE, "stderr": subprocess.DEVNULL, "text": True,
-        **runner_mod._child_kwargs(),
+        **process_mod._child_kwargs(),
     }
     if sys.platform == "win32":
         import msvcrt
@@ -322,7 +325,7 @@ def _spawn_tree(tmp_path: Path) -> tuple[subprocess.Popen[str], int]:
     # The runner tracks every child it starts (on POSIX the process group is what
     # reaches a tree whose root already exited; on Windows a dead root is the
     # documented taskkill limit); the stand-in starts the same way.
-    runner_mod._track(parent)
+    process_mod._track(parent)
     return parent, read_fd
 
 
@@ -375,15 +378,15 @@ def test_kill_live_children_ends_every_registered_tree(tmp_path: Path) -> None:
         for _ in range(2):
             proc = subprocess.Popen(
                 [sys.executable, "-c", "import time; time.sleep(120)"],
-                **runner_mod._child_kwargs(),
+                **process_mod._child_kwargs(),
             )
             _register_child(proc)
             procs.append(proc)
-        assert runner_mod._live_children
+        assert process_mod._live_children
         _kill_live_children()
         for proc in procs:
             assert proc.wait(timeout=30) is not None
-        assert not runner_mod._live_children  # _kill_tree unregistered them
+        assert not process_mod._live_children  # _kill_tree unregistered them
     finally:
         for proc in procs:
             _kill_tree(proc)
@@ -418,13 +421,13 @@ sys.exit(0)  # the leader is gone; the TERM-ignoring grandchild carries the grou
 def test_term_ignoring_grandchild_is_reached_by_the_kill_escalation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(runner_mod, "KILL_GRACE_S", 0.5)  # keep the TERM->KILL grace short
+    monkeypatch.setattr(process_mod, "KILL_GRACE_S", 0.5)  # keep the TERM->KILL grace short
     script = tmp_path / "leader.py"
     script.write_text(TERM_IGNORING_TREE, encoding="utf-8")
     parent = subprocess.Popen(
         [sys.executable, str(script)],
         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
-        **runner_mod._child_kwargs(),
+        **process_mod._child_kwargs(),
     )
     try:
         assert parent.stdout is not None
@@ -456,10 +459,10 @@ def test_a_keyboard_interrupt_in_stream_opencode_kills_the_tree(
     run_dir = tmp_path / "run"
     run_dir.mkdir()
 
-    def boom(self: runner_mod.EventLog, line: str) -> None:
+    def boom(self: process_mod.EventLog, line: str) -> None:
         raise KeyboardInterrupt
 
-    monkeypatch.setattr(runner_mod.EventLog, "feed", boom)
+    monkeypatch.setattr(process_mod.EventLog, "feed", boom)
     with pytest.raises(KeyboardInterrupt):
         stream_opencode(
             [sys.executable, str(script)], "prompt", tmp_path, dict(os.environ), run_dir,
@@ -489,7 +492,7 @@ def test_a_budget_stop_drains_in_flight_runs(
         t1_in_flight.set()
         # An already-admitted run finishes and is recorded: its child is left alone.
         proc = subprocess.Popen(
-            [sys.executable, "-c", "import time; time.sleep(0.5)"], **runner_mod._child_kwargs()
+            [sys.executable, "-c", "import time; time.sleep(0.5)"], **process_mod._child_kwargs()
         )
         _register_child(proc)
         try:
@@ -521,7 +524,7 @@ def test_a_keyboard_interrupt_kills_in_flight_runs_and_records_them(
         run_dir = config.workdir / "runs" / f"{task.repo}-{task.task_id}-{condition}-{repeat}"
         run_dir.mkdir(parents=True, exist_ok=True)
         proc = subprocess.Popen(
-            [sys.executable, "-c", "import time; time.sleep(120)"], **runner_mod._child_kwargs()
+            [sys.executable, "-c", "import time; time.sleep(120)"], **process_mod._child_kwargs()
         )
         _register_child(proc)
         pids[task.task_id] = proc.pid
@@ -559,10 +562,10 @@ def test_a_keyboard_interrupt_kills_in_flight_runs_and_records_them(
 
 def test_a_child_registering_after_cancellation_is_killed(tmp_path: Path) -> None:
     proc = subprocess.Popen(
-        [sys.executable, "-c", "import time; time.sleep(120)"], **runner_mod._child_kwargs()
+        [sys.executable, "-c", "import time; time.sleep(120)"], **process_mod._child_kwargs()
     )
     try:
-        with runner_mod._cancel_scope() as cancel:
+        with process_mod._cancel_scope() as cancel:
             cancel.set()  # the interrupt landed before this late registration
             _register_child(proc)  # the registration itself must end the latecomer
             assert _waits_for_death(proc.pid)
@@ -577,13 +580,13 @@ def test_a_cancelled_session_is_not_resumed(tmp_path: Path, monkeypatch: pytest.
 
     def fake_stream(cmd: list[str], prompt: str, cwd: Path, env: dict[str, str], run_dir: Path,
                     reserve: int | None, timeout_s: float,
-                    reserve_usd: float | None = None, log: runner_mod.EventLog | None = None,
-                    ) -> tuple[runner_mod.EventLog, str, int | None]:
+                    reserve_usd: float | None = None, log: process_mod.EventLog | None = None,
+                    ) -> tuple[process_mod.EventLog, str, int | None]:
         calls.append(prompt)
         # Ended right after a tool-calls step with a session id: exactly the state the
         # auto-resume loop targets (finding 3). The step carries usage, so the run is
         # accountable and only the resume question is under test.
-        ended = runner_mod.EventLog()
+        ended = process_mod.EventLog()
         ended.session_id = "sess-1"
         ended.feed(json.dumps({"type": "step_finish",
                                "part": {"reason": "tool-calls",
@@ -591,7 +594,7 @@ def test_a_cancelled_session_is_not_resumed(tmp_path: Path, monkeypatch: pytest.
         return ended, "", 0
 
     monkeypatch.setattr(runner_mod, "stream_opencode", fake_stream)
-    with runner_mod._cancel_scope() as cancel:
+    with process_mod._cancel_scope() as cancel:
         result = run_one(config, pin, TASK, "A", 1)
         assert result.resumes == 2 and len(calls) == 3  # the loop really is the resume loop
 
@@ -615,7 +618,7 @@ def test_the_pump_emits_eof_even_when_iteration_raises() -> None:
 
     lines: queue.Queue[tuple[str, str | None]] = queue.Queue()
     thread = threading.Thread(
-        target=runner_mod._pump, args=(_Broken(), "out", lines), daemon=True
+        target=process_mod._pump, args=(_Broken(), "out", lines), daemon=True
     )
     thread.start()
     tag, line = lines.get(timeout=30)

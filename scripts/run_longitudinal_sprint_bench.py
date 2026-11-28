@@ -24,7 +24,8 @@ DEFAULT_MENHIR_REPO = os.environ.get("MENHIR_REPO") or str(REPO_ROOT.parent / "m
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from archolith_bench.beacon_eval.runner import DEFAULT_MODEL, DEFAULT_RUN_RESERVE  # noqa: E402
+from archolith_bench.beacon_eval.runner import DEFAULT_RUN_RESERVE  # noqa: E402
+from archolith_bench.core.opencode.process import DEFAULT_MODEL  # noqa: E402
 from archolith_bench.engineering_evidence.live_executor import (  # noqa: E402
     LiveSprintConfig,
     OpenCodeSprintExecutor,
@@ -234,7 +235,7 @@ def _run_v2(args: argparse.Namespace, fixture: SprintFixture) -> int:
         "repeats": args.repeats, "parallel": args.parallel, "run_id": run_id,
         "prompt_sha256": resolved["prompt_sha256"], "loopback_profile": "lean" if args.serve else None,
         "server_chat_model": args.server_chat_model if args.serve else None,
-        # OpenCode's serviceTier (beacon_eval.isolation.SERVICE_TIER_ENV); its step cost is still
+        # OpenCode's serviceTier (core.opencode.isolation.SERVICE_TIER_ENV); its step cost is still
         # priced at the Standard catalog rate, so under flex client_cost_usd overstates the bill.
         "cache_shaping": args.cache_shaping, "prompt_set": PROMPT_SET,
         "agent": args.agent, "agent_version": _agent_version(args.agent),

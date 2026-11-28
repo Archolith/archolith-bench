@@ -8,7 +8,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from archolith_bench.beacon_eval.runner import parse_events
+from archolith_bench.core.opencode.process import parse_events
 from archolith_bench.core import api
 from archolith_bench.core.api import call_with_flex_retry, is_flex_capacity_error, send_chat
 from archolith_bench.core.openai_flex import run_flex

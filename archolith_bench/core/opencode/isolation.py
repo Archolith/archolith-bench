@@ -12,7 +12,7 @@ never write into the user's own OpenCode history and parallel runs never share a
 only the downloaded ripgrep is copied in, so a run need not fetch it.
 
 OpenCode also searches parent directories for project config up to the git root, so
-the agent's checkout is made its own git repository (see ``runner.seal_checkout``).
+the agent's checkout is made its own git repository (see ``beacon_eval.runner.seal_checkout``).
 
 The provider block may hold a credential. The temp directory lives in the system temp
 directory (never the results tree) for one run and is removed afterwards; nothing here
@@ -102,18 +102,6 @@ def minimal_config(
     return config
 
 
-def beacon_server(beacon_python: str, manifest: Path, beacon_src: str | None) -> dict[str, Any]:
-    """The ``mcp`` block for condition B: exactly one server, Beacon."""
-    server: dict[str, Any] = {
-        "type": "local",
-        "command": [beacon_python, "-m", "beacon", "serve", "--manifest", str(manifest)],
-        "enabled": True,
-    }
-    if beacon_src:
-        server["environment"] = {"PYTHONPATH": beacon_src}
-    return {"beacon": server}
-
-
 #: Environment variable carrying condition M's memory key to the OpenCode process only.
 MEMORY_KEY_ENV = "BEACON_EVAL_MEMORY_KEY"
 
@@ -149,14 +137,6 @@ def memory_server(url: str) -> dict[str, Any]:
             "headers": {"Authorization": "Bearer {env:" + MEMORY_KEY_ENV + "}"},
         }
     }
-
-
-def beacon_remote_server(url: str) -> dict[str, Any]:
-    """The ``mcp`` block for condition R: Beacon MCP over Streamable HTTP.
-
-    ``memory_server``'s shape without headers: the loopback Beacon server needs no key.
-    """
-    return {"beacon": {"type": "remote", "url": url, "enabled": True}}
 
 
 #: Per-run OpenCode data and state (sessions database, logs), inside the run's temp home.

@@ -2,10 +2,10 @@
 
 Reuses the bench's existing pieces rather than a second implementation:
 
-* ``beacon_eval.runner.Budget`` / ``BudgetExhausted`` / ``RateLimited``: one budget shared by
+* ``beacon_eval.runner.Budget`` / ``BudgetExhausted`` and ``core.opencode.process.RateLimited``: one budget shared by
   every chain, checked before each session (``check`` holds a reserve per session in flight).
   Menhir's server-side spend is added with ``Budget.spend(0, usd)``.
-* ``beacon_eval.runner._cancel_scope`` / ``_kill_live_children``: the interrupt handling of
+* ``core.opencode.process._cancel_scope`` / ``_kill_live_children``: the interrupt handling of
   ``_run_parallel``, at chain level (its unit of work is one task run, so it cannot be called
   directly: a sprint chain is sequential and stateful).
 * ``staged.rundir.RunDir`` / ``StageFile``: append-only JSONL rows, ``config.resolved.yaml``
@@ -25,10 +25,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-from archolith_bench.beacon_eval.runner import (
+from archolith_bench.beacon_eval.runner import Budget, BudgetExhausted
+from archolith_bench.core.opencode.process import (
     DRAIN_TIMEOUT_S,
-    Budget,
-    BudgetExhausted,
     RateLimited,
     _cancel_scope,
     _kill_live_children,

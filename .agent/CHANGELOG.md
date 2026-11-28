@@ -1,5 +1,18 @@
 # archolith-bench Changelog
 
+## 2026-11-28 - Generic OpenCode process and isolation code in `core/opencode/` (reorg step 2e)
+
+`beacon_eval/isolation.py` moved to `core/opencode/isolation.py`; its two Beacon MCP blocks
+(`beacon_server`, `beacon_remote_server`) went to the new `beacon_eval/mcp_servers.py`.
+`core/opencode/process.py` now holds what `beacon_eval/runner.py` kept for running OpenCode:
+`DEFAULT_MODEL`, `RateLimited`, `EventLog`, `parse_events`, the kill/cancel/pump helpers
+(`stream_opencode`, `_kill_tree`, `_cancel_scope`, ...), `resolve_opencode`, `MemoryNotReady`
+and `check_memory_ready`. Pure move, no behaviour change, no compatibility re-exports:
+every importer (beacon_eval, engineering_evidence, scripts, tests) imports from the new
+modules, and `runner.__all__` no longer lists the moved names. The `engineering_evidence ->
+beacon_eval` allowlist entry stays for `Budget`, `export_commit`, `ANSWER_INSTRUCTIONS`,
+models and scoring.
+
 ## 2026-11-28 - One 429/error classifier in `core/ratelimit.py` (reorg step 2d)
 
 `classify(status, text) -> Kind` (capacity, quota, billing, auth, rate_limit, other) and

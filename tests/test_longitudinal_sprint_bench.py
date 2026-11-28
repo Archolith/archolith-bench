@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from archolith_bench.beacon_eval.runner import EventLog, RateLimited
+from archolith_bench.core.opencode.process import EventLog, RateLimited
 from archolith_bench.engineering_evidence.live_executor import (
     LiveSprintConfig,
     OpenCodeSprintExecutor,
@@ -177,7 +177,7 @@ def test_live_executor_applies_drift_patch_and_stops_fail_closed_on_429(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
-        "archolith_bench.beacon_eval.isolation.default_data_source",
+        "archolith_bench.core.opencode.isolation.default_data_source",
         lambda: tmp_path / "empty_opencode_data",
     )
     src_cfg = tmp_path / "opencode.json"

@@ -14,7 +14,8 @@ from typing import Any
 
 import pytest
 
-from archolith_bench.beacon_eval.runner import Budget, EventLog
+from archolith_bench.beacon_eval.runner import Budget
+from archolith_bench.core.opencode.process import EventLog
 from archolith_bench.engineering_evidence.campaign import (
     Campaign,
     ProgressFeed,
@@ -161,7 +162,7 @@ def test_namespace_does_not_resemble_the_checkout_dir() -> None:
 
 def _executor(tmp_path: Path, monkeypatch, *, stream_fn, post_fn=None, **cfg):
     monkeypatch.setattr(
-        "archolith_bench.beacon_eval.isolation.default_data_source", lambda: tmp_path / "empty_opencode_data"
+        "archolith_bench.core.opencode.isolation.default_data_source", lambda: tmp_path / "empty_opencode_data"
     )
     tmp_path.mkdir(parents=True, exist_ok=True)
     src_cfg = tmp_path / "opencode.json"
@@ -642,7 +643,7 @@ def _source_config(tmp_path: Path) -> Path:
 
 
 def test_minimal_config_shared_cache_key_replaces_per_session_key(tmp_path, monkeypatch) -> None:
-    from archolith_bench.beacon_eval.isolation import SERVICE_TIER_ENV, minimal_config
+    from archolith_bench.core.opencode.isolation import SERVICE_TIER_ENV, minimal_config
 
     monkeypatch.setenv(SERVICE_TIER_ENV, "flex")
     src = _source_config(tmp_path)

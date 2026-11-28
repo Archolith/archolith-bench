@@ -11,12 +11,7 @@ from pathlib import Path
 import pytest
 
 from archolith_bench.beacon_eval import runner as runner_mod
-from archolith_bench.beacon_eval.isolation import (
-    IsolationError,
-    beacon_server,
-    isolated_config_home,
-    isolated_env,
-)
+from archolith_bench.beacon_eval.mcp_servers import beacon_server
 from archolith_bench.beacon_eval.models import Gold, RepoPin, Task
 from archolith_bench.beacon_eval.report import render
 from archolith_bench.beacon_eval.runner import (
@@ -25,10 +20,15 @@ from archolith_bench.beacon_eval.runner import (
     TOOL_NOTE,
     RunnerConfig,
     build_prompt,
-    parse_events,
     run_matrix,
 )
 from archolith_bench.beacon_eval.scoring import extract_answer, score
+from archolith_bench.core.opencode.isolation import (
+    IsolationError,
+    isolated_config_home,
+    isolated_env,
+)
+from archolith_bench.core.opencode.process import parse_events
 
 ANSWER = {
     "docs": ["AGENTS.md", "./docs/guide.md"],
@@ -726,7 +726,7 @@ def _ready_server(body: dict):
 
 
 def test_memory_server_config_references_key_by_env_only(tmp_path: Path) -> None:
-    from archolith_bench.beacon_eval.isolation import MEMORY_KEY_ENV, memory_server
+    from archolith_bench.core.opencode.isolation import MEMORY_KEY_ENV, memory_server
 
     source = tmp_path / "opencode.json"
     source.write_text(json.dumps({"provider": {"openai": {}}}), encoding="utf-8")
@@ -739,7 +739,7 @@ def test_memory_server_config_references_key_by_env_only(tmp_path: Path) -> None
 
 
 def test_memory_ready_check_accepts_reads_ready_and_refuses_degraded() -> None:
-    from archolith_bench.beacon_eval.runner import MemoryNotReady, check_memory_ready
+    from archolith_bench.core.opencode.process import MemoryNotReady, check_memory_ready
 
     ok, ok_url = _ready_server({"status": "ready", "capabilities": {"reads_ready": True}})
     bad, bad_url = _ready_server(
@@ -954,7 +954,7 @@ def test_a_new_judge_prompt_version_invalidates_cached_verdicts(
 
 
 def test_memory_stdio_server_passes_the_key_by_env_reference_only(tmp_path: Path) -> None:
-    from archolith_bench.beacon_eval.isolation import MEMORY_KEY_ENV, memory_stdio_server
+    from archolith_bench.core.opencode.isolation import MEMORY_KEY_ENV, memory_stdio_server
 
     source = tmp_path / "opencode.json"
     source.write_text(json.dumps({"provider": {"openai": {}}}), encoding="utf-8")

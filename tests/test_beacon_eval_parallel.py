@@ -10,11 +10,12 @@ from pathlib import Path
 
 import pytest
 
-from archolith_bench.beacon_eval import isolation as isolation_mod
+from archolith_bench.core.opencode import isolation as isolation_mod
 from archolith_bench.beacon_eval import runner as runner_mod
-from archolith_bench.beacon_eval.isolation import isolated_config_home, isolated_env
+from archolith_bench.core.opencode.isolation import isolated_config_home, isolated_env
 from archolith_bench.beacon_eval.models import Gold, RepoPin, RunResult, Task
-from archolith_bench.beacon_eval.runner import RateLimited, RunnerConfig, run_matrix
+from archolith_bench.beacon_eval.runner import RunnerConfig, run_matrix
+from archolith_bench.core.opencode.process import RateLimited
 
 GOLD = Gold(docs=("README.md",))
 PIN = RepoPin(name="demo", url="", commit="0" * 40, local_path=".")

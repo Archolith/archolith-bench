@@ -26,7 +26,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from archolith_bench.beacon_eval.runner import EventLog, export_commit  # noqa: E402
+from archolith_bench.beacon_eval.runner import export_commit  # noqa: E402
+from archolith_bench.core.opencode.process import EventLog  # noqa: E402
 from archolith_bench.engineering_evidence.live_executor import apply_drift_patch  # noqa: E402
 from archolith_bench.engineering_evidence.sprint import (  # noqa: E402
     SessionExecution,

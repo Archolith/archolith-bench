@@ -16,7 +16,7 @@ from pathlib import Path
 import pytest
 
 from archolith_bench.beacon_eval import runner as runner_mod
-from archolith_bench.beacon_eval.isolation import isolated_config_home
+from archolith_bench.core.opencode.isolation import isolated_config_home
 from archolith_bench.beacon_eval.models import Gold, RepoPin, Task
 from archolith_bench.beacon_eval.runner import (
     RunnerConfig,
@@ -401,7 +401,7 @@ def test_a_damaged_template_is_not_linked(tmp_path: Path) -> None:
 def test_a_full_temp_dir_while_keeping_the_install_still_removes_the_home(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from archolith_bench.beacon_eval import isolation
+    from archolith_bench.core.opencode import isolation
 
     real = isolation.tempfile.mkdtemp
 

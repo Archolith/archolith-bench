@@ -19,7 +19,8 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlsplit, urlunsplit
 
-from archolith_bench.beacon_eval.isolation import (
+from archolith_bench.beacon_eval.runner import DEFAULT_RUN_RESERVE, export_commit
+from archolith_bench.core.opencode.isolation import (
     MEMORY_KEY_ENV,
     default_config_source,
     isolated_config_home,
@@ -27,13 +28,11 @@ from archolith_bench.beacon_eval.isolation import (
     load_api_keys,
     memory_server,
 )
-from archolith_bench.beacon_eval.runner import (
+from archolith_bench.core.opencode.process import (
     DEFAULT_MODEL,
-    DEFAULT_RUN_RESERVE,
     EventLog,
     RateLimited,
     check_memory_ready,
-    export_commit,
     resolve_opencode,
     stream_opencode,
 )
