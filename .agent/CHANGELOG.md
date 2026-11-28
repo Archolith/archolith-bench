@@ -1,5 +1,14 @@
 # archolith-bench Changelog
 
+## 2026-11-28 - Import-boundary report test for the package reorg (migration step 1)
+
+Added `tests/test_import_boundaries.py`, a report-mode guard that parses every
+`.py` under `archolith_bench/` with `ast` and fails when it sees a cross-unit
+import not in the allowlist, or an allowlisted coupling that no longer exists.
+Imports into shared units (`core`, `clients`, `progress`, `procindex`, `prompts`)
+are allowed. No source files were moved or changed; today's 14 couplings form the
+allowlist, each labelled with the reorg step that removes it.
+
 ## 2026-09-30 - OpenAI flex client for non-live LLM calls (`archolith_bench/core/openai_flex.py`)
 
 Batch-style benchmark calls (answering, judging) now use OpenAI **flex
