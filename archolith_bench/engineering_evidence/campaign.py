@@ -109,8 +109,11 @@ def new_run_id() -> str:
 
 
 def chain_namespace(fixture: SprintFixture, arm: str, repeat: int, run_id: str, attempt: int = 1) -> str:
-    base = f"sprint-{fixture.name}-{arm}-r{repeat}-{run_id}"
-    return base if attempt == 1 else f"{base}-a{attempt}"
+    # Opaque on purpose: a namespace that resembles the checkout dir name
+    # ("<fixture>-<arm>-r<k>") made Menhir-arm agents splice it into file paths, which OpenCode
+    # refused, ending 4/15 sessions per repo in run v2-20261127. The chain row records the mapping.
+    key = f"{fixture.name}|{arm}|{repeat}|{run_id}|{attempt}"
+    return "sv2-" + hashlib.sha256(key.encode("utf-8")).hexdigest()[:10]
 
 
 def _outcome_from_row(row: dict[str, Any]) -> SessionOutcome:
