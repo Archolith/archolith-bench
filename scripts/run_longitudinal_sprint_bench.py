@@ -169,7 +169,7 @@ def _run_v2(args: argparse.Namespace, fixture: SprintFixture) -> int:
         print("ERROR: --serve needs --graph <build yaml> (e.g. builds/sprint-v2.yaml)", file=sys.stderr)
         return 2
     run_id = args.run_id or new_run_id()
-    manifest = prompt_manifest(fixture, arms)
+    manifest = prompt_manifest(fixture, arms, args.cache_shaping)
     fixture_sha = hashlib.sha256(Path(args.fixture).read_bytes()).hexdigest()
     resolved = {
         "rubric_version": RUBRIC_VERSION, "fixture": fixture.name, "fixture_sha256": fixture_sha,
@@ -195,6 +195,7 @@ def _run_v2(args: argparse.Namespace, fixture: SprintFixture) -> int:
         "server_chat_model": args.server_chat_model if args.serve else None,
         # OpenCode's serviceTier (beacon_eval.isolation.SERVICE_TIER_ENV); its step cost is still
         # priced at the Standard catalog rate, so under flex client_cost_usd overstates the bill.
+        "cache_shaping": args.cache_shaping,
         "client_service_tier": os.environ.get("BEACON_EVAL_SERVICE_TIER", "").strip() or "default",
         "server_service_tier": graph_settings(args.graph, dict(os.environ))["service_tier"]
         if args.serve and args.graph else None,
@@ -233,7 +234,7 @@ def _run_v2(args: argparse.Namespace, fixture: SprintFixture) -> int:
                     work_dir=work, cache_dir=Path(args.cache_dir), model=args.model,
                     menhir_mcp_url=mcp_url, env_file=env_path, reserve_tokens=args.reserve_tokens,
                     timeout_s=args.timeout_s, runs_dir=rd.path / "runs", checkout_dir=work / "co",
-                    telemetry_db=telemetry_db, gzip_events=True,
+                    telemetry_db=telemetry_db, gzip_events=True, cache_shaping=args.cache_shaping,
                 )
             )
             if any(a.startswith("menhir") for a in arms) and not args.resume:
@@ -335,6 +336,8 @@ def main(argv: list[str] | None = None) -> int:
                     help="Parent of <fixture>-<run-id>/ (an existing run dir is refused unless --resume).")
     v2.add_argument("--resume", action="store_true", help="Reuse completed chains of an existing run dir.")
     v2.add_argument("--max-usd", type=float, default=None, help="Shared dollar cap (client + server).")
+    v2.add_argument("--cache-shaping", action="store_true",
+                    help="Shared per-arm prompt_cache_key and arm-wide prompt text first (cache reuse).")
     v2.add_argument("--est-usd-per-session", type=float, default=None,
                     help="Expected client+server USD per session (required for --live; from a prior run).")
     v2.add_argument("--reserve-usd", type=float, default=0.05,

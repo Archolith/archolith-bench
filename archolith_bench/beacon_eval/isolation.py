@@ -51,8 +51,13 @@ def minimal_config(
     mcp: dict[str, Any] | None = None,
     builtin_provider: bool = False,
     disabled_tools: tuple[str, ...] = (),
+    prompt_cache_key: str | None = None,
 ) -> dict[str, Any]:
     """``$schema``, ``model`` and the model's provider only, plus *mcp* when given.
+
+    With *prompt_cache_key*, OpenCode's default key (the session id, so every new session
+    starts on a cold cache) is turned off and this key is sent instead, so sessions that
+    share a prompt prefix can reuse it.
 
     With *builtin_provider*, a provider missing from the user's config is left to
     OpenCode's built-in catalog, with its key supplied through the environment.
@@ -76,6 +81,16 @@ def minimal_config(
         models = dict(provider.get("models") or {})
         entry = dict(models.get(model_id) or {})
         entry["options"] = {**(entry.get("options") or {}), "serviceTier": service_tier}
+        models[model_id] = entry
+        provider["models"] = models
+        config["provider"] = {provider_id: provider}
+    if prompt_cache_key:
+        model_id = model.split("/", 1)[1] if "/" in model else model
+        provider = dict(config.get("provider", {}).get(provider_id) or {})
+        provider["options"] = {**(provider.get("options") or {}), "setCacheKey": False}
+        models = dict(provider.get("models") or {})
+        entry = dict(models.get(model_id) or {})
+        entry["options"] = {**(entry.get("options") or {}), "promptCacheKey": prompt_cache_key}
         models[model_id] = entry
         provider["models"] = models
         config["provider"] = {provider_id: provider}
@@ -322,6 +337,7 @@ def isolated_config_home(
     builtin_provider: bool = False,
     disabled_tools: tuple[str, ...] = (),
     deps_template: Path | None = None,
+    prompt_cache_key: str | None = None,
 ) -> Iterator[Path]:
     """Yield a temp ``XDG_CONFIG_HOME`` for one run; removed on exit.
 
@@ -329,7 +345,8 @@ def isolated_config_home(
     (~3,700 files) is shared: the run links the template's ``node_modules`` (OpenCode
     then installs nothing), and the first run to finish an install becomes the template.
     """
-    config = minimal_config(source_config, model, mcp, builtin_provider, disabled_tools)
+    config = minimal_config(source_config, model, mcp, builtin_provider, disabled_tools,
+                            prompt_cache_key=prompt_cache_key)
     home = Path(tempfile.mkdtemp(prefix="beacon-eval-oc-"))
     opencode_dir = home / "opencode"
     linked = False

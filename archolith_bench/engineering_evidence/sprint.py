@@ -306,34 +306,57 @@ class DryRunExecutor:
         )
 
 
+#: Each arm's tool/memory note; the same text for every session of the arm.
+_ARM_NOTES: dict[str, str] = {
+    "menhir_structure": (
+        "You have Menhir structural tools (`query_structure`, `blast_radius`, "
+        "`affected_tests`) indexed for this repository. Prefer them over broad grep."
+    ),
+    "menhir_longitudinal": (
+        "You have Menhir structural AND memory tools (`query_structure`, `blast_radius`, "
+        "`affected_tests`, `recall_memories`, `add_memory`, `add_todo`, `list_todos`). "
+        "Recall existing memories/TODOs at session start before re-reading files."
+    ),
+    "notes_file": (
+        f"Keep your working notes in `{NOTES_FILE}` at the repository root: it is the only "
+        "memory you have between sessions, so read it at session start before re-reading files."
+    ),
+}
+
+
 def build_session_prompt(session: SprintSession, arm: str) -> str:
     """Compose the exact session prompt for a given arm."""
     parts = [session.prompt.strip()]
-    if arm == "menhir_structure":
-        parts.append(
-            "You have Menhir structural tools (`query_structure`, `blast_radius`, "
-            "`affected_tests`) indexed for this repository. Prefer them over broad grep."
-        )
-    elif arm == "menhir_longitudinal":
-        parts.append(
-            "You have Menhir structural AND memory tools (`query_structure`, `blast_radius`, "
-            "`affected_tests`, `recall_memories`, `add_memory`, `add_todo`, `list_todos`). "
-            "Recall existing memories/TODOs at session start before re-reading files."
-        )
-        if session.memory_instruction:
-            parts.append(session.memory_instruction.strip())
-    elif arm == "notes_file":
-        parts.append(
-            f"Keep your working notes in `{NOTES_FILE}` at the repository root: it is the only "
-            "memory you have between sessions, so read it at session start before re-reading files."
-        )
-        if session.notes_instruction:
-            parts.append(session.notes_instruction.strip())
+    if arm in _ARM_NOTES:
+        parts.append(_ARM_NOTES[arm])
+    if arm == "menhir_longitudinal" and session.memory_instruction:
+        parts.append(session.memory_instruction.strip())
+    elif arm == "notes_file" and session.notes_instruction:
+        parts.append(session.notes_instruction.strip())
     return "\n\n".join(parts)
 
 
-def compose_full_prompt(session: SprintSession, arm: str, namespace: str) -> str:
-    """The exact prompt a live executor sends: session prompt, namespace line, answer rules."""
+def compose_full_prompt(session: SprintSession, arm: str, namespace: str,
+                        cache_shaping: bool = False) -> str:
+    """The exact prompt a live executor sends: session prompt, namespace line, answer rules.
+
+    With *cache_shaping* the same blocks are reordered so text shared by every session of the arm
+    (tool note, answer rules, notes exception) comes first and session text last, extending the
+    prompt prefix the provider can serve from cache. The words are unchanged.
+    """
+    if cache_shaping:
+        stable = [_ARM_NOTES[arm]] if arm in _ARM_NOTES else []
+        stable.append(ANSWER_INSTRUCTIONS)
+        if arm == "notes_file":
+            stable.append(NOTES_EXCEPTION)
+        if arm == "menhir_longitudinal":
+            stable.append(f"Use Menhir namespace `{namespace}` for all memory/TODO operations.")
+        varying = [session.prompt.strip()]
+        if arm == "menhir_longitudinal" and session.memory_instruction:
+            varying.append(session.memory_instruction.strip())
+        if arm == "notes_file" and session.notes_instruction:
+            varying.append(session.notes_instruction.strip())
+        return "\n\n".join(stable + varying)
     text = build_session_prompt(session, arm)
     if arm == "menhir_longitudinal":
         text += f"\n\nUse Menhir namespace `{namespace}` for all memory/TODO operations."
