@@ -18,7 +18,8 @@ from typing import Callable
 
 import httpx
 
-_CAPACITY_MARKERS = ("resource_unavailable", "resource unavailable")
+from archolith_bench.core.ratelimit import Kind, classify
+
 _RETRYABLE_STATUS = {408, 500, 502, 503, 504}
 _IMMEDIATE_STOP_STATUS = {429, 402, 401, 403}
 _MAX_TRANSIENT_RETRIES = 5
@@ -92,11 +93,6 @@ def _load_checkpoint(path: Path) -> dict[str, FlexResult]:
             if isinstance(row, dict) and row.get("custom_id"):
                 done[row["custom_id"]] = _result_from_row(row)
     return done
-
-
-def _classify_capacity(body_text: str) -> bool:
-    lowered = body_text.lower()
-    return any(marker in lowered for marker in _CAPACITY_MARKERS)
 
 
 def _cost(prompt_tokens: int, completion_tokens: int, rates: tuple[float, float]) -> float:
@@ -212,7 +208,7 @@ def run_flex(
                 return FlexResult(custom_id, content, pt, ct, _cost(pt, ct, used_rates),
                                   service_tier=tier, response_model=resp_model, fell_back=fell_back)
             body_text = resp.text or ""
-            if resp.status_code == 429 and _classify_capacity(body_text):
+            if classify(resp.status_code, body_text) is Kind.CAPACITY:
                 if fallback_tier is not None and not fell_back:
                     timed_out = fallback_after_s is not None and clock() - first_attempt >= fallback_after_s
                     if timed_out or attempt >= max_capacity_retries:

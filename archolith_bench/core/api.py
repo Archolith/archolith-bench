@@ -9,6 +9,8 @@ import time
 import httpx
 from dotenv import load_dotenv
 
+from archolith_bench.core.ratelimit import Kind, classify
+
 load_dotenv()
 
 _proxy_port = os.getenv("PROXY_PORT", "9800")
@@ -25,7 +27,6 @@ REASONING_MAX_COMPLETION_TOKENS = 16384
 # Opt-in service tier (e.g. "flex"), sent only to reasoning models on the OpenAI endpoint.
 SERVICE_TIER_ENV = "BENCHMARK_SERVICE_TIER"
 FLEX_TIMEOUT_S = 900
-_CAPACITY_MARKERS = ("resource_unavailable", "resource unavailable")
 FLEX_CAPACITY_RETRIES = 8
 
 
@@ -101,8 +102,8 @@ def is_flex_capacity_error(exc: BaseException) -> bool:
         response_text = getattr(response, "text", "") or ""
     except Exception:  # noqa: BLE001 - an unread streamed body has no text
         response_text = ""
-    text = f"{exc} {getattr(exc, 'body', '')} {getattr(exc, 'code', '')} {response_text}".lower()
-    return any(marker in text for marker in _CAPACITY_MARKERS)
+    text = f"{exc} {getattr(exc, 'body', '')} {getattr(exc, 'code', '')} {response_text}"
+    return classify(status, text) is Kind.CAPACITY
 
 
 def call_with_flex_retry(fn, *, retries: int = FLEX_CAPACITY_RETRIES, sleep=None):  # noqa: ANN001, ANN201
@@ -238,10 +239,10 @@ def _post_chat_with_retries(
             return None, f"[HTTP ERROR]: {e}"
 
         if resp.status_code == 429:
-            body_text = (resp.text or "").lower()
-            if "insufficient_quota" in body_text:
+            kind = classify(429, resp.text or "")
+            if kind in (Kind.QUOTA, Kind.BILLING):
                 break
-            if any(marker in body_text for marker in _CAPACITY_MARKERS):
+            if kind is Kind.CAPACITY:
                 if capacity_attempt >= FLEX_CAPACITY_RETRIES:
                     break
                 wait = min(300, 15 * 2 ** capacity_attempt)
