@@ -1,5 +1,14 @@
 # archolith-bench Changelog
 
+## 2026-11-28 - IR metrics dedupe into `core/ir_metrics.py` (reorg step 2b)
+
+`recall_at_k`, `precision_at_k`, `mrr` and `ndcg_at_k` now live once in
+`archolith_bench/core/ir_metrics.py` (the facet copy, which is behaviorally identical
+to oracle's). `facet/metrics.py` and `oracle/metrics.py` import all four, and
+`r1/metrics.py` imports `recall_at_k`, so `M.<name>` callers are unchanged. r1's
+known-item functions and its rank-list `mrr(ranks)` stay in r1. `intent/metrics.py`
+takes `ndcg_at_k` from core instead of oracle. No benchmark number changes.
+
 ## 2026-11-28 - Production-target guard moves to `core/targets.py` (reorg step 2a)
 
 `harness/targets.py`, `harness.scalar_bolt.assert_not_prod` (with `ProdBoltRefused`,

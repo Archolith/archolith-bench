@@ -12,20 +12,9 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+from archolith_bench.core.ir_metrics import recall_at_k  # noqa: F401  (runner uses M.*)
+
 from .models import R1Memory, R1Query
-
-
-def recall_at_k(ranked: Sequence[str], support_ids: Sequence[str], k: int) -> float:
-    """Fraction of gold support ids present in the top-k.
-
-    This is the multi-support metric: it wants ALL of ``support_ids`` in the top-k.
-    For known-item / duplicate-cluster crediting (any one member counts), use
-    ``known_item_recall_at_k`` instead.
-    """
-    if not support_ids:
-        return 0.0
-    top = set(ranked[:k])
-    return sum(1 for sid in support_ids if sid in top) / len(support_ids)
 
 
 # ---------------------------------------------------------------------------
