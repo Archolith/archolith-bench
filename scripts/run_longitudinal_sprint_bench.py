@@ -216,7 +216,7 @@ def _run_v2(args: argparse.Namespace, fixture: SprintFixture) -> int:
             mcp_url = args.menhir_mcp_url
             telemetry_db = Path(args.telemetry_db) if args.telemetry_db else None
             if args.serve:
-                from archolith_bench.staged.serve import graph_settings, served_menhir
+                from archolith_bench.staged.serve import served_menhir
 
                 url = stack.enter_context(
                     served_menhir(
