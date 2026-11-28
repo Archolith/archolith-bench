@@ -12,7 +12,7 @@ import pytest
 
 from archolith_bench.beacon_eval import runner as runner_mod
 from archolith_bench.beacon_eval.mcp_servers import beacon_server
-from archolith_bench.beacon_eval.models import Gold, RepoPin, Task
+from archolith_bench.core.agent_task.models import Gold, RepoPin, Task
 from archolith_bench.beacon_eval.report import render
 from archolith_bench.beacon_eval.runner import (
     Budget,
@@ -22,7 +22,7 @@ from archolith_bench.beacon_eval.runner import (
     build_prompt,
     run_matrix,
 )
-from archolith_bench.beacon_eval.scoring import extract_answer, score
+from archolith_bench.core.agent_task.scoring import extract_answer, score
 from archolith_bench.core.opencode.isolation import (
     IsolationError,
     isolated_config_home,
@@ -621,7 +621,7 @@ def test_evidence_recall_counts_gold_spans_overlapped_in_the_same_file(tmp_path:
 
 
 def test_gold_evidence_is_loaded_once_per_distinct_span(tmp_path: Path) -> None:
-    from archolith_bench.beacon_eval.models import load_task
+    from archolith_bench.core.agent_task.models import load_task
 
     task = tmp_path / "t.json"
     span = {"path": "a.md", "line_start": 1, "line_end": 2, "quote": "q"}
@@ -670,7 +670,7 @@ def test_grounding_takes_the_first_wording_as_the_cited_guardrail(tmp_path: Path
 
 
 def test_why_task_set_loads_apart_and_gold_wordings_score(tmp_path: Path) -> None:
-    from archolith_bench.beacon_eval.models import load_tasks
+    from archolith_bench.core.agent_task.models import load_tasks
 
     root = Path(runner_mod.__file__).parent
     main = load_tasks(root / "tasks")
@@ -687,7 +687,7 @@ def test_why_task_set_loads_apart_and_gold_wordings_score(tmp_path: Path) -> Non
 
 def test_adr_task_set_loads_apart_on_its_own_pin(tmp_path: Path) -> None:
     from archolith_bench.beacon_eval.cli import TASK_SETS
-    from archolith_bench.beacon_eval.models import load_repos, load_tasks
+    from archolith_bench.core.agent_task.models import load_repos, load_tasks
 
     root = Path(runner_mod.__file__).parent
     assert TASK_SETS["adr"] == "why_tasks_adr"
@@ -782,7 +782,7 @@ def test_condition_m_without_memory_settings_is_refused(tmp_path: Path) -> None:
 def _judge_fixture(tmp_path: Path, findings: list[str]) -> tuple[Path, Path]:
     from dataclasses import asdict
 
-    from archolith_bench.beacon_eval.models import RunResult
+    from archolith_bench.core.agent_task.models import RunResult
 
     task_root = tmp_path / "why_tasks"
     (task_root / "r").mkdir(parents=True)
@@ -889,7 +889,7 @@ def test_resume_reuses_completed_runs_counts_their_spend_and_logs_once(
 ) -> None:
     from dataclasses import asdict
 
-    from archolith_bench.beacon_eval.models import RunResult
+    from archolith_bench.core.agent_task.models import RunResult
 
     task = Task(repo="r", task_id="t", kind="why", prompt="q", reviewed=True, gold=Gold())
     done = RunResult(repo="r", task_id="t", condition="A", repeat=1, answer={"findings": []},

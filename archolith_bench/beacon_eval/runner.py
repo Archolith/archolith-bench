@@ -26,7 +26,6 @@ beside a new answer.
 
 from __future__ import annotations
 
-import io
 import json
 import os
 import re
@@ -49,8 +48,9 @@ from urllib.parse import urlsplit
 
 from archolith_bench.beacon_eval import CONDITIONS, DEFAULT_CONDITIONS
 from archolith_bench.beacon_eval.mcp_servers import beacon_remote_server, beacon_server
-from archolith_bench.beacon_eval.models import ANSWER_KEYS, RepoPin, RunResult, Task
-from archolith_bench.beacon_eval.scoring import extract_answer, score
+from archolith_bench.core.agent_task.checkout import _checkout_git, _ensure_source, export_commit
+from archolith_bench.core.agent_task.models import ANSWER_INSTRUCTIONS, RepoPin, RunResult, Task
+from archolith_bench.core.agent_task.scoring import extract_answer, score
 from archolith_bench.core.budget import DEFAULT_RUN_RESERVE, Budget, BudgetExhausted
 from archolith_bench.core.opencode.isolation import (
     MEMORY_KEY_ENV,
@@ -97,17 +97,6 @@ RESUME_PROMPT = "Continue. When you are done, give the final answer in the requi
 
 #: Same line for every condition, so the only intended difference is the added context.
 TOOL_NOTE = "Use whatever tools are available to you."
-
-ANSWER_INSTRUCTIONS = (
-    "Work read-only: do not edit, create or delete files, and do not run tests or installs. "
-    "When you are done, end your reply with one fenced ```json block containing exactly "
-    'these keys: "docs" (paths of documents to read), "files" (source files involved), '
-    '"commands" (exact shell commands), "guardrails" (rules that apply, each a short '
-    'sentence), "verdict" (a single word when the task asks for one, else ""), "findings" '
-    "(short statements that answer the question), \"plan\" "
-    '(ordered steps), "citations" (a list of {"path", "line_start", "line_end"} backing '
-    "your claims)."
-)
 
 class AccountingError(RuntimeError):
     """A run reported no token usage, so the budget can no longer be trusted."""
@@ -326,52 +315,6 @@ def check_disk(workdir: Path, min_free_gb: float | None) -> None:
 # ---------------------------------------------------------------------------
 # Checkouts and beacons
 # ---------------------------------------------------------------------------
-
-
-def _ensure_source(pin: RepoPin, cache: Path) -> Path:
-    """The local repository holding *pin*'s commit: cloned into *cache* once, and fetched
-    only when the commit is missing, so concurrent exports never write to it."""
-    source = Path(pin.local_path) if pin.local_path else cache / pin.name
-    if not pin.local_path and not (source / ".git").exists():
-        subprocess.run(
-            ["git", "clone", "--quiet", "--filter=blob:none", pin.url, str(source)],
-            check=True,
-        )
-    present = subprocess.run(
-        ["git", "-C", str(source), "cat-file", "-e", f"{pin.commit}^{{commit}}"],
-        check=False,
-        capture_output=True,
-    )
-    if present.returncode != 0:
-        subprocess.run(
-            ["git", "-C", str(source), "fetch", "--quiet", "origin", pin.commit],
-            check=False,
-            capture_output=True,
-        )
-    return source
-
-
-def export_commit(pin: RepoPin, dest: Path, cache: Path, source: Path | None = None) -> Path:
-    """Write the tree of *pin* at its commit into *dest* (no .git), from *source* if given."""
-    source = source if source is not None else _ensure_source(pin, cache)
-    archive = subprocess.run(
-        ["git", "-C", str(source), "archive", "--format=tar", pin.commit],
-        check=True,
-        capture_output=True,
-    ).stdout
-    dest.mkdir(parents=True, exist_ok=True)
-    with tarfile.open(fileobj=io.BytesIO(archive)) as tar:
-        tar.extractall(dest, filter="data")
-    return dest
-
-
-def _checkout_git(checkout: Path, autocrlf_off: bool = True) -> list[str]:
-    git = [
-        "git", "-C", str(checkout),
-        "-c", "user.name=beacon-eval", "-c", "user.email=beacon-eval@example.invalid",
-        "-c", "commit.gpgsign=false",
-    ]
-    return [*git, "-c", "core.autocrlf=false"] if autocrlf_off else git
 
 
 def _git_out(cmd: list[str]) -> str:
@@ -1409,8 +1352,6 @@ def _record_stopped(
 
 
 __all__ = [
-    "ANSWER_INSTRUCTIONS",
-    "ANSWER_KEYS",
     "AccountingError",
     "LowDisk",
     "RunnerConfig",

@@ -12,6 +12,17 @@ ANSWER_KEYS = (
     "docs", "files", "commands", "guardrails", "verdict", "findings", "plan", "citations"
 )
 
+ANSWER_INSTRUCTIONS = (
+    "Work read-only: do not edit, create or delete files, and do not run tests or installs. "
+    "When you are done, end your reply with one fenced ```json block containing exactly "
+    'these keys: "docs" (paths of documents to read), "files" (source files involved), '
+    '"commands" (exact shell commands), "guardrails" (rules that apply, each a short '
+    'sentence), "verdict" (a single word when the task asks for one, else ""), "findings" '
+    "(short statements that answer the question), \"plan\" "
+    '(ordered steps), "citations" (a list of {"path", "line_start", "line_end"} backing '
+    "your claims)."
+)
+
 
 @dataclass(frozen=True)
 class RepoPin:

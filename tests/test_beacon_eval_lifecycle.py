@@ -35,7 +35,7 @@ from archolith_bench.core.opencode.process import (
     _unregister_child,
     stream_opencode,
 )
-from archolith_bench.beacon_eval.models import Gold, RepoPin, RunResult, Task
+from archolith_bench.core.agent_task.models import Gold, RepoPin, RunResult, Task
 from archolith_bench.beacon_eval.runner import (
     Budget,
     BudgetExhausted,

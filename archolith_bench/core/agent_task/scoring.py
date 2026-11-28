@@ -8,7 +8,7 @@ import shlex
 from pathlib import Path
 from typing import Any
 
-from archolith_bench.beacon_eval.models import Gold
+from archolith_bench.core.agent_task.models import Gold
 
 _FENCED_JSON = re.compile(r"```json\s*(\{.*?\})\s*```", re.DOTALL)
 
