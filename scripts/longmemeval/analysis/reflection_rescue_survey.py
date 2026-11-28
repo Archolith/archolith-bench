@@ -56,6 +56,7 @@ from openai import AsyncOpenAI  # noqa: E402
 if str(BENCH_ROOT) not in sys.path:
     sys.path.insert(0, str(BENCH_ROOT))
 from archolith_bench.core.api import acall_with_flex_retry, openai_chat_kwargs  # noqa: E402
+from archolith_bench.core.pricing import RATES_PER_1M  # noqa: E402
 
 DEFAULT_MODEL = "gpt-6-luna"
 
@@ -355,7 +356,8 @@ def _write_output(
     # Only gpt-4o-mini has a known rate here ($0.15/M input, $0.60/M output); any other
     # model is reported unpriced rather than costed at mini's rate.
     if model == "gpt-4o-mini":
-        total_cost = (total_prompt_tokens * 0.15 + total_completion_tokens * 0.60) / 1_000_000
+        mini = RATES_PER_1M["gpt-4o-mini"]
+        total_cost = (total_prompt_tokens * mini.input + total_completion_tokens * mini.output) / 1_000_000
     else:
         total_cost = None
 

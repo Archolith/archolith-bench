@@ -28,12 +28,18 @@ from pathlib import Path
 
 import httpx
 
+from archolith_bench.core.pricing import RATES_PER_1M
+
 ALLOWED_PATHS = frozenset({"/v1/chat/completions", "/v1/embeddings"})
 
 # Per-1M-token pricing for cost cap. Defaults to gpt-4o-mini; override via env.
 # These are conservative — actual pricing may vary by deployment.
-DEFAULT_PRICE_INPUT_PER_1M = float(os.getenv("BENCH_PRICE_INPUT_PER_1M", "0.150"))
-DEFAULT_PRICE_OUTPUT_PER_1M = float(os.getenv("BENCH_PRICE_OUTPUT_PER_1M", "0.600"))
+DEFAULT_PRICE_INPUT_PER_1M = float(
+    os.getenv("BENCH_PRICE_INPUT_PER_1M", str(RATES_PER_1M["gpt-4o-mini"].input))
+)
+DEFAULT_PRICE_OUTPUT_PER_1M = float(
+    os.getenv("BENCH_PRICE_OUTPUT_PER_1M", str(RATES_PER_1M["gpt-4o-mini"].output))
+)
 
 
 class BudgetState:

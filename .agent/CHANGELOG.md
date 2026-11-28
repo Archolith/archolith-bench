@@ -1,5 +1,14 @@
 # archolith-bench Changelog
 
+## 2026-11-28 - One model-rate table in `core/pricing.py` (reorg step 2c)
+
+`RATES_PER_1M` (model id -> `ModelRates`: input, cached input, output, cache write) and
+`FLEX_RATES_PER_1M` now hold every rate once. `core.metrics.PRICING_DEFAULTS`,
+`extraction_sim.PRICING`, `beacon_eval.judge.PRICES_PER_M`, the ingest cost tool's
+`INGEST_RATES_USD_PER_1M` / `FLEX_RATES_USD_PER_1M`, the budget proxy's default prices and
+the reflection survey's gpt-4o-mini cost derive from it with their names, shapes and key
+sets unchanged. No price changes.
+
 ## 2026-11-28 - IR metrics dedupe into `core/ir_metrics.py` (reorg step 2b)
 
 `recall_at_k`, `precision_at_k`, `mrr` and `ndcg_at_k` now live once in

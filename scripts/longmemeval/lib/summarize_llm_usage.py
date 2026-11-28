@@ -9,6 +9,12 @@ import json
 from pathlib import Path
 import sqlite3
 from typing import Any
+import sys
+
+_BENCH_ROOT = str(Path(__file__).resolve().parents[3])
+if _BENCH_ROOT not in sys.path:
+    sys.path.insert(0, _BENCH_ROOT)
+from archolith_bench.core.pricing import FLEX_RATES_PER_1M, RATES_PER_1M, ModelRates  # noqa: E402
 
 
 def _token_count(usage: dict[str, Any], *names: str) -> int | None:
@@ -121,13 +127,19 @@ def _new_harness_group(label: str, value: str) -> dict[str, int | str]:
 
 
 
+def _as_tuple(rates: ModelRates) -> tuple[float, float, float, float]:
+    assert rates.cache_write is not None
+    return (rates.input, rates.output, rates.cached_input, rates.cache_write)
+
+
 # Per-model rates in USD per 1M tokens, for costing Menhir's ingest traffic. Static and dated,
 # matching core/metrics.py's convention -- no live pricing lookups.
 #
-# core.metrics.PRICING_DEFAULTS is not reused here because it is keyed by *provider* and its
-# "openai" entry is gpt-4o ($2.50/$10.00), the answer model. Ingest ran on gpt-4o-mini (now
-# gpt-6-luna), 16x+ cheaper on input; pricing ingest at the gpt-4o rate would overstate a 78-item buildout by
-# roughly an order of magnitude.
+# The rates come from archolith_bench.core.pricing.RATES_PER_1M (keyed by model id). Not
+# core.metrics.PRICING_DEFAULTS: that is keyed by *provider* and its "openai" entry is gpt-4o
+# ($2.50/$10.00), the answer model, while ingest ran on gpt-4o-mini (now gpt-6-luna), 16x+
+# cheaper on input. The key tuple below is the set of models this tool prices; any other
+# model is unpriced.
 #
 # Embeddings have no output tokens, so their output rate is 0.0 rather than unknown.
 # (input, output, cached_input, cache_write) in USD per 1M tokens.
@@ -144,28 +156,25 @@ def _new_harness_group(label: str, value: str) -> dict[str, int | str]:
 # assuming one understates real spend, which is the direction that matters. Likewise a model
 # with no published cache-write rate uses its input rate as the write rate.
 INGEST_RATES_USD_PER_1M: dict[str, tuple[float, float, float, float]] = {
-    # chat -- OpenAI direct
-    "gpt-4o": (2.50, 10.00, 1.25, 2.50),
-    "gpt-4o-mini": (0.15, 0.60, 0.075, 0.15),
-    "gpt-4.1-mini": (0.40, 1.60, 0.10, 0.40),
-    "gpt-4.1-nano": (0.10, 0.40, 0.025, 0.10),
-    # Standard tier, short context (<=272K input), from developers.openai.com/api/docs/pricing
-    # and /models/gpt-6-luna on 2026-10-15. Used for rows not recorded as Flex; see
-    # FLEX_RATES_USD_PER_1M for the Flex rates.
-    "gpt-6-luna": (0.10, 0.50, 0.01, 0.125),
-    # chat -- OpenRouter slugs. Fetched from openrouter.ai/api/v1/models on 2026-09-08:
-    # prompt 2e-7/token = $0.20/M, completion 1.2e-6 = $1.20/M, cache read 2e-8 = $0.02/M.
-    # luna and luna-pro are priced identically, so Pro is capability upside at no extra cost.
-    "openai/gpt-5.6-luna": (0.20, 1.20, 0.02, 0.20),
-    "openai/gpt-5.6-luna-pro": (0.20, 1.20, 0.02, 0.20),
-    # The :batch variants are exactly 50% off. They are an ASYNCHRONOUS submit-and-poll API
-    # (202 Accepted, status "validating"), so they are priced here for comparison but are NOT
-    # reachable from Menhir's ingest, whose extraction calls are sequentially dependent.
-    "openai/gpt-5.6-luna:batch": (0.10, 0.60, 0.01, 0.10),
-    "openai/gpt-5.6-luna-pro:batch": (0.10, 0.60, 0.01, 0.10),
-    # embeddings -- no output tokens, so the output rate is 0.0 rather than unknown
-    "text-embedding-3-small": (0.02, 0.0, 0.02, 0.02),
-    "text-embedding-3-large": (0.13, 0.0, 0.13, 0.13),
+    model: _as_tuple(RATES_PER_1M[model])
+    for model in (
+        # chat -- OpenAI direct
+        "gpt-4o",
+        "gpt-4o-mini",
+        "gpt-4.1-mini",
+        "gpt-4.1-nano",
+        # Standard tier, short context; Flex rates are in FLEX_RATES_USD_PER_1M.
+        "gpt-6-luna",
+        # chat -- OpenRouter slugs. The :batch variants are asynchronous submit-and-poll, so
+        # they are priced for comparison but NOT reachable from Menhir's ingest.
+        "openai/gpt-5.6-luna",
+        "openai/gpt-5.6-luna-pro",
+        "openai/gpt-5.6-luna:batch",
+        "openai/gpt-5.6-luna-pro:batch",
+        # embeddings
+        "text-embedding-3-small",
+        "text-embedding-3-large",
+    )
 }
 RATES_DATED = (
     "OpenAI rates as of 2026-09 (openai.com/api/pricing), gpt-6-luna and its Flex rate from "
@@ -180,7 +189,7 @@ RATES_DATED = (
 # run that silently fell back to Standard would otherwise be under-reported. Models without
 # an entry keep their own rate.
 FLEX_RATES_USD_PER_1M: dict[str, tuple[float, float, float, float]] = {
-    "gpt-6-luna": (0.05, 0.25, 0.005, 0.0625),
+    model: _as_tuple(FLEX_RATES_PER_1M[model]) for model in ("gpt-6-luna",)
 }
 
 
