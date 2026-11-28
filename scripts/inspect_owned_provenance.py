@@ -14,7 +14,7 @@ from neo4j import GraphDatabase
 _BENCH_ROOT = Path(__file__).resolve().parents[1]
 if str(_BENCH_ROOT) not in sys.path:
     sys.path.insert(0, str(_BENCH_ROOT))
-from archolith_bench.harness.scalar_bolt import assert_not_prod  # noqa: E402
+from archolith_bench.core.targets import assert_not_prod  # noqa: E402
 
 URI = sys.argv[1] if len(sys.argv) > 1 else "bolt://localhost:7690"
 NS = sys.argv[2]

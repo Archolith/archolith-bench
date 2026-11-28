@@ -333,7 +333,7 @@ def _result_rows(data: dict[str, Any]) -> list[dict[str, Any]]:
 
 def main() -> None:
     menhir_url = os.environ.get("MENHIR_URL", "http://127.0.0.1:8150").rstrip("/")
-    from archolith_bench.harness.memory_ab import assert_not_production
+    from archolith_bench.core.targets import assert_not_production
 
     assert_not_production(menhir_url)
     key = _key()

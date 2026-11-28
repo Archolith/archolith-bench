@@ -196,3 +196,53 @@ def assert_allowed_target(uri: str, *, what: str = "target") -> None:
             f"To use another throwaway port deliberately, set "
             f"{ALLOW_PORTS_ENV}={port}"
         )
+
+
+# The default Neo4j bolt port. Refused even on loopback: a local instance on
+# 7687 is a real Menhir, not a throwaway, which publishes on 7688.
+PROD_BOLT_PORT = 7687
+
+
+class ProdBoltRefused(RuntimeError):
+    """Raised when a bolt URI is not an allow-listed throwaway Neo4j."""
+
+
+def assert_not_prod(uri: str) -> None:
+    """Refuse a bolt URI that is not an allow-listed throwaway.
+
+    Allow-list, not deny-list. This previously named three known-prod host:port
+    pairs (including a LAN IP that is no longer production) and refused the
+    suffix ":7687". Both halves failed open once production moved off-LAN: a
+    remote host on any other port was permitted outright.
+
+    Now the host must be loopback, or opted in via ARCHOLITH_BENCH_ALLOW_HOSTS,
+    and port 7687 is refused regardless of host. The scalar e2e harness runs
+    unscoped reads, so a wrong target leaks real memories.
+    """
+    try:
+        assert_allowed_target(uri, what="bolt URI")
+    except TargetRefused as e:
+        raise ProdBoltRefused(str(e)) from e
+
+    if (uri or "").lower().rstrip("/").endswith(f":{PROD_BOLT_PORT}"):
+        raise ProdBoltRefused(
+            f"bolt URI {uri!r} targets port {PROD_BOLT_PORT} (the default Menhir Neo4j "
+            f"port); use the throwaway (7688). Refusing."
+        )
+
+
+def assert_not_production(target: str) -> None:
+    """Refuse a memory-benchmark target that is not an allow-listed throwaway.
+
+    Allow-list, not deny-list. The previous marker-based check failed open: when
+    production moved to a hostname containing none of `_PROD_MARKERS`, the real
+    instance was permitted. Only loopback passes now, plus hosts explicitly
+    opted in via ARCHOLITH_BENCH_ALLOW_HOSTS.
+
+    Still raises SystemExit so CLI callers keep exiting cleanly rather than
+    surfacing a traceback.
+    """
+    try:
+        assert_allowed_target(target, what="memory benchmark target")
+    except TargetRefused as e:
+        raise SystemExit(f"REFUSING: {e}") from e

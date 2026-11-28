@@ -58,8 +58,8 @@ PW = os.getenv("LME_NEO4J_PW", "lmedata123")
 _BENCH_ROOT = Path(__file__).resolve().parents[4]
 if str(_BENCH_ROOT) not in sys.path:
     sys.path.insert(0, str(_BENCH_ROOT))
-from archolith_bench.harness.scalar_bolt import assert_not_prod  # noqa: E402
-from archolith_bench.harness.memory_ab import assert_not_production  # noqa: E402
+from archolith_bench.core.targets import assert_not_prod  # noqa: E402
+from archolith_bench.core.targets import assert_not_production  # noqa: E402
 from archolith_bench.harness.menhir_client import HttpMenhirClient  # noqa: E402
 
 N = int(os.getenv("LME_N", "30"))

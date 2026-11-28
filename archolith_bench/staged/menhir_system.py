@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from ..harness.menhir_client import effective_counted_verdict_limit
-from ..harness.memory_ab import assert_not_production
+from ..core.targets import assert_not_production
 
 _TERMINAL = {"READY", "FAILED"}
 

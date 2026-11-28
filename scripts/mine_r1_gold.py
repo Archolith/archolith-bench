@@ -327,7 +327,7 @@ def main(argv: list[str] | None = None) -> int:
 
     from neo4j import GraphDatabase
 
-    from archolith_bench.harness.scalar_bolt import assert_not_prod
+    from archolith_bench.core.targets import assert_not_prod
 
     assert_not_prod(DUMMY_URI)
     driver = GraphDatabase.driver(DUMMY_URI, auth=DUMMY_AUTH)

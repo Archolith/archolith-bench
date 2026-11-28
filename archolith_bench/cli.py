@@ -963,10 +963,10 @@ def _run_phase3_harness(args: argparse.Namespace, adapter) -> None:  # noqa: ANN
     Not an A/B: posts :TurnEvidence, triggers consolidation, and validates Views / abstentions /
     supersession / idempotence. Requires --menhir-url (throwaway) and --confirm-menhir-reset.
     """
+    from .core.targets import assert_not_production
     from .harness import (
         Phase3MenhirClient,
         StubPhase3Client,
-        assert_not_production,
         phase3_result_to_dict,
         run_phase3,
         run_scenario_suite,
@@ -1088,12 +1088,12 @@ def _run_scalar_state_harness(args: argparse.Namespace, adapter) -> None:  # noq
     recall-visible). Requires --menhir-url (throwaway, scheduler on) + --neo4j-uri (same throwaway
     Neo4j) + --confirm-menhir-reset. See benchmarks/RUNBOOK-scalar-state-e2e.md for the launch profile.
     """
+    from .core.targets import assert_not_production
     from .harness import (
         SCALAR_FIXTURE_SETS,
         HttpMenhirClient,
         ScalarBoltReader,
         StubScalarStateClient,
-        assert_not_production,
         run_scalar_state,
         scalar_state_result_to_dict,
         write_scalar_state_evidence,
@@ -1213,6 +1213,7 @@ def _run_scalar_state_harness(args: argparse.Namespace, adapter) -> None:  # noq
 
 
 def _run_harness(args: argparse.Namespace) -> None:
+    from .core.targets import assert_not_production
     from .harness import (
         ADAPTERS,
         DEFAULT_MEMORY_ARMS,
@@ -1222,7 +1223,6 @@ def _run_harness(args: argparse.Namespace) -> None:
         StubMenhirClient,
         UnofficialJudgeScorer,
         ab_result_to_dict,
-        assert_not_production,
         checkpoint_path_for,
         checkpoint_prompt_tag,
         get_adapter,
@@ -1574,7 +1574,7 @@ def _run_ports(args: argparse.Namespace) -> None:
 
 def _run_menhir(args: argparse.Namespace) -> None:
     from .core.capabilities import render_capabilities_markdown
-    from .harness import assert_not_production
+    from .core.targets import assert_not_production
     from .suites import menhir as menhir_suite
 
     cmd = getattr(args, "menhir_command", None)

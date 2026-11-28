@@ -371,7 +371,7 @@ class PhaseDBoltReader:
     _driver: Any = None
 
     def __post_init__(self) -> None:
-        from archolith_bench.harness.scalar_bolt import assert_not_prod
+        from archolith_bench.core.targets import assert_not_prod
         assert_not_prod(self.uri)
 
     def _connect(self) -> None:

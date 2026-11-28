@@ -40,7 +40,6 @@ from .memory_ab import (
     VALUE_RECALL,
     MemoryQAAdapter,
     MenhirClient,
-    assert_not_production,
     run_memory_ab,
 )
 from .menhir_client import (
@@ -62,7 +61,7 @@ from .menhir_scalar_state import (
     third_party_scalar_state_cases,
     write_scalar_state_evidence,
 )
-from .scalar_bolt import ScalarBoltReader, assert_not_prod
+from .scalar_bolt import ScalarBoltReader
 from .menhir_phase3 import (
     MenhirPhase3Adapter,
     Phase3Case,
@@ -159,7 +158,6 @@ __all__ = [
     "Scenario",
     "ScenarioResult",
     "SCALAR_FIXTURE_SETS",
-    "assert_not_prod",
     "default_phase3_cases",
     "default_scalar_state_cases",
     "default_scenarios",
@@ -188,7 +186,6 @@ __all__ = [
     "TaskResult",
     "ab_result_to_dict",
     "arm_result_from_summary",
-    "assert_not_production",
     "get_adapter",
     "is_external",
     "is_memory",

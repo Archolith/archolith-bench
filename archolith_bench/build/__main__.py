@@ -55,7 +55,7 @@ def _mask(var: str, value: str) -> str:
 
 
 def _check(args: argparse.Namespace, config: dict, environ: dict[str, str]) -> int:
-    from ..harness.targets import TargetRefused, assert_allowed_target
+    from ..core.targets import TargetRefused, assert_allowed_target
     from .check import check_paths, run_check
 
     url = args.menhir_url or f"http://127.0.0.1:{config['container']['menhir_port']}"

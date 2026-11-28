@@ -35,7 +35,7 @@ def _assert_target_allowed(url: str) -> None:
     _bench = os.path.abspath(os.path.join(_HERE, "..", "..", ".."))
     if _bench not in sys.path:
         sys.path.insert(0, _bench)
-    from archolith_bench.harness.memory_ab import assert_not_production
+    from archolith_bench.core.targets import assert_not_production
 
     assert_not_production(url)
 

@@ -15,9 +15,9 @@ import json
 import sys
 import time
 
-from archolith_bench.harness.memory_ab import assert_not_production
+from archolith_bench.core.targets import assert_not_production
 from archolith_bench.harness.menhir_client import HttpMenhirClient
-from archolith_bench.harness.scalar_bolt import assert_not_prod
+from archolith_bench.core.targets import assert_not_prod
 from archolith_bench.harness.scalar_phase_d import (
     PhaseDBoltReader,
     phase_d_cases,

@@ -20,40 +20,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from .targets import TargetRefused, assert_allowed_target
-
-# The default Neo4j bolt port. Refused even on loopback: a local instance on
-# 7687 is a real Menhir, not a throwaway, which publishes on 7688.
-PROD_BOLT_PORT = 7687
-
-
-class ProdBoltRefused(RuntimeError):
-    """Raised when a bolt URI is not an allow-listed throwaway Neo4j."""
-
-
-def assert_not_prod(uri: str) -> None:
-    """Refuse a bolt URI that is not an allow-listed throwaway.
-
-    Allow-list, not deny-list. This previously named three known-prod host:port
-    pairs (including a LAN IP that is no longer production) and refused the
-    suffix ":7687". Both halves failed open once production moved off-LAN: a
-    remote host on any other port was permitted outright.
-
-    Now the host must be loopback, or opted in via ARCHOLITH_BENCH_ALLOW_HOSTS,
-    and port 7687 is refused regardless of host. The scalar e2e harness runs
-    unscoped reads, so a wrong target leaks real memories.
-    """
-    try:
-        assert_allowed_target(uri, what="bolt URI")
-    except TargetRefused as e:
-        raise ProdBoltRefused(str(e)) from e
-
-    if (uri or "").lower().rstrip("/").endswith(f":{PROD_BOLT_PORT}"):
-        raise ProdBoltRefused(
-            f"bolt URI {uri!r} targets port {PROD_BOLT_PORT} (the default Menhir Neo4j "
-            f"port); use the throwaway (7688). Refusing."
-        )
-
+from ..core.targets import assert_not_prod
 
 # --- query text (verbatim intent from handoff section 7; parameterized by namespace) -------------
 

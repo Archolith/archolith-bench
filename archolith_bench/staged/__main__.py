@@ -23,7 +23,7 @@ import yaml
 from .. import prompts
 from ..core.api import API_KEY, DIRECT_URL, MODEL, send_chat
 from ..harness.longmemeval import LongMemEvalMemoryAdapter
-from ..harness.memory_ab import assert_not_production
+from ..core.targets import assert_not_production
 from ..harness.scoring import LLMJudgeScorer, UnofficialJudgeScorer
 from .config import arm_from_resolved, load_arm, renderer_sha256, resolve, run_id
 from .menhir_system import MenhirSystem, load_backend_client

@@ -1842,7 +1842,7 @@ def _main(argv: list[str] | None, closers: list) -> int:
 
     # This path resets namespaces and ingests. Guarded at construction so a
     # mistyped --menhir-url cannot write into a real instance.
-    from archolith_bench.harness.memory_ab import assert_not_production
+    from archolith_bench.core.targets import assert_not_production
 
     assert_not_production(args.menhir_url)
     global _MENHIR_ROOT

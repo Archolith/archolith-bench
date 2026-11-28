@@ -40,7 +40,7 @@ import perception_tune as pt  # noqa: E402  (key loading, LLM/embed seams, slice
 _BENCH_ROOT = os.path.abspath(os.path.join(_HERE, "..", "..", ".."))
 if _BENCH_ROOT not in sys.path:
     sys.path.insert(0, _BENCH_ROOT)
-from archolith_bench.harness.scalar_bolt import assert_not_prod  # noqa: E402
+from archolith_bench.core.targets import assert_not_prod  # noqa: E402
 
 BOLT = os.getenv("LME_BOLT", "bolt://localhost:7689")
 if not BOLT.startswith("bolt://"):

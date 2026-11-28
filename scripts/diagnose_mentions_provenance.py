@@ -30,8 +30,8 @@ import uuid
 from neo4j import GraphDatabase
 
 from archolith_bench.harness import HttpMenhirClient
-from archolith_bench.harness.memory_ab import assert_not_production
-from archolith_bench.harness.scalar_bolt import assert_not_prod
+from archolith_bench.core.targets import assert_not_production
+from archolith_bench.core.targets import assert_not_prod
 
 STATEMENTS = [
     "Alice owns 37 coins.",
