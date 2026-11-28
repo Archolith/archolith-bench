@@ -177,22 +177,14 @@ def test_menhir_arm_connects_counts_saves_and_closes(tmp_path: Path, monkeypatch
 
 @pytest.mark.parametrize("error", [
     Stopped("stopped: quota", ErrorInfo(Kind.QUOTA, status=429, code="insufficient_quota")),
+    Stopped("stopped: rate_limit", ErrorInfo(Kind.RATE_LIMIT, status=429)),
     Stopped("stopped: auth", ErrorInfo(Kind.AUTH, status=401)),
     TierMismatch("served default", {"service_tier": "default"}),
 ])
-def test_quota_auth_and_tier_mismatch_halt_the_campaign(tmp_path, monkeypatch, error) -> None:
+def test_quota_rate_limit_auth_and_tier_mismatch_halt_the_campaign(tmp_path, monkeypatch, error) -> None:
     ex = _executor(tmp_path, monkeypatch, _Send([error]))
     with pytest.raises(RateLimited):
         _run(ex, "no_menhir")
-
-
-def test_a_rate_limit_timer_expiry_is_a_timed_out_session_not_a_halt(tmp_path: Path, monkeypatch) -> None:
-    from archolith_harness.flex_send import TimerExpired
-
-    error = TimerExpired("timer ran out", ErrorInfo(Kind.RATE_LIMIT, status=429, code="rate_limit_exceeded"))
-    ex = _executor(tmp_path, monkeypatch, _Send([error]))
-    res = _run(ex, "no_menhir")
-    assert res.error == "timeout" and res.censored
 
 
 def test_flex_capacity_wait_fails_only_the_session(tmp_path: Path, monkeypatch) -> None:
