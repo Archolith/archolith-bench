@@ -30,7 +30,6 @@ from archolith_bench.beacon_eval.isolation import (
 from archolith_bench.beacon_eval.runner import (
     DEFAULT_MODEL,
     DEFAULT_RUN_RESERVE,
-    BudgetExhausted,
     EventLog,
     RateLimited,
     check_memory_ready,
