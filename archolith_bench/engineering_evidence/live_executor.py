@@ -248,6 +248,17 @@ class LiveSprintConfig:
     gzip_events: bool = False
 
 
+def _notes_violations(notes_before: dict[str, str] | None, checkout: Path) -> list[str]:
+    """Writes outside the notes file during a notes_file session (empty for other arms)."""
+    return diff_snapshots(notes_before, snapshot_tree(checkout)) if notes_before is not None else []
+
+
+def _with_notes_error(error: str, notes_violations: list[str]) -> str:
+    if not notes_violations:
+        return error
+    return "; ".join(part for part in (error, "notes_file_violation=" + ",".join(notes_violations)) if part)
+
+
 class OpenCodeSprintExecutor:
     """Executes chained sprint sessions through isolated `opencode run --format json`.
 
@@ -479,7 +490,25 @@ class OpenCodeSprintExecutor:
         (run_dir / "prompt.txt").write_text(full_prompt, encoding="utf-8")
 
         notes_before = snapshot_tree(checkout) if arm == "notes_file" else None
+        return self._run_agent(
+            fixture=fixture, session=session, arm=arm, checkout=checkout, mcp=mcp, run_dir=run_dir,
+            full_prompt=full_prompt, notes_before=notes_before, wait_info=wait_info,
+        )
 
+    def _run_agent(
+        self,
+        *,
+        fixture: SprintFixture,
+        session: SprintSession,
+        arm: str,
+        checkout: Path,
+        mcp: dict[str, Any] | None,
+        run_dir: Path,
+        full_prompt: str,
+        notes_before: dict[str, str] | None,
+        wait_info: dict[str, Any],
+    ) -> SessionExecution:
+        """Run the agent for one prepared session (OpenCode here; subclasses swap the agent)."""
         cmd = [*self._resolve_cmd_fn(), "run", "--format", "json"]
         extra_env = dict(os.environ)
         if self.config.env_file and self.config.env_file.is_file():
@@ -527,9 +556,7 @@ class OpenCodeSprintExecutor:
                 gz.write(events_text)
             events_path.unlink()
 
-        notes_violations: list[str] = []
-        if notes_before is not None:
-            notes_violations = diff_snapshots(notes_before, snapshot_tree(checkout))
+        notes_violations = _notes_violations(notes_before, checkout)
 
         stderr_path = run_dir / "stderr.log"
         refused_reads = (
@@ -543,10 +570,7 @@ class OpenCodeSprintExecutor:
             error = f"stop_reason={stop_reason}"
         elif exit_code not in (0, None):
             error = f"exit_code={exit_code}"
-        if notes_violations:
-            error = "; ".join(
-                part for part in (error, "notes_file_violation=" + ",".join(notes_violations)) if part
-            )
+        error = _with_notes_error(error, notes_violations)
 
         return SessionExecution(
             response_text="\n".join(log.texts),
