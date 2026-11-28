@@ -151,6 +151,8 @@ class SessionExecution:
     cost_usd: float = 0.0
     censored: bool = False
     notes_violations: list[str] = field(default_factory=list)
+    #: OpenCode reads auto-rejected as outside the checkout (each ends the run).
+    refused_reads: int = 0
     enrichment_wait_s: float = 0.0
     enrichment_drained: bool = True
     run_dir: Path | None = None
@@ -205,6 +207,8 @@ class SessionOutcome:
     not_run: bool = False
     not_run_reason: str = ""
     notes_violations: list[str] = field(default_factory=list)
+    #: OpenCode reads auto-rejected as outside the checkout (each ends the run).
+    refused_reads: int = 0
     enrichment_wait_s: float = 0.0
     enrichment_drained: bool = True
     repeat: int | None = None

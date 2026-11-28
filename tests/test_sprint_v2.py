@@ -211,7 +211,34 @@ def test_executor_gives_each_repeat_its_own_checkout(tmp_path: Path, monkeypatch
     ex.run_session(fixture=fixture, session=fixture.sessions[1], arm="notes_file", session_index=1,
                    namespace="ns1", repeat=1)
     assert len(exports) == 2 and len(set(exports)) == 2  # repeat 1 reused, repeat 2 separate
-    assert exports[0].name.endswith("-r1") and exports[1].name.endswith("-r2")
+    # Short, non-repeating names (agents mistyped the long ones); checkouts.json maps them back.
+    assert all(e.name.startswith("c") and len(e.name) == 7 and fixture.name not in str(e) for e in exports)
+    mapping = json.loads((exports[0].parent / "checkouts.json").read_text(encoding="utf-8"))
+    assert mapping == {"notes_file/r1": str(exports[0]), "notes_file/r2": str(exports[1])}
+
+
+def test_executor_counts_refused_reads_from_stderr(tmp_path: Path, monkeypatch) -> None:
+    def stream(cmd, prompt, cwd, env, run_dir, reserve, timeout_s):
+        (Path(run_dir) / "stderr.log").write_text(
+            "! permission requested: external_directory (C:\\x\\*); auto-rejecting\n" * 2, encoding="utf-8"
+        )
+        return _stream()(cmd, prompt, cwd, env, run_dir, reserve, timeout_s)
+
+    fixture = SprintFixture.from_file(FIXTURE_PATH)
+    ex, _ = _executor(tmp_path, monkeypatch, stream_fn=stream)
+    res = ex.run_session(fixture=fixture, session=fixture.sessions[0], arm="no_menhir", session_index=0,
+                         namespace="n", repeat=1)
+    assert res.refused_reads == 2
+
+
+def test_preflight_cap_covers_estimate_margin_and_in_flight_reserve() -> None:
+    spec = importlib.util.spec_from_file_location("sprint_cli", ROOT / "scripts" / "run_longitudinal_sprint_bench.py")
+    cli = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(cli)
+    # Run v2r2-20261127: 45 sessions, 3 in flight, $0.05 reserve; a $0.37 cap could not finish.
+    need = cli.preflight_cap_usd(sessions=45, est_usd_per_session=0.0075, parallel=3, reserve_usd=0.05)
+    assert need == 0.57 and need > 0.37
+    assert cli.preflight_cap_usd(sessions=45, est_usd_per_session=None, parallel=3, reserve_usd=0.05) is None
 
 
 def test_executor_roots_opencode_in_the_checkout_not_an_inherited_pwd(tmp_path: Path, monkeypatch) -> None:

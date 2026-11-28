@@ -129,6 +129,16 @@ def sprint_serve_overrides(chat_model: str) -> dict[str, str]:
     }
 
 
+def preflight_cap_usd(*, sessions: int, est_usd_per_session: float | None, parallel: int,
+                      reserve_usd: float) -> float | None:
+    """Smallest --max-usd that lets every session start: Budget.check refuses a new session once
+    spent + reserve for each session in flight would pass the cap (run v2r2-20261127 stopped
+    early on exactly that). The estimate gets a 25% margin. None when no estimate is given."""
+    if not est_usd_per_session or est_usd_per_session <= 0:
+        return None
+    return round(sessions * est_usd_per_session * 1.25 + parallel * reserve_usd, 2)
+
+
 def _run_v2(args: argparse.Namespace, fixture: SprintFixture) -> int:
     arms = tuple(a.strip() for a in args.arms.split(",") if a.strip()) if args.arms else V2_ARMS
     live = bool(args.live and not args.dry_run)
@@ -143,6 +153,17 @@ def _run_v2(args: argparse.Namespace, fixture: SprintFixture) -> int:
     if live and not args.max_usd:
         print("ERROR: a live v2 campaign needs --max-usd", file=sys.stderr)
         return 2
+    if live:
+        need = preflight_cap_usd(
+            sessions=args.repeats * len(arms) * len(fixture.sessions),
+            est_usd_per_session=args.est_usd_per_session, parallel=args.parallel,
+            reserve_usd=args.reserve_usd,
+        )
+        if need is None or args.max_usd + 1e-9 < need:
+            print(f"ERROR: --max-usd {args.max_usd} cannot finish this campaign: it needs "
+                  f"{'--est-usd-per-session' if need is None else f'at least ${need:.2f}'} "
+                  "(sessions x estimate x 1.25, plus parallel x reserve held in flight)", file=sys.stderr)
+            return 2
     if live and args.serve and not args.graph:
         print("ERROR: --serve needs --graph <build yaml> (e.g. builds/sprint-v2.yaml)", file=sys.stderr)
         return 2
@@ -200,12 +221,12 @@ def _run_v2(args: argparse.Namespace, fixture: SprintFixture) -> int:
                     )
                 )
                 mcp_url, telemetry_db = f"{url}/mcp-http", rd.path / "mcp_telemetry.db"
-            work = Path(args.work_dir) / f"{fixture.name}-{run_id}"
+            work = Path(args.work_dir) / f"{fixture.repo.name}-{run_id}"
             executor = OpenCodeSprintExecutor(
                 LiveSprintConfig(
                     work_dir=work, cache_dir=Path(args.cache_dir), model=args.model,
                     menhir_mcp_url=mcp_url, env_file=env_path, reserve_tokens=args.reserve_tokens,
-                    timeout_s=args.timeout_s, runs_dir=rd.path / "runs", checkout_dir=work / "checkouts",
+                    timeout_s=args.timeout_s, runs_dir=rd.path / "runs", checkout_dir=work / "co",
                     telemetry_db=telemetry_db, gzip_events=True,
                 )
             )
@@ -308,6 +329,8 @@ def main(argv: list[str] | None = None) -> int:
                     help="Parent of <fixture>-<run-id>/ (an existing run dir is refused unless --resume).")
     v2.add_argument("--resume", action="store_true", help="Reuse completed chains of an existing run dir.")
     v2.add_argument("--max-usd", type=float, default=None, help="Shared dollar cap (client + server).")
+    v2.add_argument("--est-usd-per-session", type=float, default=None,
+                    help="Expected client+server USD per session (required for --live; from a prior run).")
     v2.add_argument("--reserve-usd", type=float, default=0.05,
                     help="Per-session reserve held by Budget.check for every session in flight.")
     v2.add_argument("--server-rates", default="", help="input,cached_input,output in $/1M (Menhir server LLM).")

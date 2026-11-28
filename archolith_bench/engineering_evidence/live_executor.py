@@ -8,6 +8,7 @@ and deterministic JSON answer contract.
 from __future__ import annotations
 
 import gzip
+import hashlib
 import json
 import os
 import threading
@@ -76,6 +77,11 @@ _MENHIR_TOOL_SUBSTRINGS = (
 _SCAN_COUNT_KEYS = (
     "dirs", "files", "deps", "endpoints", "imports", "test_edges", "cross_refs", "symbols", "call_edges",
 )
+
+
+def short_checkout_id(fixture: SprintFixture, arm: str, repeat: int) -> str:
+    """``c`` + 6 hex chars, stable per (fixture, arm, repeat); checkouts.json maps it back."""
+    return "c" + hashlib.sha256(f"{fixture.name}|{arm}|{repeat}".encode("utf-8")).hexdigest()[:6]
 
 
 def apply_drift_patch(repo_root: Path, patch: DriftPatch) -> Path:
@@ -286,13 +292,21 @@ class OpenCodeSprintExecutor:
         with self._lock:
             if key in self._checkouts:
                 return self._checkouts[key]
-        suffix = f"-r{repeat}" if repeat is not None else ""
         root = self.config.checkout_dir or (self.config.work_dir / "checkouts")
-        dest = root / f"{fixture.name}-{arm}{suffix}"
+        if repeat is None:
+            dest = root / f"{fixture.name}-{arm}"
+        else:
+            # Short and non-repeating: run v2r2-20261127 lost sessions in every arm to agents
+            # mistyping long checkout paths that repeated the fixture name at two levels.
+            dest = root / short_checkout_id(fixture, arm, repeat)
         with self._export_lock:  # the repo cache is shared; clone and archive one at a time
             checkout = self._export_fn(fixture.repo, dest, self.config.cache_dir)
         with self._lock:
             self._checkouts[key] = checkout
+            if repeat is not None:
+                mapping = {f"{a}/r{r}": str(p) for (a, r), p in self._checkouts.items() if r is not None}
+                (root / "checkouts.json").write_text(json.dumps(mapping, indent=2, sort_keys=True),
+                                                     encoding="utf-8")
         return checkout
 
     def _run_dir(self, arm: str, repeat: int | None, session_index: int, session_id: str) -> Path:
@@ -340,7 +354,7 @@ class OpenCodeSprintExecutor:
         patches cannot touch it) and has the server scan it with `scan_and_write_project`.
         """
         root = (self.config.checkout_dir or (self.config.work_dir / "checkouts")).parent
-        dest = root / "pristine" / f"{fixture.name}-{run_id}"
+        dest = root / "p"
         with self._export_lock:
             pristine = self._export_fn(fixture.repo, dest, self.config.cache_dir)
         body = {
@@ -511,6 +525,13 @@ class OpenCodeSprintExecutor:
         if notes_before is not None:
             notes_violations = diff_snapshots(notes_before, snapshot_tree(checkout))
 
+        stderr_path = run_dir / "stderr.log"
+        refused_reads = (
+            stderr_path.read_text(encoding="utf-8", errors="replace").count("auto-rejecting")
+            if stderr_path.is_file()
+            else 0
+        )
+
         error = ""
         if stop_reason:
             error = f"stop_reason={stop_reason}"
@@ -539,6 +560,7 @@ class OpenCodeSprintExecutor:
             error=error,
             repo_root=checkout,
             notes_violations=notes_violations,
+            refused_reads=refused_reads,
             enrichment_wait_s=float(wait_info.get("waited_s", 0.0)),
             enrichment_drained=bool(wait_info.get("drained", True)),
             run_dir=run_dir,
