@@ -5,7 +5,7 @@ from __future__ import annotations
 import statistics
 from collections import defaultdict
 
-from archolith_bench.beacon_eval.models import RunResult
+from archolith_bench.core.agent_task.models import RunResult
 
 METRICS = (
     "answered",

@@ -17,10 +17,10 @@ import pytest
 
 from archolith_bench.beacon_eval import runner as runner_mod
 from archolith_bench.core.opencode.isolation import isolated_config_home
-from archolith_bench.beacon_eval.models import Gold, RepoPin, Task
+from archolith_bench.core.agent_task.models import Gold, RepoPin, Task
+from archolith_bench.core.agent_task.checkout import export_commit
 from archolith_bench.beacon_eval.runner import (
     RunnerConfig,
-    export_commit,
     rescore,
     run_matrix,
     seal_checkout,

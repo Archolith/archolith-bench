@@ -11,7 +11,7 @@ at `764dc386`) comparing three arms:
                              `recall_memories` / `add_todo` persisted in one isolated
                              namespace across Sessions 1 -> 4.
 
-Tracks deterministic accuracy (reusing `beacon_eval.scoring`), total & downstream
+Tracks deterministic accuracy (reusing `core.agent_task.scoring`), total & downstream
 (Sessions 2-4) token usage, tool calls, and redundant file re-reads across sessions.
 """
 
@@ -24,9 +24,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 
-from archolith_bench.beacon_eval.models import Gold, RepoPin
-from archolith_bench.beacon_eval.runner import ANSWER_INSTRUCTIONS
-from archolith_bench.beacon_eval.scoring import _clean_path, extract_answer, score
+from archolith_bench.core.agent_task.models import ANSWER_INSTRUCTIONS, Gold, RepoPin
+from archolith_bench.core.agent_task.scoring import _clean_path, extract_answer, score
 
 SPRINT_ARMS: tuple[str, ...] = (
     "no_menhir",

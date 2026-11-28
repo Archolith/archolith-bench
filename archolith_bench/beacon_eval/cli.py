@@ -16,7 +16,7 @@ from archolith_bench.beacon_eval.judge import (
     judge_workdir,
     openai_call,
 )
-from archolith_bench.beacon_eval.models import RunResult, load_repos, load_tasks
+from archolith_bench.core.agent_task.models import RunResult, load_repos, load_tasks
 from archolith_bench.beacon_eval.report import METRICS, render
 from archolith_bench.beacon_eval.runner import (
     DEFAULT_BUDGET_TOKENS,

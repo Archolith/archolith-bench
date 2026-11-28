@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from archolith_bench.beacon_eval.models import Gold
-from archolith_bench.beacon_eval.scoring import citation_location_validity, score
+from archolith_bench.core.agent_task.models import Gold
+from archolith_bench.core.agent_task.scoring import citation_location_validity, score
 
 
 def _repo(tmp_path: Path) -> Path:

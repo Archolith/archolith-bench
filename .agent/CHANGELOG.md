@@ -1,5 +1,16 @@
 # archolith-bench Changelog
 
+## 2026-11-28 - Task models, scoring and commit export move to `core/agent_task/` (reorg step 2g)
+
+`beacon_eval/models.py` and `beacon_eval/scoring.py` moved whole to `core/agent_task/models.py`
+and `core/agent_task/scoring.py`. `ANSWER_INSTRUCTIONS` moved from `beacon_eval/runner.py` into
+`core/agent_task/models.py` (next to `ANSWER_KEYS`), and `export_commit`, `_ensure_source` and
+`_checkout_git` into the new `core/agent_task/checkout.py`. Pure move, no behaviour change, no
+compatibility re-exports: every importer (beacon_eval, engineering_evidence, scripts, tests)
+imports from the new modules and `runner.__all__` no longer lists `ANSWER_INSTRUCTIONS` or
+`ANSWER_KEYS`. Task data (`tasks/`, `repos.json`, `why_tasks*`) stays under `beacon_eval/`. The
+`engineering_evidence -> beacon_eval` allowlist entry is removed.
+
 ## 2026-11-28 - Run budget moves to `core/budget.py` (reorg step 2f)
 
 `Budget`, `BudgetExhausted` and `DEFAULT_RUN_RESERVE` move verbatim from
