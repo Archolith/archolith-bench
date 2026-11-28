@@ -11,7 +11,10 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import contextlib
+import hashlib
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -24,11 +27,26 @@ from archolith_bench.engineering_evidence.live_executor import (  # noqa: E402
     LiveSprintConfig,
     OpenCodeSprintExecutor,
 )
+from archolith_bench.beacon_eval.runner import Budget  # noqa: E402
+from archolith_bench.engineering_evidence.campaign import (  # noqa: E402
+    Campaign,
+    ProgressFeed,
+    RunDirInUse,
+    new_run_id,
+    prepare_run_dir,
+    prompt_hash,
+    prompt_manifest,
+)
+from archolith_bench.engineering_evidence.server_usage import ServerRates  # noqa: E402
 from archolith_bench.engineering_evidence.sprint import (  # noqa: E402
     SPRINT_ARMS,
+    V2_ARMS,
+    DryRunExecutor,
     SprintFixture,
     run_longitudinal_sprint,
 )
+from archolith_bench.engineering_evidence.sprint_rubric import RUBRIC_VERSION  # noqa: E402
+from archolith_bench.staged.rundir import RunConfigMismatch  # noqa: E402
 
 DEFAULT_FIXTURE = REPO_ROOT / "fixtures" / "sprint_simonw_llm_764dc386.json"
 
@@ -66,6 +84,150 @@ def _print_table(report: dict) -> None:
                 f"tools={cmp['total_tool_calls_delta_pct']:+.2f}%, "
                 f"redundant_reads={cmp['redundant_reads_delta']:+d}"
             )
+
+
+def _print_v2(report: dict) -> None:
+    mode = "DRY-RUN (0 LLM calls)" if report["dry_run"] else "LIVE"
+    print(f"\n=== Sprint v2 [{report['rubric_version']}] {report['fixture']} run {report['run_id']} [{mode}] ===")
+    camp = report["campaign"]
+    print(f"spent ${camp['spent_usd']:.4f} (cap {camp['max_usd']}); stopped_early={camp['stopped_early']} {camp['stop_reason']}")
+    for arm, rows in report["analysis"]["per_chain"].items():
+        for r in rows:
+            print(
+                f"  {arm:20s} r{r['repeat']} acc={r['accuracy']:.4f} complete={r['complete']} "
+                f"uncached(client+server)={r['primary_efficiency_tokens']} "
+                f"cost=${r['client_cost_usd'] + r['server_cost_usd']:.4f}"
+            )
+    for label, v in report["analysis"]["verdicts"].items():
+        print(
+            f"  {label}: {v['combined_verdict']} "
+            f"(acc d={v['accuracy']['mean_delta']}, eff d%={v['efficiency']['mean_delta_pct']})"
+        )
+
+
+def _git_state(root: str | None) -> str | None:
+    from archolith_bench.staged.__main__ import _menhir_commit
+
+    return _menhir_commit(root)
+
+
+def sprint_serve_overrides(chat_model: str) -> dict[str, str]:
+    """Write-path env for the sprint's served Menhir (served_menhir defaults to recall-only).
+
+    Benchmark mode is off so the maintenance scheduler (failed-enrichment retry, stale-lease
+    recovery, conflict resolution) runs as in a real deployment and the 2026-11-27 run. The chat
+    model is pinned so server usage matches the --server-rates table.
+    """
+    return {
+        "MENHIR_BENCHMARK_MODE": "0",
+        "MENHIR_LOOPBACK_PROFILE": "lean",
+        "LLM_CHAT_PROVIDER": "openai",
+        "GRAPHITI_LLM_PROVIDER": "openai",
+        "OPENAI_CHAT_MODEL": chat_model,
+        "LLM_MAX_TOKENS": "3000",
+        "GRAPHITI_ADD_EPISODE_TIMEOUT_SECONDS": "1800",
+    }
+
+
+def _run_v2(args: argparse.Namespace, fixture: SprintFixture) -> int:
+    arms = tuple(a.strip() for a in args.arms.split(",") if a.strip()) if args.arms else V2_ARMS
+    live = bool(args.live and not args.dry_run)
+    if live and "menhir_longitudinal" in arms and not args.server_rates:
+        print("ERROR: --server-rates input,cached_input,output ($/1M) is required for the Menhir arm", file=sys.stderr)
+        return 2
+    try:
+        rates = ServerRates.parse(args.server_rates) if args.server_rates else None
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+    if live and not args.max_usd:
+        print("ERROR: a live v2 campaign needs --max-usd", file=sys.stderr)
+        return 2
+    if live and args.serve and not args.graph:
+        print("ERROR: --serve needs --graph <build yaml> (e.g. builds/sprint-v2.yaml)", file=sys.stderr)
+        return 2
+    run_id = args.run_id or new_run_id()
+    manifest = prompt_manifest(fixture, arms)
+    fixture_sha = hashlib.sha256(Path(args.fixture).read_bytes()).hexdigest()
+    resolved = {
+        "rubric_version": RUBRIC_VERSION, "fixture": fixture.name, "fixture_sha256": fixture_sha,
+        "arms": list(arms), "repeats": args.repeats, "run_id": run_id, "model": args.model,
+        "reserve_tokens": args.reserve_tokens, "timeout_s": args.timeout_s,
+        "prompt_sha256": prompt_hash(manifest), "dry_run": not live,
+    }
+    try:
+        rd = prepare_run_dir(Path(args.out_root), f"{fixture.name}-{run_id}", resolved, resume=args.resume)
+    except (RunDirInUse, RunConfigMismatch) as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+    (rd.path / "prompts.json").write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
+
+    menhir_tree = args.serve or args.menhir_repo
+    provenance = {
+        "fixture_path": str(Path(args.fixture)), "fixture_sha256": fixture_sha,
+        "bench_commit": _git_state(str(REPO_ROOT)),
+        "menhir_commit": _git_state(menhir_tree) if menhir_tree else None,
+        "model": args.model, "reserve_tokens": args.reserve_tokens, "timeout_s": args.timeout_s,
+        "repeats": args.repeats, "parallel": args.parallel, "run_id": run_id,
+        "prompt_sha256": resolved["prompt_sha256"], "loopback_profile": "lean" if args.serve else None,
+        "server_chat_model": args.server_chat_model if args.serve else None,
+        "server_benchmark_mode": False if args.serve else None,
+        "server_rates_per_1m": None if rates is None else [rates.input, rates.cached_input, rates.output],
+    }
+    budget = Budget(None, None, cap_usd=args.max_usd, reserve_usd=args.reserve_usd)
+    progress = ProgressFeed(
+        f"sprint-v2-{run_id}", f"sprint v2 {fixture.name}",
+        args.repeats * len(arms) * len(fixture.sessions), ceiling_usd=args.max_usd,
+    )
+    structure_index = None
+    stack = contextlib.ExitStack()
+    failed = True
+    with stack:
+        if live:
+            env_path = Path(args.env_file) if args.env_file else None
+            mcp_url = args.menhir_mcp_url
+            telemetry_db = Path(args.telemetry_db) if args.telemetry_db else None
+            if args.serve:
+                from archolith_bench.staged.serve import graph_settings, served_menhir
+
+                url = stack.enter_context(
+                    served_menhir(
+                        Path(args.serve).resolve(), port=args.serve_port,
+                        graph=graph_settings(args.graph, dict(os.environ)),
+                        openai_key=os.getenv("OPENAI_API_KEY", ""), out_dir=rd.path,
+                        menhir_bin=args.menhir_bin,
+                        env_overrides=sprint_serve_overrides(args.server_chat_model),
+                    )
+                )
+                mcp_url, telemetry_db = f"{url}/mcp-http", rd.path / "mcp_telemetry.db"
+            work = Path(args.work_dir) / f"{fixture.name}-{run_id}"
+            executor = OpenCodeSprintExecutor(
+                LiveSprintConfig(
+                    work_dir=work, cache_dir=Path(args.cache_dir), model=args.model,
+                    menhir_mcp_url=mcp_url, env_file=env_path, reserve_tokens=args.reserve_tokens,
+                    timeout_s=args.timeout_s, runs_dir=rd.path / "runs", checkout_dir=work / "checkouts",
+                    telemetry_db=telemetry_db, gzip_events=True,
+                )
+            )
+            if any(a.startswith("menhir") for a in arms) and not args.resume:
+                structure_index = executor.index_pristine(fixture, run_id)
+        else:
+            executor = DryRunExecutor()
+        campaign = Campaign(
+            fixture, executor=executor, run_dir=rd, run_id=run_id, arms=arms, repeats=args.repeats,
+            parallel=args.parallel, budget=budget, rates=rates, progress=progress,
+            resume=args.resume, dry_run=not live,
+        )
+        try:
+            chains, stop = campaign.run()
+            report = campaign.build_report(chains, stop, provenance=provenance, structure_index=structure_index)
+            failed = bool(stop)
+        finally:
+            progress.finish(failed=failed)
+    (rd.path / "report.json").write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    _print_v2(report)
+    print(f"\nwrote run dir: {rd.path}")
+    return 3 if report["campaign"]["stopped_early"] else 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -138,6 +300,26 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="Optional path to write the JSON sprint report.",
     )
+    v2 = parser.add_argument_group("v2 campaign (selected by --repeats)")
+    v2.add_argument("--repeats", type=int, default=None, help="Chains per arm (turns on the v2 campaign).")
+    v2.add_argument("--parallel", type=int, default=1, help="Chains run at once.")
+    v2.add_argument("--run-id", default=None, help="Run id (default: UTC timestamp).")
+    v2.add_argument("--out-root", default=str(REPO_ROOT / "results" / "sprint-v2"),
+                    help="Parent of <fixture>-<run-id>/ (an existing run dir is refused unless --resume).")
+    v2.add_argument("--resume", action="store_true", help="Reuse completed chains of an existing run dir.")
+    v2.add_argument("--max-usd", type=float, default=None, help="Shared dollar cap (client + server).")
+    v2.add_argument("--reserve-usd", type=float, default=0.05,
+                    help="Per-session reserve held by Budget.check for every session in flight.")
+    v2.add_argument("--server-rates", default="", help="input,cached_input,output in $/1M (Menhir server LLM).")
+    v2.add_argument("--telemetry-db", default="", help="MENHIR_MCP_TELEMETRY_DB sqlite (when not using --serve).")
+    v2.add_argument("--serve", default=None, metavar="MENHIR_TREE",
+                    help="serve this Menhir tree (staged.serve.served_menhir) over --graph's Neo4j.")
+    v2.add_argument("--graph", default=None, help="build YAML naming the graph, e.g. builds/sprint-v2.yaml.")
+    v2.add_argument("--serve-port", type=int, default=18096)
+    v2.add_argument("--server-chat-model", default="gpt-6-luna",
+                    help="OPENAI_CHAT_MODEL for the served Menhir; must match --server-rates.")
+    v2.add_argument("--menhir-bin", default=os.environ.get("MENHIR_MAIN_BIN"))
+    v2.add_argument("--menhir-repo", default=None, help="Menhir tree for provenance when not using --serve.")
     args = parser.parse_args(argv)
 
     fixture = SprintFixture.from_file(args.fixture)
@@ -145,6 +327,10 @@ def main(argv: list[str] | None = None) -> int:
         from dataclasses import replace
 
         fixture = replace(fixture, sessions=fixture.sessions[: args.max_sessions])
+    if args.repeats is not None:
+        if args.arms == ",".join(SPRINT_ARMS):
+            args.arms = ""
+        return _run_v2(args, fixture)
     selected_arms = tuple(a.strip() for a in args.arms.split(",") if a.strip())
 
     if args.live and not args.dry_run:

@@ -1,0 +1,6 @@
+# Graph for the sprint v2 campaign: the disposable Neo4j the served Menhir writes to.
+# Everything else comes from default.yaml (one level of `extends`).
+extends: default.yaml
+container:
+  neo4j_name: menhir-sprint-v2
+  bolt: 18195

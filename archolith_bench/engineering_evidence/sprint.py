@@ -17,18 +17,39 @@ Tracks deterministic accuracy (reusing `beacon_eval.scoring`), total & downstrea
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 
 from archolith_bench.beacon_eval.models import Gold, RepoPin
-from archolith_bench.beacon_eval.scoring import extract_answer, score
+from archolith_bench.beacon_eval.runner import ANSWER_INSTRUCTIONS
+from archolith_bench.beacon_eval.scoring import _clean_path, extract_answer, score
 
 SPRINT_ARMS: tuple[str, ...] = (
     "no_menhir",
     "menhir_structure",
     "menhir_longitudinal",
+)
+
+#: Arms of the v2 rigorous campaign (rubric `sprint-v2`): the no-memory floor, the primary
+#: notes-file baseline and Menhir. `menhir_structure` is not part of v2.
+V2_ARMS: tuple[str, ...] = (
+    "no_menhir",
+    "notes_file",
+    "menhir_longitudinal",
+)
+
+#: The one file the `notes_file` arm may create or edit (at the checkout root).
+NOTES_FILE = "SPRINT_NOTES.md"
+
+#: Appended after the answer instructions (which say "read-only") for the `notes_file` arm.
+NOTES_EXCEPTION = (
+    f"The one exception to the read-only rule is `{NOTES_FILE}` at the repository root: you "
+    "may create and edit it. It is the only memory you keep between sessions. Do not list "
+    f"`{NOTES_FILE}` in your JSON answer."
 )
 
 
@@ -51,6 +72,7 @@ class SprintSession:
     prompt: str
     gold: Gold
     memory_instruction: str = ""  # appended only in `menhir_longitudinal`
+    notes_instruction: str = ""  # appended only in `notes_file` (parallels memory_instruction)
     drift_patch: DriftPatch | None = None  # applied before this session starts
 
 
@@ -96,6 +118,7 @@ class SprintFixture:
                     prompt=s["prompt"],
                     gold=gold,
                     memory_instruction=s.get("memory_instruction", ""),
+                    notes_instruction=s.get("notes_instruction", ""),
                     drift_patch=drift_patch,
                 )
             )
@@ -124,13 +147,31 @@ class SessionExecution:
     seconds: float = 0.0
     error: str = ""
     repo_root: Path | None = None
+    reasoning_tokens: int = 0
+    cost_usd: float = 0.0
+    censored: bool = False
+    notes_violations: list[str] = field(default_factory=list)
+    enrichment_wait_s: float = 0.0
+    enrichment_drained: bool = True
+    run_dir: Path | None = None
 
     @property
     def total_tokens(self) -> int:
         return (
             self.input_tokens
             + self.output_tokens
+            + self.reasoning_tokens
             + self.cache_read_tokens
+            + self.cache_write_tokens
+        )
+
+    @property
+    def uncached_tokens(self) -> int:
+        """input + output + reasoning + cache_write (everything except cache reads)."""
+        return (
+            self.input_tokens
+            + self.output_tokens
+            + self.reasoning_tokens
             + self.cache_write_tokens
         )
 
@@ -155,6 +196,18 @@ class SessionOutcome:
     todos_saved: int
     seconds: float
     error: str = ""
+    reasoning_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
+    uncached_tokens: int = 0
+    cost_usd: float = 0.0
+    censored: bool = False
+    not_run: bool = False
+    not_run_reason: str = ""
+    notes_violations: list[str] = field(default_factory=list)
+    enrichment_wait_s: float = 0.0
+    enrichment_drained: bool = True
+    repeat: int | None = None
 
 
 class SessionExecutor(Protocol):
@@ -168,6 +221,7 @@ class SessionExecutor(Protocol):
         arm: str,
         session_index: int,
         namespace: str,
+        repeat: int | None = None,
     ) -> SessionExecution: ...
 
 
@@ -182,6 +236,7 @@ class DryRunExecutor:
         arm: str,
         session_index: int,
         namespace: str,
+        repeat: int | None = None,
     ) -> SessionExecution:
         g = session.gold
         # Emit a valid fenced JSON answer matching ANSWER_KEYS for deterministic scoring validation.
@@ -200,6 +255,7 @@ class DryRunExecutor:
         # In dry-run mode, simulate realistic structural/longitudinal token & file-read profiles
         # strictly for harness accounting verification (clearly marked `dry_run=True` in report).
         base_files = list(dict.fromkeys([*g.docs, *g.files]))
+        jitter = 37 * (repeat or 0)  # 0 on the old single-run path
         if arm == "no_menhir":
             return SessionExecution(
                 response_text=f"```json\n{json.dumps(payload, indent=2)}\n```",
@@ -213,18 +269,29 @@ class DryRunExecutor:
         if arm == "menhir_structure":
             return SessionExecution(
                 response_text=f"```json\n{json.dumps(payload, indent=2)}\n```",
-                input_tokens=13_000 + 1_000 * session_index,
+                input_tokens=13_000 + 1_000 * session_index + jitter,
                 output_tokens=1_100,
                 turns=5,
                 tool_calls=8,
                 files_read=base_files,
                 seconds=0.01,
             )
+        if arm == "notes_file":
+            return SessionExecution(
+                response_text=f"```json\n{json.dumps(payload, indent=2)}\n```",
+                input_tokens=(15_500 if session_index == 0 else 10_500) + jitter,
+                output_tokens=1_150,
+                turns=6 if session_index == 0 else 4,
+                tool_calls=10 if session_index == 0 else 6,
+                files_read=(base_files if session_index in (0, 2) else list(g.files[:1]))
+                + [NOTES_FILE],
+                seconds=0.01,
+            )
         # menhir_longitudinal: saves memories in S1, avoids re-reading anchored files in S2/S4
         files_read = base_files if session_index in (0, 2) else list(g.files[:1])
         return SessionExecution(
             response_text=f"```json\n{json.dumps(payload, indent=2)}\n```",
-            input_tokens=14_500 if session_index == 0 else 8_500,
+            input_tokens=(14_500 if session_index == 0 else 8_500) + jitter,
             output_tokens=1_100,
             turns=6 if session_index == 0 else 3,
             tool_calls=9 if session_index == 0 else 5,
@@ -251,7 +318,93 @@ def build_session_prompt(session: SprintSession, arm: str) -> str:
         )
         if session.memory_instruction:
             parts.append(session.memory_instruction.strip())
+    elif arm == "notes_file":
+        parts.append(
+            f"Keep your working notes in `{NOTES_FILE}` at the repository root: it is the only "
+            "memory you have between sessions, so read it at session start before re-reading files."
+        )
+        if session.notes_instruction:
+            parts.append(session.notes_instruction.strip())
     return "\n\n".join(parts)
+
+
+def compose_full_prompt(session: SprintSession, arm: str, namespace: str) -> str:
+    """The exact prompt a live executor sends: session prompt, namespace line, answer rules."""
+    text = build_session_prompt(session, arm)
+    if arm == "menhir_longitudinal":
+        text += f"\n\nUse Menhir namespace `{namespace}` for all memory/TODO operations."
+    text += "\n\n" + ANSWER_INSTRUCTIONS
+    if arm == "notes_file":
+        text += "\n\n" + NOTES_EXCEPTION
+    return text
+
+
+def is_notes_path(value: Any) -> bool:
+    """True when *value* names the notes file (at any depth, after path cleanup)."""
+    if not isinstance(value, str):
+        return False
+    return _clean_path(value).rsplit("/", 1)[-1] == NOTES_FILE
+
+
+def strip_notes_from_answer(answer: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Copy of *answer* without the notes file in `docs`, `files` or `citations`."""
+    if answer is None:
+        return None
+    out = dict(answer)
+    for key in ("docs", "files"):
+        if isinstance(out.get(key), list):
+            out[key] = [v for v in out[key] if not is_notes_path(v)]
+    if isinstance(out.get("citations"), list):
+        out["citations"] = [
+            c for c in out["citations"] if not (isinstance(c, dict) and is_notes_path(c.get("path")))
+        ]
+    return out
+
+
+def snapshot_tree(root: Path, exclude: tuple[str, ...] = (NOTES_FILE,)) -> dict[str, str]:
+    """sha256 of every file under *root* (skipping `.git` and *exclude* at the root)."""
+    snap: dict[str, str] = {}
+    base = Path(root)
+    for dirpath, dirnames, filenames in os.walk(base):
+        dirnames[:] = [d for d in dirnames if d != ".git"]
+        for name in filenames:
+            full = Path(dirpath) / name
+            rel = full.relative_to(base).as_posix()
+            if rel in exclude:
+                continue
+            try:
+                snap[rel] = hashlib.sha256(full.read_bytes()).hexdigest()
+            except OSError:
+                snap[rel] = "unreadable"
+    return snap
+
+
+def diff_snapshots(before: dict[str, str], after: dict[str, str]) -> list[str]:
+    """`added:`, `deleted:` and `modified:` entries between two :func:`snapshot_tree` results."""
+    out = [f"added:{p}" for p in sorted(after.keys() - before.keys())]
+    out += [f"deleted:{p}" for p in sorted(before.keys() - after.keys())]
+    out += [f"modified:{p}" for p in sorted(p for p in before.keys() & after.keys() if before[p] != after[p])]
+    return out
+
+
+def overall_from_scores(scored: dict[str, float]) -> float:
+    positive_vals = [float(v) for k, v in scored.items() if k != "risky_false_positive"]
+    if "risky_false_positive" in scored:
+        positive_vals.append(1.0 - float(scored["risky_false_positive"]))
+    return sum(positive_vals) / len(positive_vals) if positive_vals else 0.0
+
+
+def score_execution(
+    exec_res: SessionExecution, session: SprintSession, arm: str, repo_root: Path | None = None
+) -> tuple[dict[str, float], float]:
+    """Deterministic score of one execution; the notes file never counts for or against."""
+    parsed = extract_answer(exec_res.response_text)
+    if arm == "notes_file":
+        parsed = strip_notes_from_answer(parsed)
+    if parsed is None:
+        return {}, 0.0
+    scored = score(parsed, session.gold, repo_root=exec_res.repo_root or repo_root)
+    return scored, overall_from_scores(scored)
 
 
 def run_longitudinal_sprint(
@@ -279,20 +432,7 @@ def run_longitudinal_sprint(
                 session_index=idx,
                 namespace=namespace,
             )
-            parsed = extract_answer(exec_res.response_text)
-            if parsed is not None:
-                scored = score(
-                    parsed, session.gold, repo_root=exec_res.repo_root or repo_root
-                )
-                positive_vals = [
-                    float(v) for k, v in scored.items() if k != "risky_false_positive"
-                ]
-                if "risky_false_positive" in scored:
-                    positive_vals.append(1.0 - float(scored["risky_false_positive"]))
-                overall = sum(positive_vals) / len(positive_vals) if positive_vals else 0.0
-            else:
-                scored = {}
-                overall = 0.0
+            scored, overall = score_execution(exec_res, session, arm, repo_root)
 
             # Count how many files read in this session were already read in earlier sessions.
             unique_this_session = list(dict.fromkeys(exec_res.files_read))
@@ -309,6 +449,11 @@ def run_longitudinal_sprint(
                     total_tokens=exec_res.total_tokens,
                     input_tokens=exec_res.input_tokens,
                     output_tokens=exec_res.output_tokens,
+                    reasoning_tokens=exec_res.reasoning_tokens,
+                    cache_read_tokens=exec_res.cache_read_tokens,
+                    cache_write_tokens=exec_res.cache_write_tokens,
+                    uncached_tokens=exec_res.uncached_tokens,
+                    cost_usd=exec_res.cost_usd,
                     turns=exec_res.turns,
                     tool_calls=exec_res.tool_calls,
                     files_read=unique_this_session,

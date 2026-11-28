@@ -144,8 +144,13 @@ def served_menhir(
     menhir_bin: str | None,
     base: dict[str, str] | None = None,
     health_tries: int = 90,
+    env_overrides: dict[str, str] | None = None,
 ) -> Iterator[str]:
-    """Serve ``tree`` on 127.0.0.1:``port`` over ``graph``; yields the URL, stops on exit."""
+    """Serve ``tree`` on 127.0.0.1:``port`` over ``graph``; yields the URL, stops on exit.
+
+    ``env_overrides`` is applied after :func:`serve_env`, for callers that need the write
+    path (e.g. the sprint bench turns MENHIR_BENCHMARK_MODE off so enrichment maintenance runs).
+    """
     tree = Path(tree)
     if not (tree / "src" / "menhir").is_dir():
         raise ServeError(f"no src/menhir under {tree}")
@@ -166,6 +171,7 @@ def served_menhir(
     env = serve_env(tree, port=port, graph=graph, openai_key=openai_key, log_dir=log_dir,
                     telemetry_db=out_dir / "mcp_telemetry.db", env_file=env_file,
                     base=dict(os.environ if base is None else base))
+    env.update(env_overrides or {})
     proc: subprocess.Popen | None = None
     try:
         proc = subprocess.Popen([binary, "serve", "--port", str(port)], cwd=str(tree), env=env)
