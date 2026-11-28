@@ -1,0 +1,271 @@
+{
+  "name": "torvalds-linux-ext4-f4585067-5session-sprint",
+  "description": "5-session polyglot (C) longitudinal coding sprint over a pinned sparse checkout of torvalds/linux (fs/ext4 + Documentation/filesystems/ext4) at commit f4585067150b85e33f60876149a6e742928da75e. Exercises Tree-sitter C symbol/header/call-edge extraction, fast_commit invariants, KUnit test selection, live stale-anchor drift detection, and S5 comprehension.",
+  "repo": {
+    "name": "linux-ext4",
+    "url": "https://github.com/torvalds/linux.git",
+    "commit": "f4585067150b85e33f60876149a6e742928da75e",
+    "local_path": ""
+  },
+  "sparse_paths": [
+    "fs/ext4",
+    "Documentation/filesystems/ext4"
+  ],
+  "sessions": [
+    {
+      "session_id": "s1-investigate-fast-commit",
+      "phase": "investigate",
+      "prompt": "Session 1 (Discovery): You are about to modify ext4's fast commit journaling path (`fs/ext4/fast_commit.c` and `fs/ext4/fast_commit.h`). How does fast commit organize its on-disk log and guarantee commit atomicity, how does it handle unsupported operations (ineligibility), what cross-repository invariant applies to `fs/ext4/fast_commit.h`, and which source, header, and KUnit test files implement and verify it?",
+      "memory_instruction": "Before finishing, store the ext4 fast commit invariants (TLV log + `EXT4_FC_TAG_TAIL` CRC/TID atomicity, `ext4_fc_mark_ineligible()` fallback to full commit, and byte-identical `e2fsprogs/lib/ext2fs/fast_commit.h` header requirement) with `add_memory` (citing `fs/ext4/fast_commit.h` and `fs/ext4/fast_commit.c`) and record a follow-up `add_todo` for KUnit coverage in `fs/ext4/fast_commit-test.c`.",
+      "gold": {
+        "docs": [],
+        "files": [
+          "fs/ext4/fast_commit.h",
+          "fs/ext4/fast_commit.c",
+          "fs/ext4/fast_commit-test.c",
+          "fs/ext4/fsync.c"
+        ],
+        "acceptable_files": [
+          "fs/ext4/ext4.h",
+          "fs/ext4/ext4_jbd2.h",
+          "fs/ext4/inode.c",
+          "fs/ext4/super.c",
+          "fs/ext4/.kunitconfig",
+          "Documentation/filesystems/ext4/journal.rst"
+        ],
+        "commands": [],
+        "guardrails": [
+          [
+            "byte identical",
+            "e2fsprogs/lib/ext2fs/fast_commit.h",
+            "keep fast_commit.h synchronized with e2fsprogs"
+          ]
+        ],
+        "points": [
+          [
+            "tag-length-value",
+            "TLV",
+            "struct ext4_fc_tl"
+          ],
+          [
+            "EXT4_FC_TAG_TAIL",
+            "tail tag",
+            "CRC",
+            "TID"
+          ],
+          [
+            "ext4_fc_mark_ineligible",
+            "fall back to full commit",
+            "fallback to full commit"
+          ],
+          [
+            "e2fsprogs/lib/ext2fs/fast_commit.h",
+            "byte identical"
+          ]
+        ],
+        "verdict": "",
+        "risky": []
+      }
+    },
+    {
+      "session_id": "s2-blast-radius-plan",
+      "phase": "impact_plan",
+      "prompt": "Session 2 (Impact & Test Plan): In a fresh session, plan extending `fs/ext4/fast_commit.h` and `fs/ext4/fast_commit.c` with a new TLV tag without breaking crash recovery or `e2fsprogs` compatibility. Identify the impacted source and KUnit test files, the KUnit command to run the ext4 KUnit suite using `fs/ext4/.kunitconfig`, and the guardrails that must hold.",
+      "memory_instruction": "Start by calling `recall_memories`, `list_todos`, and `query_structure` (`blast_radius` / `affected_tests`) on `fs/ext4/fast_commit.h` and `fs/ext4/fast_commit.c` rather than re-reading the subsystem from scratch.",
+      "gold": {
+        "docs": [],
+        "files": [
+          "fs/ext4/fast_commit.h",
+          "fs/ext4/fast_commit.c",
+          "fs/ext4/fast_commit-test.c",
+          "fs/ext4/fsync.c"
+        ],
+        "acceptable_files": [
+          "fs/ext4/.kunitconfig",
+          "fs/ext4/ext4.h",
+          "fs/ext4/inode.c",
+          "fs/ext4/extents.c",
+          "fs/ext4/namei.c",
+          "fs/ext4/xattr.c",
+          "fs/ext4/ioctl.c",
+          "fs/ext4/verity.c",
+          "fs/ext4/migrate.c",
+          "fs/ext4/move_extent.c"
+        ],
+        "commands": [
+          "./tools/testing/kunit/kunit.py run --kunitconfig=fs/ext4"
+        ],
+        "allowed_flags": [
+          "--arch=x86_64",
+          "--kunitconfig=fs/ext4/.kunitconfig"
+        ],
+        "guardrails": [
+          [
+            "byte identical",
+            "e2fsprogs/lib/ext2fs/fast_commit.h"
+          ],
+          [
+            "EXT4_FC_TAG_TAIL",
+            "CRC",
+            "fall back to full commit",
+            "ext4_fc_mark_ineligible"
+          ]
+        ],
+        "points": [
+          [
+            "fs/ext4/.kunitconfig",
+            "CONFIG_EXT4_KUNIT_TESTS=y"
+          ],
+          [
+            "fast_commit-test.c",
+            "fsync.c"
+          ]
+        ],
+        "verdict": "",
+        "risky": []
+      }
+    },
+    {
+      "session_id": "s3-drift-stale-anchor",
+      "phase": "drift_check",
+      "prompt": "Session 3 (Drift Check): Before editing `fs/ext4/fast_commit.h`, verify whether `EXT4_FC_SUPPORTED_FEATURES` and its surrounding comment in `fs/ext4/fast_commit.h` are still current or have drifted since Session 1. Report your verdict (`current` or `drifted`) and cite the exact file.",
+      "memory_instruction": "Check `recall_memories` for any `stale_anchor` advisory on `fs/ext4/fast_commit.h`, inspect the current file to verify, and note any change.",
+      "drift_patch": {
+        "path": "fs/ext4/fast_commit.h",
+        "find": "#define EXT4_FC_SUPPORTED_FEATURES\t0x0",
+        "replace": "#define EXT4_FC_SUPPORTED_FEATURES\t0x0 /* AUDIT: coordinate with e2fsprogs before bumping feature mask */",
+        "description": "Simulates an upstream audit comment added to fs/ext4/fast_commit.h between Session 2 and Session 3 to trigger stale-anchor detection."
+      },
+      "gold": {
+        "docs": [],
+        "files": [
+          "fs/ext4/fast_commit.h"
+        ],
+        "acceptable_files": [
+          "fs/ext4/fast_commit.c",
+          "fs/ext4/fast_commit-test.c"
+        ],
+        "commands": [],
+        "guardrails": [
+          [
+            "coordinate with e2fsprogs",
+            "byte identical",
+            "verify current file"
+          ]
+        ],
+        "points": [
+          [
+            "AUDIT",
+            "coordinate with e2fsprogs",
+            "feature mask"
+          ]
+        ],
+        "verdict": "drifted",
+        "risky": []
+      }
+    },
+    {
+      "session_id": "s4-journal-docs-plan",
+      "phase": "followup",
+      "prompt": "Session 4 (Journal Docs & Design Check): Review `Documentation/filesystems/ext4/journal.rst` alongside the fast commit implementation. Under which journal mount mode is fast commit supported, what invalidates prior fast commits and empties the fast commit area, when must the feature be enabled, and what byte-order (endianness) difference exists between jbd2 and ext4?",
+      "memory_instruction": "Recall prior session memories/TODOs and check `Documentation/filesystems/ext4/journal.rst` cleanly with minimal redundant reads.",
+      "gold": {
+        "docs": [
+          "Documentation/filesystems/ext4/journal.rst"
+        ],
+        "files": [
+          "Documentation/filesystems/ext4/journal.rst"
+        ],
+        "acceptable_files": [
+          "fs/ext4/fast_commit.c",
+          "fs/ext4/fast_commit.h"
+        ],
+        "commands": [],
+        "guardrails": [
+          [
+            "data=ordered",
+            "enabled at mkfs time"
+          ]
+        ],
+        "points": [
+          [
+            "data=ordered",
+            "ordered mode"
+          ],
+          [
+            "full commit invalidates",
+            "traditional full commit",
+            "empties the fast commit area",
+            "makes the fast commit area empty"
+          ],
+          [
+            "mkfs time",
+            "enabled at mkfs"
+          ],
+          [
+            "big-endian",
+            "opposite of ext4"
+          ]
+        ],
+        "verdict": "",
+        "risky": []
+      }
+    },
+    {
+      "session_id": "s5-sprint-comprehension",
+      "phase": "comprehension",
+      "prompt": "Session 5 (Sprint Synthesis): In a fresh session, synthesize the complete engineering risk map for ext4 fast commits from this sprint without re-reading the entire subsystem: cover (1) the three categories of deltas recorded in fast commit TLVs, (2) how atomicity is guaranteed (`EXT4_FC_TAG_TAIL`), (3) the `e2fsprogs` header invariant and the `EXT4_FC_SUPPORTED_FEATURES` drift finding from Session 3, (4) when fast commit falls back to a full commit, and (5) the primary implementation and KUnit test files.",
+      "memory_instruction": "Start with `recall_memories` and `list_todos` to synthesize prior session findings with minimal redundant file reads.",
+      "gold": {
+        "docs": [
+          "Documentation/filesystems/ext4/journal.rst"
+        ],
+        "files": [
+          "fs/ext4/fast_commit.h",
+          "fs/ext4/fast_commit.c",
+          "fs/ext4/fast_commit-test.c"
+        ],
+        "acceptable_files": [
+          "fs/ext4/fsync.c",
+          "fs/ext4/.kunitconfig"
+        ],
+        "commands": [],
+        "guardrails": [
+          [
+            "byte identical",
+            "e2fsprogs"
+          ],
+          [
+            "EXT4_FC_TAG_TAIL",
+            "CRC",
+            "full commit"
+          ]
+        ],
+        "points": [
+          [
+            "directory entry",
+            "ADD_RANGE",
+            "DEL_RANGE",
+            "INODE"
+          ],
+          [
+            "EXT4_FC_TAG_TAIL",
+            "CRC",
+            "TID"
+          ],
+          [
+            "AUDIT",
+            "coordinate with e2fsprogs",
+            "drifted"
+          ],
+          [
+            "ext4_fc_mark_ineligible",
+            "full commit"
+          ]
+        ],
+        "verdict": "",
+        "risky": []
+      }
+    }
+  ]
+}

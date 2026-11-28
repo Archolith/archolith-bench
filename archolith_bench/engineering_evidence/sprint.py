@@ -83,11 +83,13 @@ class SprintFixture:
     description: str
     repo: RepoPin
     sessions: tuple[SprintSession, ...]
+    sparse_paths: tuple[str, ...] = ()
 
     @classmethod
     def from_file(cls, path: str | Path) -> "SprintFixture":
         raw = json.loads(Path(path).read_text(encoding="utf-8"))
         repo = RepoPin(**raw["repo"])
+        sparse_paths = tuple(str(p) for p in (raw.get("sparse_paths") or ()))
         sessions: list[SprintSession] = []
         for s in raw["sessions"]:
             g = s.get("gold") or {}
@@ -126,6 +128,7 @@ class SprintFixture:
             description=raw.get("description", ""),
             repo=repo,
             sessions=tuple(sessions),
+            sparse_paths=sparse_paths,
         )
 
 
