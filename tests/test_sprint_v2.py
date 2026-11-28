@@ -14,7 +14,7 @@ from typing import Any
 
 import pytest
 
-from archolith_bench.beacon_eval.runner import Budget
+from archolith_bench.core.budget import Budget
 from archolith_bench.core.opencode.process import EventLog
 from archolith_bench.engineering_evidence.campaign import (
     Campaign,

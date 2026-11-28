@@ -19,7 +19,8 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlsplit, urlunsplit
 
-from archolith_bench.beacon_eval.runner import DEFAULT_RUN_RESERVE, export_commit
+from archolith_bench.beacon_eval.runner import export_commit
+from archolith_bench.core.budget import DEFAULT_RUN_RESERVE
 from archolith_bench.core.opencode.isolation import (
     MEMORY_KEY_ENV,
     default_config_source,
