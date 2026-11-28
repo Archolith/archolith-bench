@@ -92,10 +92,12 @@ class ProgressFeed:
         self._call("done", self.job_id, *(["--status", "failed"] if failed else []))
 
 
-def prompt_manifest(fixture: SprintFixture, arms: tuple[str, ...]) -> dict[str, dict[str, str]]:
+def prompt_manifest(fixture: SprintFixture, arms: tuple[str, ...],
+                    cache_shaping: bool = False) -> dict[str, dict[str, str]]:
     """Every arm's exact prompts (namespace left as a placeholder), for the hash and the results."""
     return {
-        arm: {s.session_id: compose_full_prompt(s, arm, "<namespace>") for s in fixture.sessions}
+        arm: {s.session_id: compose_full_prompt(s, arm, "<namespace>", cache_shaping)
+              for s in fixture.sessions}
         for arm in arms
     }
 

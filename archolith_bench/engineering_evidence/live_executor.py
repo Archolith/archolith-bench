@@ -241,6 +241,9 @@ class LiveSprintConfig:
     enrichment_poll_s: float = 3.0
     #: How long index_pristine waits for the background structure write to become visible.
     index_timeout_s: float = 600.0
+    #: One OpenAI prompt_cache_key per (fixture, arm) instead of OpenCode's per-session key, and
+    #: arm-wide prompt text ahead of session text (sprint.compose_full_prompt).
+    cache_shaping: bool = False
     #: Replace each session's events.jsonl with events.jsonl.gz once parsed.
     gzip_events: bool = False
 
@@ -472,7 +475,7 @@ class OpenCodeSprintExecutor:
         run_dir = self._run_dir(arm, repeat, session_index, session.session_id)
         run_dir.mkdir(parents=True, exist_ok=True)
 
-        full_prompt = compose_full_prompt(session, arm, namespace)
+        full_prompt = compose_full_prompt(session, arm, namespace, self.config.cache_shaping)
         (run_dir / "prompt.txt").write_text(full_prompt, encoding="utf-8")
 
         notes_before = snapshot_tree(checkout) if arm == "notes_file" else None
@@ -490,6 +493,9 @@ class OpenCodeSprintExecutor:
             self.config.model,
             mcp=mcp,
             builtin_provider=self.config.builtin_provider,
+            # One key per arm and fixture: every session of the arm shares the system prompt and
+            # tool prefix, which OpenCode's per-session default key never reuses.
+            prompt_cache_key=f"sv2-{fixture.repo.name}-{arm}" if self.config.cache_shaping else None,
         ) as config_home:
             env = isolated_env(extra_env, config_home)
             # An inherited PWD (Git Bash, MSYS) roots OpenCode in the caller's repo instead of

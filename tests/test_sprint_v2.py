@@ -629,3 +629,43 @@ def test_rescore_rescores_from_saved_events_and_never_overwrites(tmp_path: Path,
         rescore.rescore_run(run_dir, fixture, tmp_path / "cache", out_dir)
     assert rescore.main(["--run-dir", str(run_dir), "--fixture", str(FIXTURE_PATH), "--out-dir", str(out_dir)]) == 2
     assert marker.read_bytes() == content
+
+
+# -- cache shaping ---------------------------------------------------------------------------
+
+
+def _source_config(tmp_path: Path) -> Path:
+    src = tmp_path / "opencode.json"
+    src.write_text(json.dumps({"$schema": "x", "provider": {"openai": {"options": {"timeout": 5}}}}),
+                   encoding="utf-8")
+    return src
+
+
+def test_minimal_config_shared_cache_key_replaces_per_session_key(tmp_path, monkeypatch) -> None:
+    from archolith_bench.beacon_eval.isolation import SERVICE_TIER_ENV, minimal_config
+
+    monkeypatch.setenv(SERVICE_TIER_ENV, "flex")
+    src = _source_config(tmp_path)
+    cfg = minimal_config(src, "openai/gpt-6-luna", None, False, (), prompt_cache_key="sv2-llm-notes_file")
+    provider = cfg["provider"]["openai"]
+    assert provider["options"] == {"timeout": 5, "setCacheKey": False}
+    assert provider["models"]["gpt-6-luna"]["options"] == {
+        "serviceTier": "flex", "promptCacheKey": "sv2-llm-notes_file"}
+    # Default: no key and OpenCode's per-session key left on.
+    plain = minimal_config(src, "openai/gpt-6-luna", None, False, ())
+    assert "setCacheKey" not in plain["provider"]["openai"]["options"]
+    assert "promptCacheKey" not in plain["provider"]["openai"]["models"]["gpt-6-luna"]["options"]
+
+
+@pytest.mark.parametrize("arm", V2_ARMS)
+def test_cache_shaping_keeps_every_block_and_shares_the_prefix(arm) -> None:
+    fixture = SprintFixture.from_file(FIXTURE_PATH)
+    plain = [compose_full_prompt(s, arm, "ns") for s in fixture.sessions]
+    shaped = [compose_full_prompt(s, arm, "ns", cache_shaping=True) for s in fixture.sessions]
+    for a, b in zip(plain, shaped):
+        assert sorted(a.split("\n\n")) == sorted(b.split("\n\n"))
+    # Everything before the session's own prompt is the same for every session of the arm.
+    prefixes = {p[: p.index(s.prompt.strip())] for p, s in zip(shaped, fixture.sessions)}
+    assert len(prefixes) == 1 and len(next(iter(prefixes))) > 200
+    # Default order is the one runs v2 and v2r2 sent.
+    assert all(p.startswith(s.prompt.strip()) for p, s in zip(plain, fixture.sessions))
