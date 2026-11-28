@@ -14,9 +14,9 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
-from archolith_bench.beacon_eval.isolation import load_api_keys
-from archolith_bench.beacon_eval.runner import RateLimited
 from archolith_bench.core.metrics import PRICING_DEFAULTS, PricingModel
+from archolith_bench.core.opencode.isolation import load_api_keys
+from archolith_bench.core.opencode.process import RateLimited
 from archolith_bench.engineering_evidence.live_executor import (
     OpenCodeSprintExecutor,
     _notes_violations,

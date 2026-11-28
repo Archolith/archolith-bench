@@ -24,7 +24,8 @@ import pytest
 
 from archolith_bench.beacon_eval import CONDITIONS, DEFAULT_CONDITIONS
 from archolith_bench.beacon_eval import runner as runner_mod
-from archolith_bench.beacon_eval.isolation import beacon_remote_server, empty_cwd
+from archolith_bench.beacon_eval.mcp_servers import beacon_remote_server
+from archolith_bench.core.opencode.isolation import empty_cwd
 from archolith_bench.beacon_eval.models import Gold, RepoPin, Task
 from archolith_bench.beacon_eval.report import render
 from archolith_bench.beacon_eval.runner import (

@@ -34,7 +34,7 @@ ALLOWLIST: dict[tuple[str, str], str] = {
     ("context_proxy", "r1"): _REGISTRY,
     ("context_proxy", "r3"): _REGISTRY,
     ("context_proxy", "r5"): _REGISTRY,
-    ("engineering_evidence", "beacon_eval"): "step 2: OpenCode runner -> core/opencode/, Budget -> core/budget.py",
+    ("engineering_evidence", "beacon_eval"): "Budget/DEFAULT_RUN_RESERVE -> core/budget.py; export_commit, ANSWER_INSTRUCTIONS, models, scoring need a shared agent-task core",
     ("engineering_evidence", "longmemeval"): "campaign.py uses staged.rundir; step 2: core/rundir.py",
     ("intent", "oracle"): "intent reuses oracle's combiner, executor and scorer; needs a shared ranking core",
     ("longmemeval", "context_proxy"): "harness/base.py imports the arms.py registry; step 4: classify arms.py",

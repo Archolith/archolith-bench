@@ -9,7 +9,6 @@ from datetime import date
 from pathlib import Path
 
 from archolith_bench.beacon_eval import CONDITIONS, DEFAULT_CONDITIONS
-from archolith_bench.beacon_eval.isolation import load_api_keys
 from archolith_bench.beacon_eval.judge import (
     DEFAULT_JUDGE_MODEL,
     JudgeBudgetExhausted,
@@ -22,12 +21,13 @@ from archolith_bench.beacon_eval.report import METRICS, render
 from archolith_bench.beacon_eval.runner import (
     DEFAULT_BUDGET_TOKENS,
     DEFAULT_MIN_FREE_GB,
-    DEFAULT_MODEL,
     DEFAULT_RUN_RESERVE,
     RunnerConfig,
     rescore,
     run_matrix,
 )
+from archolith_bench.core.opencode.isolation import load_api_keys
+from archolith_bench.core.opencode.process import DEFAULT_MODEL
 
 HERE = Path(__file__).parent
 #: --task-set name -> task folder under HERE.

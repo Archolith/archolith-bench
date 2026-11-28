@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 from cth_flex import Deferred, ErrorInfo, Kind, Stopped, TierMismatch
 
-from archolith_bench.beacon_eval.runner import RateLimited
+from archolith_bench.core.opencode.process import RateLimited
 from archolith_bench.engineering_evidence.harness_executor import HarnessSprintExecutor
 from archolith_bench.engineering_evidence.live_executor import LiveSprintConfig
 from archolith_bench.engineering_evidence.sprint import NOTES_FILE, SprintFixture
@@ -75,7 +75,7 @@ class _FakeMcp:
 
 def _executor(tmp_path: Path, monkeypatch, send, *, mcp=None, connects=None, flex_mode="fallback", **cfg):
     monkeypatch.setattr(
-        "archolith_bench.beacon_eval.isolation.default_data_source", lambda: tmp_path / "empty_opencode_data"
+        "archolith_bench.core.opencode.isolation.default_data_source", lambda: tmp_path / "empty_opencode_data"
     )
     tmp_path.mkdir(parents=True, exist_ok=True)
     src_cfg = tmp_path / "opencode.json"
