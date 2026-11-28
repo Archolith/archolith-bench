@@ -1,5 +1,16 @@
 # archolith-bench Changelog
 
+## 2026-11-28 - One 429/error classifier in `core/ratelimit.py` (reorg step 2d)
+
+`classify(status, text) -> Kind` (capacity, quota, billing, auth, rate_limit, other) and
+`mentions_capacity(text)` now hold every marker once. `core.api` (`is_flex_capacity_error`,
+`send_chat` retries), `core.openai_flex` and `beacon_eval.runner.EventLog` use it; each caller
+keeps its own retry/stop policy. Behaviour changes: `flex_unavailable` and "Flex does not have
+sufficient resources" 429s are now capacity (retried) in `core.api` and `openai_flex`, where
+they used to stop or take the generic path; a `credit_balance` / billing-limit 429 now stops
+`send_chat` instead of being retried; `beacon_eval` also treats "resource unavailable" as
+capacity (not a rate-limit stop).
+
 ## 2026-11-28 - One model-rate table in `core/pricing.py` (reorg step 2c)
 
 `RATES_PER_1M` (model id -> `ModelRates`: input, cached input, output, cache write) and

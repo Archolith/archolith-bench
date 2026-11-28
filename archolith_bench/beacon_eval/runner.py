@@ -67,6 +67,7 @@ from archolith_bench.beacon_eval.isolation import (
 )
 from archolith_bench.beacon_eval.models import ANSWER_KEYS, RepoPin, RunResult, Task
 from archolith_bench.beacon_eval.scoring import extract_answer, score
+from archolith_bench.core.ratelimit import mentions_capacity
 
 #: Owner decision 2026-09-23 (GPT-6 Luna via OpenAI; key through --env-file).
 DEFAULT_MODEL = "openai/gpt-6-luna"
@@ -100,11 +101,6 @@ ANSWER_INSTRUCTIONS = (
 )
 
 _RATE_LIMIT = re.compile(r"\b429\b|rate[ _-]?limit|too many requests", re.IGNORECASE)
-# Flex capacity refusals are retried by OpenCode; they are not a quota or rate stop.
-_FLEX_CAPACITY = re.compile(
-    r"flex_unavailable|resource_unavailable|flex does not have sufficient resources",
-    re.IGNORECASE,
-)
 
 
 class RateLimited(RuntimeError):
@@ -918,7 +914,8 @@ class EventLog:
         self._scan(line)
 
     def _scan(self, text: str) -> None:
-        if _RATE_LIMIT.search(text) and not _FLEX_CAPACITY.search(text):
+        # Flex capacity refusals are retried by OpenCode; they are not a quota or rate stop.
+        if _RATE_LIMIT.search(text) and not mentions_capacity(text):
             self.rate_limited = True
 
     def _add_usage(self, tokens: Any) -> None:
