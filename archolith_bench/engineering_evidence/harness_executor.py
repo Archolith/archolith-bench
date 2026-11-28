@@ -33,9 +33,10 @@ AGENT_NAME = "archolith-harness"
 #: Menhir tools the memory arms count as saves (the harness logs tool names, not arguments).
 _MEMORY_SAVE_TOOLS = frozenset({"add_memory"})
 _TODO_SAVE_TOOLS = frozenset({"add_todo"})
-#: cth_flex error kinds that halt the campaign, as OpenCode's non-capacity 429 does. Flex capacity
-#: waits that run out only fail the session.
-_HALTING_KINDS = frozenset({"rate_limit", "quota", "auth"})
+#: cth_flex error kinds that halt the campaign: quota/billing and auth. Every other 429 (Flex
+#: capacity, rate_limit_exceeded) is retried until the session timer runs out and at worst
+#: ends that session as a timeout.
+_HALTING_KINDS = frozenset({"quota", "auth"})
 
 
 def _halts_campaign(exc: BaseException) -> bool:
