@@ -73,7 +73,7 @@ class _FakeMcp:
         self.closed = True
 
 
-def _executor(tmp_path: Path, monkeypatch, send, *, mcp=None, connects=None, **cfg):
+def _executor(tmp_path: Path, monkeypatch, send, *, mcp=None, connects=None, flex_mode="fallback", **cfg):
     monkeypatch.setattr(
         "archolith_bench.beacon_eval.isolation.default_data_source", lambda: tmp_path / "empty_opencode_data"
     )
@@ -94,6 +94,7 @@ def _executor(tmp_path: Path, monkeypatch, send, *, mcp=None, connects=None, **c
 
     return HarnessSprintExecutor(
         LiveSprintConfig(work_dir=tmp_path / "work", cache_dir=tmp_path / "cache", source_config=src_cfg, **cfg),
+        flex_mode=flex_mode,
         send_fn=send,
         mcp_connect_fn=connect,
         export_fn=fake_export,
@@ -194,7 +195,7 @@ def test_flex_capacity_wait_fails_only_the_session(tmp_path: Path, monkeypatch) 
 
 
 def test_unpriced_model_is_refused_before_any_session(tmp_path: Path, monkeypatch) -> None:
-    with pytest.raises(ValueError, match="no Flex pricing"):
+    with pytest.raises(ValueError, match="no pricing for .not-a-model-flex"):
         _executor(tmp_path, monkeypatch, _Send([]), model="openai/not-a-model")
 
 
@@ -219,3 +220,51 @@ def test_cli_agent_version_is_the_harness_git_state() -> None:
     cli = _cli()
     assert cli._agent_version("opencode") is None
     assert cli._agent_version("archolith-harness")  # git state of the editable install
+
+
+class _TimedSend(_Send):
+    takes_timeout = True
+
+    def __init__(self, replies):
+        super().__init__(replies)
+        self.timeouts: list = []
+
+    def __call__(self, request, *, timeout_s=None):
+        self.timeouts.append(timeout_s)
+        return super().__call__(request)
+
+
+def test_fallback_steps_are_priced_at_standard_and_recorded(tmp_path: Path, monkeypatch) -> None:
+    send = _TimedSend([
+        _step(items=[_call("list_directory", {"path": "."})], input_tokens=1000, cached=0, output=100, reasoning=0),
+        _step(items=[_message("done")], input_tokens=1000, cached=0, output=100, reasoning=0, tier="default"),
+    ])
+    ex = _executor(tmp_path, monkeypatch, send, timeout_s=300.0)
+    res = _run(ex, "no_menhir")
+    flex = (1000 * 0.05 + 100 * 0.25) / 1e6
+    standard = (1000 * 0.10 + 100 * 0.50) / 1e6
+    assert res.cost_usd == pytest.approx(flex + standard)
+    agent = json.loads((res.run_dir / "agent.json").read_text(encoding="utf-8"))
+    assert agent["flex_mode"] == "fallback" and agent["standard_steps"] == 1
+    assert send.timeouts[0] == pytest.approx(300.0, abs=5)  # the session's time left reaches the sender
+
+
+def test_open_mode_has_no_session_clock(tmp_path: Path, monkeypatch) -> None:
+    send = _TimedSend([_step(items=[_message("done")])])
+    ex = _executor(tmp_path, monkeypatch, send, flex_mode="open", timeout_s=300.0)
+    _run(ex, "no_menhir")
+    assert send.timeouts == [None]
+
+
+def test_unknown_flex_mode_is_refused(tmp_path: Path, monkeypatch) -> None:
+    with pytest.raises(ValueError, match="flex_mode"):
+        HarnessSprintExecutor(LiveSprintConfig(work_dir=tmp_path, cache_dir=tmp_path), flex_mode="sometimes")
+
+
+def test_resume_never_mixes_harness_flex_modes(tmp_path: Path) -> None:
+    cli = _cli()
+    base = ["--fixture", str(FIXTURE_PATH), "--repeats", "1", "--max-sessions", "1", "--arms", "no_menhir",
+            "--run-id", "mode", "--out-root", str(tmp_path), "--agent", "archolith-harness"]
+    assert cli.main([*base, "--harness-flex", "open"]) == 0
+    assert cli.main([*base, "--harness-flex", "open", "--resume"]) == 0
+    assert cli.main([*base, "--harness-flex", "fallback", "--resume"]) == 2

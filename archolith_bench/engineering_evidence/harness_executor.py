@@ -52,17 +52,24 @@ def _bare_model(model: str) -> str:
     return model.split("/", 1)[1] if "/" in model else model
 
 
-def _flex_rates(model: str) -> PricingModel:
-    """Flex rates for the model; unpriced models fail closed (the spend guard reads cost_usd)."""
-    rates = PRICING_DEFAULTS.get(f"{model}-flex")
+def _rates(key: str) -> PricingModel:
+    """Rates for a pricing key; unpriced models fail closed (the spend guard reads cost_usd)."""
+    rates = PRICING_DEFAULTS.get(key)
     if rates is None:
-        raise ValueError(f"no Flex pricing for {model!r} in core.metrics.PRICING_DEFAULTS")
+        raise ValueError(f"no pricing for {key!r} in core.metrics.PRICING_DEFAULTS")
     return rates
 
 
-def _flex_cost_usd(input_uncached: int, cached: int, output_total: int, rates: PricingModel) -> float:
-    return (input_uncached * rates.input_cache_miss + cached * rates.input_cache_hit
-            + output_total * rates.output) / 1_000_000
+def _steps_cost_usd(steps: list[Any], flex: PricingModel, standard: PricingModel | None) -> float:
+    """Each step at the rates of the tier that served it (fallback steps are Standard)."""
+    total = 0.0
+    for step in steps:
+        rates = flex if step.served_tier == "flex" else standard
+        if rates is None:  # cth_flex refuses other tiers in open mode; never price one as Flex
+            raise ValueError(f"step served on {step.served_tier!r} with no rates for it")
+        total += ((step.input_tokens - step.cached_tokens) * rates.input_cache_miss
+                  + step.cached_tokens * rates.input_cache_hit + step.output_tokens * rates.output)
+    return total / 1_000_000
 
 
 def _tool_counts(events_path: Path) -> tuple[int, int]:
@@ -85,23 +92,28 @@ def _tool_counts(events_path: Path) -> tuple[int, int]:
 class HarnessSprintExecutor(OpenCodeSprintExecutor):
     """`OpenCodeSprintExecutor` with the agent swapped for archolith-harness."""
 
-    def __init__(self, config: Any, *, send_fn: Callable[[dict], dict] | None = None,
+    def __init__(self, config: Any, *, flex_mode: str = "fallback", send_fn: Callable[..., dict] | None = None,
                  mcp_connect_fn: Callable[..., Any] | None = None, **kwargs: Any) -> None:
+        from archolith_harness.flex_send import FLEX_MODES
+
+        if flex_mode not in FLEX_MODES:
+            raise ValueError(f"flex_mode must be one of {FLEX_MODES}, got {flex_mode!r}")
         super().__init__(config, **kwargs)
-        self._rates = _flex_rates(_bare_model(config.model))
+        model = _bare_model(config.model)
+        self.flex_mode = flex_mode
+        self._flex_rates = _rates(f"{model}-flex")
+        # Fallback mode may be served on Standard; open mode never is.
+        self._standard_rates = _rates(model) if flex_mode == "fallback" else None
         self._send = send_fn
         self._mcp_connect = mcp_connect_fn
 
-    def _sender(self) -> Callable[[dict], dict]:
+    def _sender(self) -> Callable[..., dict]:
         with self._lock:
             if self._send is None:
-                from cth_flex import FlexClient
-                from cth_flex.adapters import openai_responses_sender
-                from openai import OpenAI
+                from archolith_harness.flex_send import flex_sender
 
                 keys = load_api_keys(self.config.env_file) if self.config.env_file else {}
-                client = OpenAI(api_key=keys.get("OPENAI_API_KEY")) if keys.get("OPENAI_API_KEY") else OpenAI()
-                self._send = FlexClient(openai_responses_sender(client), require_tier="flex").call
+                self._send = flex_sender(self.flex_mode, api_key=keys.get("OPENAI_API_KEY"))
             return self._send
 
     def _connect_mcp(self) -> Any:
@@ -131,20 +143,23 @@ class HarnessSprintExecutor(OpenCodeSprintExecutor):
         from archolith_harness.tools import ToolSet
 
         model = _bare_model(self.config.model)
+        # Open mode has no session clock: Flex waits are part of the run, not a censoring limit.
         config = AgentConfig(model=model, max_total_tokens=self.config.reserve_tokens,
-                             timeout_s=self.config.timeout_s)
+                             timeout_s=None if self.flex_mode == "open" else self.config.timeout_s)
         tools = ToolSet(checkout, writable=frozenset({NOTES_FILE}) if arm == "notes_file" else frozenset())
         events_path = run_dir / "events.jsonl"
 
         # run_session records send errors as text; keep the exception to classify it exactly.
         send, send_errors = self._sender(), []
 
-        def recording_send(request: dict) -> dict:
+        def recording_send(request: dict, **kwargs: Any) -> dict:
             try:
-                return send(request)
+                return send(request, **kwargs)
             except BaseException as exc:
                 send_errors.append(exc)
                 raise
+
+        recording_send.takes_timeout = getattr(send, "takes_timeout", False)  # type: ignore[attr-defined]
 
         t0 = time.monotonic()
         mcp_tools = self._connect_mcp() if mcp else None
@@ -167,6 +182,7 @@ class HarnessSprintExecutor(OpenCodeSprintExecutor):
         (run_dir / "agent.json").write_text(json.dumps({
             "agent": AGENT_NAME, "cache_key": res.cache_key, "system_prompt_sha256": res.system_prompt_sha256,
             "cache_hit_rate": res.cache_hit_rate, "served_tiers": sorted({s.served_tier or "" for s in res.steps}),
+            "flex_mode": self.flex_mode, "standard_steps": sum(s.served_tier != "flex" for s in res.steps),
         }, indent=2), encoding="utf-8")
 
         notes_violations = _notes_violations(notes_before, checkout)
@@ -179,7 +195,7 @@ class HarnessSprintExecutor(OpenCodeSprintExecutor):
             reasoning_tokens=res.reasoning_tokens,
             cache_read_tokens=res.cached_tokens,
             cache_write_tokens=0,  # OpenAI bills no cache writes; uncached input is input_tokens
-            cost_usd=_flex_cost_usd(res.uncached_input_tokens, res.cached_tokens, res.output_tokens, self._rates),
+            cost_usd=_steps_cost_usd(res.steps, self._flex_rates, self._standard_rates),
             censored=res.censored,
             turns=len(res.steps),
             tool_calls=res.tool_calls,

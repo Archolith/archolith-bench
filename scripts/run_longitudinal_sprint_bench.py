@@ -189,6 +189,7 @@ def _run_v2(args: argparse.Namespace, fixture: SprintFixture) -> int:
     if args.agent != "opencode":
         # A resume never mixes agents in one run dir; OpenCode dirs predate the key and still resume.
         resolved["agent"] = args.agent
+        resolved["harness_flex"] = args.harness_flex  # open and fallback censor differently
     try:
         rd = prepare_run_dir(Path(args.out_root), f"{fixture.name}-{run_id}", resolved, resume=args.resume)
     except (RunDirInUse, RunConfigMismatch) as exc:
@@ -209,9 +210,11 @@ def _run_v2(args: argparse.Namespace, fixture: SprintFixture) -> int:
         # priced at the Standard catalog rate, so under flex client_cost_usd overstates the bill.
         "cache_shaping": args.cache_shaping,
         "agent": args.agent, "agent_version": _agent_version(args.agent),
-        # archolith-harness requires the Flex tier on every call (cth_flex require_tier) and
-        # prices it at Flex rates; only OpenCode's tier comes from the environment.
-        "client_service_tier": "flex" if args.agent == "archolith-harness"
+        "harness_flex": args.harness_flex if args.agent == "archolith-harness" else None,
+        # archolith-harness requests Flex on every call and prices each step at its served tier
+        # (fallback mode may resend on Standard); only OpenCode's tier comes from the environment.
+        "client_service_tier": ("flex" if args.harness_flex == "open" else "flex+standard-fallback")
+        if args.agent == "archolith-harness"
         else os.environ.get("BEACON_EVAL_SERVICE_TIER", "").strip() or "default",
         "server_service_tier": graph_settings(args.graph, dict(os.environ))["service_tier"]
         if args.serve and args.graph else None,
@@ -247,9 +250,11 @@ def _run_v2(args: argparse.Namespace, fixture: SprintFixture) -> int:
             work = Path(args.work_dir) / f"{fixture.repo.name}-{run_id}"
             executor_cls = OpenCodeSprintExecutor
             if args.agent == "archolith-harness":
+                from functools import partial
+
                 from archolith_bench.engineering_evidence.harness_executor import HarnessSprintExecutor
 
-                executor_cls = HarnessSprintExecutor
+                executor_cls = partial(HarnessSprintExecutor, flex_mode=args.harness_flex)
             executor = executor_cls(
                 LiveSprintConfig(
                     work_dir=work, cache_dir=Path(args.cache_dir), model=args.model,
@@ -361,6 +366,9 @@ def main(argv: list[str] | None = None) -> int:
                     help="Shared per-arm prompt_cache_key and arm-wide prompt text first (cache reuse).")
     v2.add_argument("--agent", choices=("opencode", "archolith-harness"), default="opencode",
                     help="Agent that runs each session (results are never pooled across agents).")
+    v2.add_argument("--harness-flex", choices=("open", "fallback"), default="fallback",
+                    help="archolith-harness timeouts: open = no session clock, Flex only; fallback = "
+                         "--timeout-s per session, resending on Standard rather than missing it.")
     v2.add_argument("--est-usd-per-session", type=float, default=None,
                     help="Expected client+server USD per session (required for --live; from a prior run).")
     v2.add_argument("--reserve-usd", type=float, default=0.05,
