@@ -96,7 +96,8 @@ def prompt_manifest(fixture: SprintFixture, arms: tuple[str, ...],
                     cache_shaping: bool = False) -> dict[str, dict[str, str]]:
     """Every arm's exact prompts (namespace left as a placeholder), for the hash and the results."""
     return {
-        arm: {s.session_id: compose_full_prompt(s, arm, "<namespace>", cache_shaping)
+        arm: {s.session_id: compose_full_prompt(s, arm, "<namespace>", cache_shaping,
+                                                 project=fixture.repo.name)
               for s in fixture.sessions}
         for arm in arms
     }

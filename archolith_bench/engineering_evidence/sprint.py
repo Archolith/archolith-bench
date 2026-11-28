@@ -306,16 +306,32 @@ class DryRunExecutor:
         )
 
 
-#: Each arm's tool/memory note; the same text for every session of the arm.
+#: Version of the arm notes and fixture instructions (verdict rules are RUBRIC_VERSION, separate).
+#: sprint-v2.1: the memory arm is told to save as the notes arm is, with real lean tool names and
+#: the index project; runs of different prompt sets are never compared or resumed together.
+PROMPT_SET = "sprint-v2.1"
+
+#: Each arm's tool/memory note; the same text for every session of the arm. Tool names are the
+#: Menhir lean profile's; blast radius and affected tests are `query_structure` query types, not
+#: tools. The memory arm gets the same "only memory, read at start, keep it current" rule as
+#: the notes arm (the sprint-v2 prompts told it to recall only, so it saved nothing after session 1).
 _ARM_NOTES: dict[str, str] = {
     "menhir_structure": (
-        "You have Menhir structural tools (`query_structure`, `blast_radius`, "
-        "`affected_tests`) indexed for this repository. Prefer them over broad grep."
+        "You have the Menhir structural tool `query_structure`, indexed for this repository: "
+        "query_type `blast_radius` or `affected_tests` (path = comma-separated changed files) for "
+        "impact, `context` for one file. Prefer it over broad grep."
     ),
     "menhir_longitudinal": (
-        "You have Menhir structural AND memory tools (`query_structure`, `blast_radius`, "
-        "`affected_tests`, `recall_memories`, `add_memory`, `add_todo`, `list_todos`). "
-        "Recall existing memories/TODOs at session start before re-reading files."
+        "You have Menhir memory and structural tools. Memory: `recall_memories`, "
+        "`recall_context_memories`, `read_flagged_memories`, `add_memory`, and `get_provenance` "
+        "for a memory's sources. TODOs: `list_todos`, `get_todo`, `add_todo`, `close_todo`. "
+        "Structure: `query_structure` with query_type `blast_radius` or `affected_tests` "
+        "(path = comma-separated changed files) for impact, `context` for one file. Menhir is the "
+        "only memory you have between sessions: recall memories and TODOs at session start before "
+        "re-reading files, and before finishing store what a later session would need with "
+        "`add_memory` (follow-ups with `add_todo`; close finished ones with `close_todo`). If a "
+        "recalled memory is wrong or stale, store a corrected one with `add_memory` that says what "
+        "it replaces."
     ),
     "notes_file": (
         f"Keep your working notes in `{NOTES_FILE}` at the repository root: it is the only "
@@ -336,14 +352,28 @@ def build_session_prompt(session: SprintSession, arm: str) -> str:
     return "\n\n".join(parts)
 
 
+def _project_line(arm: str, project: str) -> str:
+    if arm in MENHIR_PROMPT_ARMS and project:
+        return f"The Menhir structural index for this repository is project `{project}`."
+    return ""
+
+
+#: Arms whose prompt names Menhir tools.
+MENHIR_PROMPT_ARMS = frozenset({"menhir_structure", "menhir_longitudinal"})
+
+
 def compose_full_prompt(session: SprintSession, arm: str, namespace: str,
-                        cache_shaping: bool = False) -> str:
+                        cache_shaping: bool = False, *, project: str = "") -> str:
     """The exact prompt a live executor sends: session prompt, namespace line, answer rules.
+
+    *project* (the structural index's project, the fixture repo name) is named for the Menhir
+    arms so the agent does not have to discover or guess it.
 
     With *cache_shaping* the same blocks are reordered so text shared by every session of the arm
     (tool note, answer rules, notes exception) comes first and session text last, extending the
     prompt prefix the provider can serve from cache. The words are unchanged.
     """
+    project_line = _project_line(arm, project)
     if cache_shaping:
         stable = [_ARM_NOTES[arm]] if arm in _ARM_NOTES else []
         stable.append(ANSWER_INSTRUCTIONS)
@@ -351,6 +381,8 @@ def compose_full_prompt(session: SprintSession, arm: str, namespace: str,
             stable.append(NOTES_EXCEPTION)
         if arm == "menhir_longitudinal":
             stable.append(f"Use Menhir namespace `{namespace}` for all memory/TODO operations.")
+        if project_line:
+            stable.append(project_line)
         varying = [session.prompt.strip()]
         if arm == "menhir_longitudinal" and session.memory_instruction:
             varying.append(session.memory_instruction.strip())
@@ -360,6 +392,8 @@ def compose_full_prompt(session: SprintSession, arm: str, namespace: str,
     text = build_session_prompt(session, arm)
     if arm == "menhir_longitudinal":
         text += f"\n\nUse Menhir namespace `{namespace}` for all memory/TODO operations."
+    if project_line:
+        text += "\n\n" + project_line
     text += "\n\n" + ANSWER_INSTRUCTIONS
     if arm == "notes_file":
         text += "\n\n" + NOTES_EXCEPTION
