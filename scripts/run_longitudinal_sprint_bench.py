@@ -19,6 +19,8 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+#: The Menhir checkout releases are resolved from: $MENHIR_REPO, else the sibling ../menhir.
+DEFAULT_MENHIR_REPO = os.environ.get("MENHIR_REPO") or str(REPO_ROOT.parent / "menhir")
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
@@ -178,6 +180,26 @@ def _run_v2(args: argparse.Namespace, fixture: SprintFixture) -> int:
     if live and args.serve and not args.graph:
         print("ERROR: --serve needs --graph <build yaml> (e.g. builds/sprint-v2.yaml)", file=sys.stderr)
         return 2
+    menhir_release = None
+    if live and args.graph and not args.serve and not args.menhir_mcp_url:
+        # No tree named: serve a release, resolved once here and recorded for the whole run.
+        from archolith_bench.staged.release_tree import ReleaseError, release_tree
+
+        try:
+            rel = release_tree(Path(args.menhir_repo or DEFAULT_MENHIR_REPO), args.menhir_release)
+        except ReleaseError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 2
+        args.serve, menhir_release = str(rel.path), rel.tag
+        print(f"serving Menhir {rel.tag} ({rel.commit[:12]}) from {rel.path}")
+    if live and args.serve:
+        from archolith_bench.staged.release_tree import has_lean_profile
+
+        if not has_lean_profile(Path(args.serve)):
+            print(f"ERROR: {args.serve} has no MENHIR_LOOPBACK_PROFILE=lean tool set "
+                  f"({'release ' + menhir_release if menhir_release else 'served tree'}); the Menhir "
+                  "arm would see every tool. Pass --serve <tree with the lean profile>.", file=sys.stderr)
+            return 2
     run_id = args.run_id or new_run_id()
     manifest = prompt_manifest(fixture, arms, args.cache_shaping)
     fixture_sha = hashlib.sha256(Path(args.fixture).read_bytes()).hexdigest()
@@ -192,6 +214,9 @@ def _run_v2(args: argparse.Namespace, fixture: SprintFixture) -> int:
         # A resume never mixes agents in one run dir; OpenCode dirs predate the key and still resume.
         resolved["agent"] = args.agent
         resolved["harness_flex"] = args.harness_flex  # open and fallback censor differently
+    if menhir_release:
+        # A resume after a newer release is refused rather than mixing two Menhirs in one run dir.
+        resolved["menhir_release"] = menhir_release
     try:
         rd = prepare_run_dir(Path(args.out_root), f"{fixture.name}-{run_id}", resolved, resume=args.resume)
     except (RunDirInUse, RunConfigMismatch) as exc:
@@ -204,6 +229,7 @@ def _run_v2(args: argparse.Namespace, fixture: SprintFixture) -> int:
         "fixture_path": str(Path(args.fixture)), "fixture_sha256": fixture_sha,
         "bench_commit": _git_state(str(REPO_ROOT)),
         "menhir_commit": _git_state(menhir_tree) if menhir_tree else None,
+        "menhir_release": menhir_release,  # None: an explicit --serve tree or an external server
         "model": args.model, "reserve_tokens": args.reserve_tokens, "timeout_s": args.timeout_s,
         "repeats": args.repeats, "parallel": args.parallel, "run_id": run_id,
         "prompt_sha256": resolved["prompt_sha256"], "loopback_profile": "lean" if args.serve else None,
@@ -378,13 +404,19 @@ def main(argv: list[str] | None = None) -> int:
     v2.add_argument("--server-rates", default="", help="input,cached_input,output in $/1M (Menhir server LLM).")
     v2.add_argument("--telemetry-db", default="", help="MENHIR_MCP_TELEMETRY_DB sqlite (when not using --serve).")
     v2.add_argument("--serve", default=None, metavar="MENHIR_TREE",
-                    help="serve this Menhir tree (staged.serve.served_menhir) over --graph's Neo4j.")
+                    help="serve this Menhir tree (staged.serve.served_menhir) over --graph's Neo4j; "
+                         "overrides --menhir-release (for unreleased branches).")
+    v2.add_argument("--menhir-release", default="latest", metavar="latest|vX.Y.Z",
+                    help="with --graph and no --serve/--menhir-mcp-url, serve this Menhir release from "
+                         "--menhir-repo (a cached worktree per tag; recorded as menhir_release).")
     v2.add_argument("--graph", default=None, help="build YAML naming the graph, e.g. builds/sprint-v2.yaml.")
     v2.add_argument("--serve-port", type=int, default=18096)
     v2.add_argument("--server-chat-model", default="gpt-6-luna",
                     help="OPENAI_CHAT_MODEL for the served Menhir; must match --server-rates.")
     v2.add_argument("--menhir-bin", default=os.environ.get("MENHIR_MAIN_BIN"))
-    v2.add_argument("--menhir-repo", default=None, help="Menhir tree for provenance when not using --serve.")
+    v2.add_argument("--menhir-repo", default=None,
+                    help="Menhir checkout: provenance when not serving, and where --menhir-release "
+                         f"tags are resolved (default {DEFAULT_MENHIR_REPO}).")
     args = parser.parse_args(argv)
 
     fixture = SprintFixture.from_file(args.fixture)

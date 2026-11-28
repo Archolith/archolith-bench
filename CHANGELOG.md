@@ -1,3 +1,11 @@
+## 2026-11-28 - Sprint v2: archolith-harness agent, sprint-v2.1 prompts, served Menhir releases, run comparison
+
+- `run_longitudinal_sprint_bench.py --agent archolith-harness` runs each session in the in-process harness (Responses API, Flex); `--harness-flex open|fallback` picks no session clock, or `--timeout-s` with a Standard resend. Rate-limit, quota and auth 429s halt the campaign; Flex capacity 429s are retried.
+- Prompt set `sprint-v2.1` (recorded as `prompt_set`; the rubric stays `sprint-v2`): the Menhir arm is told to save with `add_memory` wherever the notes arm is told to write notes, names only lean-profile tools (`blast_radius` / `affected_tests` are `query_structure` query types), and is told the structural index's project name.
+- With `--graph` and no `--serve` or `--menhir-mcp-url`, a live run serves `--menhir-release` (default `latest`, the highest `vX.Y.Z` tag of `--menhir-repo`): one worktree per tag under `~/.cache/archolith-bench/menhir-releases` (`ARCHOLITH_BENCH_RELEASE_CACHE`), installed with `uv sync --frozen`, recorded as `menhir_release` and in the run's resolved config, so a resume after a newer release is refused. `--serve <tree>` still serves an unreleased branch. Any served tree without the lean tool set is refused.
+- `scripts/compare_sprint_runs.py RUN RUN...` prints per-arm means and first names every identity key that differs (Menhir release and commit, prompt set, rubric, fixture, agent and model); `--strict` exits 3 when the Menhir builds differ.
+- `CHANGELOG-archive.md`: the oldest dated entry moved there (10-entry limit).
+
 ## 2026-11-21 - Streamlined harness: staged runs, build YAML and build CLI (PRs #59-#61, #63, #64)
 
 - Staged runs (`python -m archolith_bench.staged`): run dirs, YAML arms and `MenhirSystem` over Menhir's `BackendClient` (#59); the rejected V2-V5 value arms are gone (#60); prompt files are hashed into the run id, with rerun and compare (#61). `staged run --serve <menhir tree> --graph builds/<x>.yaml` replaces `recall_ab.sh`.
@@ -57,8 +65,3 @@
 - `--source-memories` renders the recall response's `source_memories` (raw episodes, oldest first) as one block after the memories and counted verdicts, outside `--recall-limit`, in Menhir's own `build_context` format without the pool tag. Off by default; off leaves the context and `prompt_fingerprint` unchanged, on adds `sm` to the checkpoint tag. A blocking event advisory still suppresses it; agentic recall keeps one block.
 - Why: Menhir sends these by default and its agent context shows them, but the bench dropped them. On o500 stable multi-session failures the rendered context held 68% of the evidence numbers (92% with source memories); temporal 57% (93%).
 - `tests/test_menhir_client_source_memories.py`.
-
-## 2026-10-25 - Menhir recall facts render their statement time
-
-- `archolith_bench/harness/menhir_client.py`: a fact line becomes `- <happened> | said <time> | <fact>` when Menhir sends `said_at` (Menhir `MENHIR_FRONTIER_FACT_SAID_TIME`, off by default); unchanged otherwise, so the answer prompt is the same for arms without it.
-- `tests/test_menhir_client_contract.py`: `test_recall_renders_said_time_only_when_menhir_sends_it`.
