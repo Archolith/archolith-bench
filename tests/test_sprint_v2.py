@@ -151,6 +151,14 @@ def test_repeats_get_separate_namespaces_and_chains() -> None:
     assert len(report["chains"]) == 6
 
 
+def test_namespace_does_not_resemble_the_checkout_dir() -> None:
+    # Run v2-20261127: Menhir-arm agents spliced the look-alike namespace into checkout paths.
+    fixture = SprintFixture.from_file(FIXTURE_PATH)
+    ns = chain_namespace(fixture, "menhir_longitudinal", 2, "v2-20261127")
+    assert ns.startswith("sv2-") and len(ns) == 14
+    assert fixture.name not in ns and "menhir" not in ns and "-r2" not in ns
+
+
 def _executor(tmp_path: Path, monkeypatch, *, stream_fn, post_fn=None, **cfg):
     monkeypatch.setattr(
         "archolith_bench.beacon_eval.isolation.default_data_source", lambda: tmp_path / "empty_opencode_data"
