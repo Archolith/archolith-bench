@@ -47,6 +47,7 @@ from archolith_bench.engineering_evidence.sprint import (  # noqa: E402
 )
 from archolith_bench.engineering_evidence.sprint_rubric import RUBRIC_VERSION  # noqa: E402
 from archolith_bench.staged.rundir import RunConfigMismatch  # noqa: E402
+from archolith_bench.staged.serve import graph_settings  # noqa: E402
 
 DEFAULT_FIXTURE = REPO_ROOT / "fixtures" / "sprint_simonw_llm_764dc386.json"
 
@@ -192,6 +193,11 @@ def _run_v2(args: argparse.Namespace, fixture: SprintFixture) -> int:
         "repeats": args.repeats, "parallel": args.parallel, "run_id": run_id,
         "prompt_sha256": resolved["prompt_sha256"], "loopback_profile": "lean" if args.serve else None,
         "server_chat_model": args.server_chat_model if args.serve else None,
+        # OpenCode's serviceTier (beacon_eval.isolation.SERVICE_TIER_ENV); its step cost is still
+        # priced at the Standard catalog rate, so under flex client_cost_usd overstates the bill.
+        "client_service_tier": os.environ.get("BEACON_EVAL_SERVICE_TIER", "").strip() or "default",
+        "server_service_tier": graph_settings(args.graph, dict(os.environ))["service_tier"]
+        if args.serve and args.graph else None,
         "server_benchmark_mode": False if args.serve else None,
         "server_rates_per_1m": None if rates is None else [rates.input, rates.cached_input, rates.output],
     }
