@@ -6,6 +6,8 @@ from dataclasses import dataclass
 
 from archolith_maintenance.token_accounting import count_text_tokens
 
+from archolith_bench.core.pricing import FLEX_RATES_PER_1M, RATES_PER_1M, ModelRates
+
 
 def estimate_tokens(text: str | None) -> int:
     """Estimate content token count from text using cl100k_base when available."""
@@ -59,77 +61,76 @@ class PricingModel:
     comment: str = ""
 
 
+_HELPER = RATES_PER_1M["gpt-4.1-mini"]
+_FLEX_LUNA = FLEX_RATES_PER_1M["gpt-6-luna"]
+
+
+def _pricing(
+    provider: str,
+    rates: ModelRates,
+    *,
+    comment: str,
+    helper: bool = False,
+    cache_write: bool = False,
+) -> PricingModel:
+    return PricingModel(
+        provider=provider,
+        input_full=rates.input,
+        input_cache_hit=rates.cached_input,
+        input_cache_miss=rates.input,
+        output=rates.output,
+        helper_input=_HELPER.input if helper else 0.0,
+        helper_output=_HELPER.output if helper else 0.0,
+        helper_cache_hit=_HELPER.cached_input if helper else 0.0,
+        input_cache_write=rates.cache_write if cache_write else None,
+        comment=comment,
+    )
+
+
 PRICING_DEFAULTS: dict[str, PricingModel] = {
-    "deepseek-v4-flash": PricingModel(
-        provider="deepseek-v4-flash",
-        input_full=0.14,
-        input_cache_hit=0.0028,
-        input_cache_miss=0.14,
-        output=0.28,
-        helper_input=0.40,
-        helper_output=1.60,
-        helper_cache_hit=0.10,
+    "deepseek-v4-flash": _pricing(
+        "deepseek-v4-flash",
+        RATES_PER_1M["deepseek-v4-flash"],
+        helper=True,
         comment="api-docs.deepseek.com/quick_start/pricing (2026-06-13). "
                 "Helper = gpt-4.1-mini ($0.40/$1.60, cached $0.10).",
     ),
-    "deepseek-v4-pro": PricingModel(
-        provider="deepseek-v4-pro",
-        input_full=0.435,
-        input_cache_hit=0.003625,
-        input_cache_miss=0.435,
-        output=0.87,
-        helper_input=0.40,
-        helper_output=1.60,
-        helper_cache_hit=0.10,
+    "deepseek-v4-pro": _pricing(
+        "deepseek-v4-pro",
+        RATES_PER_1M["deepseek-v4-pro"],
+        helper=True,
         comment="api-docs.deepseek.com/quick_start/pricing (2026-06-13). "
                 "Helper = gpt-4.1-mini ($0.40/$1.60, cached $0.10).",
     ),
-    "opus-4-8": PricingModel(
-        provider="opus-4-8",
-        input_full=5.00,
-        input_cache_hit=0.50,
-        input_cache_miss=5.00,
-        output=25.00,
-        input_cache_write=6.25,
-        helper_input=0.40,
-        helper_output=1.60,
-        helper_cache_hit=0.10,
+    "opus-4-8": _pricing(
+        "opus-4-8",
+        RATES_PER_1M["claude-opus-4-8"],
+        helper=True,
+        cache_write=True,
         comment="claude-opus-4-8 (Anthropic API skill, 2026-06): $5/$25, "
                 "cache read $0.50, cache write 5m $6.25. Helper = gpt-4.1-mini.",
     ),
-    "openai": PricingModel(
-        provider="openai",
-        input_full=2.50,
-        input_cache_hit=1.25,
-        input_cache_miss=2.50,
-        output=10.00,
+    "openai": _pricing(
+        "openai",
+        RATES_PER_1M["gpt-4o"],
         comment="Rates as of 2026-06: gpt-4o",
     ),
     # 2026-10-18: official gpt-6-luna rates. input_cache_write stays None on purpose:
     # compute_turn_cost would price the whole miss bucket at it (Anthropic semantics).
-    "gpt-6-luna": PricingModel(
-        provider="gpt-6-luna",
-        input_full=0.10,
-        input_cache_hit=0.01,
-        input_cache_miss=0.10,
-        output=0.50,
+    "gpt-6-luna": _pricing(
+        "gpt-6-luna",
+        RATES_PER_1M["gpt-6-luna"],
         comment="OpenAI gpt-6-luna Standard, short context (2026-10-18).",
     ),
-    "gpt-6-luna-flex": PricingModel(
-        provider="gpt-6-luna-flex",
-        input_full=0.05,
-        input_cache_hit=0.005,
-        input_cache_miss=0.05,
-        output=0.25,
+    "gpt-6-luna-flex": _pricing(
+        "gpt-6-luna-flex",
+        _FLEX_LUNA,
         comment="OpenAI gpt-6-luna Flex = 50% of Standard (2026-10-18).",
     ),
-    "anthropic": PricingModel(
-        provider="anthropic",
-        input_full=3.00,
-        input_cache_hit=0.30,
-        input_cache_miss=3.00,
-        output=15.00,
-        input_cache_write=3.75,
+    "anthropic": _pricing(
+        "anthropic",
+        RATES_PER_1M["claude-sonnet-4-20250514"],
+        cache_write=True,
         comment="Rates as of 2026-06: claude-sonnet-4-20250514",
     ),
 }

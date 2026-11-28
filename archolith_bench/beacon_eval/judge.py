@@ -27,10 +27,15 @@ from typing import Any
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
+from archolith_bench.core.pricing import RATES_PER_1M
+
 DEFAULT_JUDGE_MODEL = "gpt-6-luna"  # owner decision 2026-09-24
 #: Dollars per million (input, output) tokens (OpenCode's models.dev catalog, 2026-09-24);
 #: a model without a price cannot keep the cap. Luna's reasoning tokens bill as output.
-PRICES_PER_M = {"gpt-6-luna": (0.10, 0.50), "gpt-4o-mini": (0.15, 0.60)}
+PRICES_PER_M = {
+    model: (RATES_PER_1M[model].input, RATES_PER_1M[model].output)
+    for model in ("gpt-6-luna", "gpt-4o-mini")
+}
 #: Reasoning models reject a temperature; only these get temperature 0.
 TEMPERATURE_MODELS = frozenset({"gpt-4o-mini"})
 #: Dollars set aside for the next call when checking the cap.

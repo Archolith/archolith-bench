@@ -20,6 +20,8 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from archolith_bench.core.pricing import RATES_PER_1M
+
 # --- Corpus: conversation episodes with gold entities + gold facts (substring-scored). ---
 CORPUS: list[dict] = [
     {
@@ -63,51 +65,44 @@ _EDGE_SCHEMA = {"type": "object", "properties": {"edges": {"type": "array", "ite
 # (cache_hit_in, cache_miss_in, output) USD per 1M tokens. Matched by substring on model.
 # Cached-input rates are what make a repetitive-prefix workload (system prompt + schema)
 # cheap; where a provider has no separate cache rate, cache_hit == cache_miss.
+_PRICING_KEYS = (
+    "gpt-5.2-pro",
+    "gpt-5.2",
+    "gpt-5.1",
+    "gpt-5-nano",
+    "gpt-5-mini",
+    "gpt-5-pro",
+    "gpt-5",
+    "gpt-4.1-nano",
+    "gpt-4.1-mini",
+    "gpt-4.1",
+    "gpt-4o-mini",
+    "gpt-4o",
+    "deepseek-v4-flash",
+    "deepseek-v4-pro",
+    "gemini-3.1-flash-lite",
+    "gemini-3.5-flash",
+    "gemini-2.5-flash-lite",
+    "gemini-2.5-flash",
+    "llama-3.1-8b",
+    "llama-3.3-70b",
+    "gpt-oss-20b",
+    "gpt-oss-120b",
+    "cerebras/gpt-oss-120b",
+    "cerebras/zai-glm-4.7",
+    "cerebras/qwen-3-32b",
+    "cerebras/llama-3.3-70b",
+    "cerebras/llama3.1-8b",
+    "openrouter/gpt-oss-120b",
+    "openrouter/gpt-oss-20b",
+    "openrouter/llama-3.3-70b-instruct",
+    "openrouter/llama-3.2-3b-instruct",
+    "openrouter/qwen3-next-80b",
+    "openrouter/gemma-4-31b",
+)
 PRICING: dict[str, tuple[float, float, float]] = {
-    # OpenAI (June 2026 published rates: cache-hit / input / output per 1M)
-    "gpt-5.2-pro": (21.00, 21.00, 168.00),
-    "gpt-5.2": (0.175, 1.75, 14.00),
-    "gpt-5.1": (0.125, 1.25, 10.00),
-    "gpt-5-nano": (0.005, 0.05, 0.40),
-    "gpt-5-mini": (0.025, 0.25, 2.00),
-    "gpt-5-pro": (15.00, 15.00, 120.00),
-    "gpt-5": (0.125, 1.25, 10.00),
-    "gpt-4.1-nano": (0.025, 0.10, 0.40),
-    "gpt-4.1-mini": (0.10, 0.40, 1.60),
-    "gpt-4.1": (0.50, 2.00, 8.00),
-    "gpt-4o-mini": (0.075, 0.15, 0.60),
-    "gpt-4o": (1.25, 2.50, 10.00),
-    # DeepSeek (api-docs.deepseek.com/quick_start/pricing)
-    "deepseek-v4-flash": (0.0028, 0.14, 0.28),
-    "deepseek-v4-pro": (0.003625, 0.435, 0.87),
-    # Google (cloud.google.com/.../generative-ai/pricing) -- Global standard tier
-    "gemini-3.1-flash-lite": (0.025, 0.25, 1.50),   # 3.x is pricier than 2.5: output $1.50 (3.75x nano)
-    "gemini-3.5-flash": (0.15, 1.50, 9.00),
-    "gemini-2.5-flash-lite": (0.01, 0.10, 0.40),
-    "gemini-2.5-flash": (0.03, 0.30, 2.50),
-    # Groq (groq.com/pricing) -- cache hit is 50% off input
-    "llama-3.1-8b": (0.025, 0.05, 0.08),
-    "llama-3.3-70b": (0.295, 0.59, 0.79),
-    "gpt-oss-20b": (0.0375, 0.075, 0.30),
-    "gpt-oss-120b": (0.075, 0.15, 0.60),
-    # Cerebras (cerebras.ai/pricing) -- no separate cache rate, so hit == input.
-    # Provider-scoped ("cerebras/") because Cerebras charges more than Groq for the same
-    # open weights (e.g. gpt-oss-120b: $0.35/$0.75 vs Groq $0.15/$0.60). Free tier = $0,
-    # but the list-price estimate is what the $/1k column reports.
-    "cerebras/gpt-oss-120b": (0.35, 0.35, 0.75),
-    "cerebras/zai-glm-4.7": (1.20, 1.20, 1.20),  # preview; provisional flat estimate
-    "cerebras/qwen-3-32b": (0.40, 0.40, 0.80),
-    "cerebras/llama-3.3-70b": (0.85, 0.85, 1.20),
-    "cerebras/llama3.1-8b": (0.10, 0.10, 0.10),
-    # OpenRouter (openrouter.ai/api/v1) -- paid routes, from the live model catalog.
-    # No separate cache rate (hit == input). Provider-scoped to avoid colliding with the
-    # Groq open-weight entries of the same name (OpenRouter routes elsewhere at other prices).
-    "openrouter/gpt-oss-120b": (0.03, 0.03, 0.15),
-    "openrouter/gpt-oss-20b": (0.029, 0.029, 0.14),
-    "openrouter/llama-3.3-70b-instruct": (0.10, 0.10, 0.32),
-    "openrouter/llama-3.2-3b-instruct": (0.051, 0.051, 0.335),
-    "openrouter/qwen3-next-80b": (0.09, 0.09, 1.10),
-    "openrouter/gemma-4-31b": (0.12, 0.12, 0.35),
+    k: (RATES_PER_1M[k].cached_input, RATES_PER_1M[k].input, RATES_PER_1M[k].output)
+    for k in _PRICING_KEYS
 }
 
 
