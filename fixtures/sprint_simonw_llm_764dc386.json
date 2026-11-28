@@ -13,6 +13,7 @@
       "phase": "investigate",
       "prompt": "Session 1 (Discovery): You are about to add a new reasoning-capable OpenAI model in the default OpenAI plugin. Which OpenAI API endpoint does the project currently use by default for reasoning-capable OpenAI models, what did it replace, how can a user fall back to the older path for a single prompt, and what happened to the older model classes? Name the docs and source files that establish this decision.",
       "memory_instruction": "Before finishing, store the key OpenAI Responses-API routing invariant with `add_memory` (citing `llm/default_plugins/openai_models.py` and `docs/changelog.md`) and record a follow-up `add_todo` for adding tests in `tests/test_openai_responses.py`.",
+      "notes_instruction": "Before finishing, record the key OpenAI Responses-API routing invariant (citing `llm/default_plugins/openai_models.py` and `docs/changelog.md`) and a follow-up TODO for adding tests in `tests/test_openai_responses.py` in `SPRINT_NOTES.md`.",
       "gold": {
         "docs": [
           "docs/changelog.md",
@@ -58,6 +59,7 @@
       "phase": "impact_plan",
       "prompt": "Session 2 (Impact & Test Plan): In a fresh session, plan registering a new reasoning-capable OpenAI model in `llm/default_plugins/openai_models.py` without breaking existing plugins that import `Chat` or `AsyncChat`. Identify the impacted files, exact test command to verify the Responses path, and the fallback option guardrail.",
       "memory_instruction": "Start by calling `recall_memories`, `list_todos`, and `blast_radius` / `affected_tests` on `llm/default_plugins/openai_models.py` rather than re-reading changelog/docs from scratch.",
+      "notes_instruction": "Start by reading `SPRINT_NOTES.md` rather than re-reading changelog/docs from scratch, then add what you learn about `llm/default_plugins/openai_models.py` to it.",
       "gold": {
         "docs": [
           "docs/openai-models.md"
@@ -107,6 +109,7 @@
       "phase": "drift_check",
       "prompt": "Session 3 (Drift Check): Before editing `llm/default_plugins/openai_models.py`, verify whether the `chat_completions` fallback option and Responses routing note in `llm/default_plugins/openai_models.py` are still current or have drifted since Session 1. Report your verdict (`current` or `drifted`) and cite the exact file.",
       "memory_instruction": "Check `recall_memories` for any `stale_anchor` advisory on `llm/default_plugins/openai_models.py`, inspect the current file to verify, and update/supersede the memory if it drifted.",
+      "notes_instruction": "Read `SPRINT_NOTES.md` for any note about `llm/default_plugins/openai_models.py`, inspect the current file to verify, and update the note in `SPRINT_NOTES.md` if it drifted.",
       "drift_patch": {
         "path": "llm/default_plugins/openai_models.py",
         "find": "# GPT-5.5 — routes through the Responses API by default; pass",
@@ -145,6 +148,7 @@
       "phase": "followup",
       "prompt": "Session 4 (Release Follow-Up): Now prepare the version bump commit for release `0.37` (from `0.36`) after the OpenAI model work. Name the contributing doc, the files touched by the version bump, the commands to regenerate derived docs and run tests/lint, and the `cog --check` guardrail.",
       "memory_instruction": "Recall prior session memories/TODOs and check `docs/contributing.md` to assemble the release plan cleanly with minimal redundant reads.",
+      "notes_instruction": "Read the prior session notes and TODOs in `SPRINT_NOTES.md` and check `docs/contributing.md` to assemble the release plan cleanly with minimal redundant reads.",
       "gold": {
         "docs": [
           "docs/contributing.md"
@@ -198,6 +202,7 @@
       "phase": "comprehension",
       "prompt": "Session 5 (Comprehension Check): In a fresh session, summarize the architectural picture from Sessions 1-4 in as few tool calls as possible without re-reading the codebase from scratch: (1) why `Chat` and `AsyncChat` must remain unchanged, (2) what changed in `llm/default_plugins/openai_models.py` during Session 3 and what the supported fallback option is, (3) which 3 test files are structurally impacted by `llm/default_plugins/openai_models.py`, and (4) what open TODO remains for Responses/fallback test coverage.",
       "memory_instruction": "Answer primarily from `recall_memories`, `list_todos`, and `query_structure` (aim for <=3 tool calls total).",
+      "notes_instruction": "Answer primarily from `SPRINT_NOTES.md` (aim for <=3 tool calls total).",
       "gold": {
         "docs": [],
         "files": [

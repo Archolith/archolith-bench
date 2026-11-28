@@ -860,6 +860,8 @@ class EventLog:
     output_tokens: int = 0
     cache_read_tokens: int = 0
     cache_write_tokens: int = 0
+    #: Reasoning tokens, already included in ``output_tokens`` (kept for a split view).
+    reasoning_tokens: int = 0
     reported_total_tokens: int = 0
     usage_events: int = 0
     cost_usd: float = 0.0
@@ -925,6 +927,7 @@ class EventLog:
         self.usage_events += 1
         self.input_tokens += int(tokens.get("input") or 0)
         self.output_tokens += int(tokens.get("output") or 0) + int(tokens.get("reasoning") or 0)
+        self.reasoning_tokens += int(tokens.get("reasoning") or 0)
         raw_cache = tokens.get("cache")
         cache: dict[str, Any] = raw_cache if isinstance(raw_cache, dict) else {}
         self.cache_read_tokens += int(cache.get("read") or 0)
