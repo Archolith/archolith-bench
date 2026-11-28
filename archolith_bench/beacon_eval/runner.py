@@ -51,6 +51,7 @@ from archolith_bench.beacon_eval import CONDITIONS, DEFAULT_CONDITIONS
 from archolith_bench.beacon_eval.mcp_servers import beacon_remote_server, beacon_server
 from archolith_bench.beacon_eval.models import ANSWER_KEYS, RepoPin, RunResult, Task
 from archolith_bench.beacon_eval.scoring import extract_answer, score
+from archolith_bench.core.budget import DEFAULT_RUN_RESERVE, Budget, BudgetExhausted
 from archolith_bench.core.opencode.isolation import (
     MEMORY_KEY_ENV,
     empty_cwd,
@@ -82,8 +83,6 @@ from archolith_bench.core.opencode.process import (
 )
 
 DEFAULT_BUDGET_TOKENS = 20_000_000
-#: Tokens set aside for each run; a run that passes it is killed and stops the matrix.
-DEFAULT_RUN_RESERVE = 400_000
 #: Owner decision 2026-09-25: no new run below 15 GB free on the workdir's volume.
 DEFAULT_MIN_FREE_GB = 15.0
 
@@ -109,10 +108,6 @@ ANSWER_INSTRUCTIONS = (
     '(ordered steps), "citations" (a list of {"path", "line_start", "line_end"} backing '
     "your claims)."
 )
-
-class BudgetExhausted(RuntimeError):
-    """The next run's reserve would not fit under the cap, or a run passed its reserve."""
-
 
 class AccountingError(RuntimeError):
     """A run reported no token usage, so the budget can no longer be trusted."""
@@ -326,36 +321,6 @@ def check_disk(workdir: Path, min_free_gb: float | None) -> None:
     free = shutil.disk_usage(workdir).free / 1e9
     if free < min_free_gb:
         raise LowDisk(f"only {free:.1f} GB free on the workdir's volume (floor {min_free_gb:g} GB)")
-
-
-@dataclass
-class Budget:
-    cap: int | None
-    reserve: int | None = DEFAULT_RUN_RESERVE
-    used: int = 0
-    cap_usd: float | None = None
-    reserve_usd: float = 0.0
-    used_usd: float = 0.0
-    #: Runs admitted but not finished; each still holds its reserve (parallel matrix).
-    in_flight: int = 0
-
-    def check(self) -> None:
-        held = self.in_flight + 1
-        flying = f", {self.in_flight} run(s) in flight" if self.in_flight else ""
-        if self.cap is not None and self.used + (self.reserve or 0) * held > self.cap:
-            raise BudgetExhausted(
-                f"the next run's {self.reserve:,}-token reserve would exceed the "
-                f"{self.cap:,}-token cap ({self.used:,} used{flying})"
-            )
-        if self.cap_usd is not None and self.used_usd + self.reserve_usd * held > self.cap_usd:
-            raise BudgetExhausted(
-                f"the next run's ${self.reserve_usd:.2f} reserve would exceed the "
-                f"${self.cap_usd:.2f} cap (${self.used_usd:.4f} spent{flying})"
-            )
-
-    def spend(self, tokens: int, usd: float = 0.0) -> None:
-        self.used += tokens
-        self.used_usd += usd
 
 
 # ---------------------------------------------------------------------------
@@ -1447,8 +1412,6 @@ __all__ = [
     "ANSWER_INSTRUCTIONS",
     "ANSWER_KEYS",
     "AccountingError",
-    "Budget",
-    "BudgetExhausted",
     "LowDisk",
     "RunnerConfig",
     "SERVER_LOG",

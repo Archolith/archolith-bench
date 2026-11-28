@@ -24,13 +24,13 @@ DEFAULT_MENHIR_REPO = os.environ.get("MENHIR_REPO") or str(REPO_ROOT.parent / "m
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from archolith_bench.beacon_eval.runner import DEFAULT_RUN_RESERVE  # noqa: E402
+from archolith_bench.core.budget import DEFAULT_RUN_RESERVE  # noqa: E402
 from archolith_bench.core.opencode.process import DEFAULT_MODEL  # noqa: E402
 from archolith_bench.engineering_evidence.live_executor import (  # noqa: E402
     LiveSprintConfig,
     OpenCodeSprintExecutor,
 )
-from archolith_bench.beacon_eval.runner import Budget  # noqa: E402
+from archolith_bench.core.budget import Budget  # noqa: E402
 from archolith_bench.engineering_evidence.campaign import (  # noqa: E402
     Campaign,
     ProgressFeed,

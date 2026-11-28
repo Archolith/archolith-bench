@@ -1,5 +1,13 @@
 # archolith-bench Changelog
 
+## 2026-11-28 - Run budget moves to `core/budget.py` (reorg step 2f)
+
+`Budget`, `BudgetExhausted` and `DEFAULT_RUN_RESERVE` move verbatim from
+`beacon_eval/runner.py` to `archolith_bench/core/budget.py`; beacon_eval, engineering_evidence,
+`scripts/run_longitudinal_sprint_bench.py` and `tests/test_sprint_v2.py` import them from there.
+No behaviour change. The other cost guards (`ci/budget_proxy`, `run_flex(max_usd)`, the judge
+cap) are not merged into it yet.
+
 ## 2026-11-28 - Generic OpenCode process and isolation code in `core/opencode/` (reorg step 2e)
 
 `beacon_eval/isolation.py` moved to `core/opencode/isolation.py`; its two Beacon MCP blocks

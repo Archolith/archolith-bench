@@ -2,7 +2,7 @@
 
 Reuses the bench's existing pieces rather than a second implementation:
 
-* ``beacon_eval.runner.Budget`` / ``BudgetExhausted`` and ``core.opencode.process.RateLimited``: one budget shared by
+* ``core.budget.Budget`` / ``BudgetExhausted`` and ``core.opencode.process.RateLimited``: one budget shared by
   every chain, checked before each session (``check`` holds a reserve per session in flight).
   Menhir's server-side spend is added with ``Budget.spend(0, usd)``.
 * ``core.opencode.process._cancel_scope`` / ``_kill_live_children``: the interrupt handling of
@@ -25,7 +25,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-from archolith_bench.beacon_eval.runner import Budget, BudgetExhausted
+from archolith_bench.core.budget import Budget, BudgetExhausted
 from archolith_bench.core.opencode.process import (
     DRAIN_TIMEOUT_S,
     RateLimited,
