@@ -112,6 +112,15 @@ def _git_state(root: str | None) -> str | None:
     return _menhir_commit(root)
 
 
+def _agent_version(agent: str) -> str | None:
+    """The harness's git state (an editable install); OpenCode's version is in its own logs."""
+    if agent != "archolith-harness":
+        return None
+    import archolith_harness
+
+    return _git_state(str(Path(archolith_harness.__file__).resolve().parents[2]))
+
+
 def sprint_serve_overrides(chat_model: str) -> dict[str, str]:
     """Write-path env for the sprint's served Menhir (served_menhir defaults to recall-only).
 
@@ -177,6 +186,9 @@ def _run_v2(args: argparse.Namespace, fixture: SprintFixture) -> int:
         "reserve_tokens": args.reserve_tokens, "timeout_s": args.timeout_s,
         "prompt_sha256": prompt_hash(manifest), "dry_run": not live,
     }
+    if args.agent != "opencode":
+        # A resume never mixes agents in one run dir; OpenCode dirs predate the key and still resume.
+        resolved["agent"] = args.agent
     try:
         rd = prepare_run_dir(Path(args.out_root), f"{fixture.name}-{run_id}", resolved, resume=args.resume)
     except (RunDirInUse, RunConfigMismatch) as exc:
@@ -196,7 +208,11 @@ def _run_v2(args: argparse.Namespace, fixture: SprintFixture) -> int:
         # OpenCode's serviceTier (beacon_eval.isolation.SERVICE_TIER_ENV); its step cost is still
         # priced at the Standard catalog rate, so under flex client_cost_usd overstates the bill.
         "cache_shaping": args.cache_shaping,
-        "client_service_tier": os.environ.get("BEACON_EVAL_SERVICE_TIER", "").strip() or "default",
+        "agent": args.agent, "agent_version": _agent_version(args.agent),
+        # archolith-harness requires the Flex tier on every call (cth_flex require_tier) and
+        # prices it at Flex rates; only OpenCode's tier comes from the environment.
+        "client_service_tier": "flex" if args.agent == "archolith-harness"
+        else os.environ.get("BEACON_EVAL_SERVICE_TIER", "").strip() or "default",
         "server_service_tier": graph_settings(args.graph, dict(os.environ))["service_tier"]
         if args.serve and args.graph else None,
         "server_benchmark_mode": False if args.serve else None,
@@ -229,7 +245,12 @@ def _run_v2(args: argparse.Namespace, fixture: SprintFixture) -> int:
                 )
                 mcp_url, telemetry_db = f"{url}/mcp-http", rd.path / "mcp_telemetry.db"
             work = Path(args.work_dir) / f"{fixture.repo.name}-{run_id}"
-            executor = OpenCodeSprintExecutor(
+            executor_cls = OpenCodeSprintExecutor
+            if args.agent == "archolith-harness":
+                from archolith_bench.engineering_evidence.harness_executor import HarnessSprintExecutor
+
+                executor_cls = HarnessSprintExecutor
+            executor = executor_cls(
                 LiveSprintConfig(
                     work_dir=work, cache_dir=Path(args.cache_dir), model=args.model,
                     menhir_mcp_url=mcp_url, env_file=env_path, reserve_tokens=args.reserve_tokens,
@@ -338,6 +359,8 @@ def main(argv: list[str] | None = None) -> int:
     v2.add_argument("--max-usd", type=float, default=None, help="Shared dollar cap (client + server).")
     v2.add_argument("--cache-shaping", action="store_true",
                     help="Shared per-arm prompt_cache_key and arm-wide prompt text first (cache reuse).")
+    v2.add_argument("--agent", choices=("opencode", "archolith-harness"), default="opencode",
+                    help="Agent that runs each session (results are never pooled across agents).")
     v2.add_argument("--est-usd-per-session", type=float, default=None,
                     help="Expected client+server USD per session (required for --live; from a prior run).")
     v2.add_argument("--reserve-usd", type=float, default=0.05,
