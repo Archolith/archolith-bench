@@ -24,7 +24,7 @@ Pre:  dummy up (clone of the live graph) on $R1_DUMMY_BOLT. NOTE: the referenced
       provisioning script was never committed, so the clone must be re-created by
       hand; re-mine gold after moving it.
       gold mined:  python scripts/mine_r1_gold.py
-Run:  python scripts/run_r1_dummy.py [fixtures/r1_dummy_gold.json] [--k 5] [--candidate-k 50]
+Run:  python scripts/run_r1_dummy.py [fixtures/local/r1_dummy_gold.json] [--k 5] [--candidate-k 50]
 """
 
 from __future__ import annotations
@@ -215,7 +215,7 @@ def _print_table(artifact: dict) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run the R1 ladder against the dummy graph (read mode).")
-    parser.add_argument("fixture", nargs="?", default=str(REPO_ROOT / "fixtures" / "r1_dummy_gold.json"))
+    parser.add_argument("fixture", nargs="?", default=str(REPO_ROOT / "fixtures" / "local" / "r1_dummy_gold.json"))
     parser.add_argument("--k", type=int, default=5)
     parser.add_argument("--candidate-k", type=int, default=50)
     parser.add_argument("--out", default="results/r1_dummy_run.json")

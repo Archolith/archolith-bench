@@ -193,7 +193,7 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
         )
     anchors_path = ROOT / "corpora" / "menhir_recall_anchors.json"
     negatives_path = ROOT / "corpora" / "menhir_recall_negatives.json"
-    guards_path = ROOT / "fixtures" / "r1_dummy_gold.json"
+    guards_path = ROOT / "fixtures" / "local" / "r1_dummy_gold.json"
     anchors = _read_json(anchors_path)["cases"]
     negatives = _read_json(negatives_path)["cases"]
     guard_candidates = [

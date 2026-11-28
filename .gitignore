@@ -18,6 +18,9 @@
 !/results/lme-ku-buildout/*/
 !/results/lme-ku-buildout/*/score.json
 fixtures/local/
+# Mined from the production graph: never commit, wherever the miner writes it.
+r1_dummy_gold*.json
+r1_prod*.json
 __pycache__/
 .pytest_cache/
 .pytest-tmp/

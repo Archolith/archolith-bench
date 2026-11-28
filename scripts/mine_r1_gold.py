@@ -53,7 +53,7 @@ READ-ONLY graph access. Opens one driver against the dummy and only runs MATCH .
 Never writes, never touches prod (prod is a different bolt host in menhir/.env). With
 --paraphrase it additionally makes N one-shot LLM calls (gpt-4.1-nano) to author questions.
 
-Run:  python scripts/mine_r1_gold.py [--out fixtures/r1_dummy_gold.json]
+Run:  python scripts/mine_r1_gold.py [--out fixtures/local/r1_dummy_gold.json]
                                      [--symbols 40] [--exact 30] [--scope 25] [--paraphrase 40]
 """
 
@@ -311,7 +311,7 @@ def mine(session, n_symbols: int, n_exact: int, n_scope: int, n_paraphrase: int 
 
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description="Mine an R1 gold answer set from the dummy graph.")
-    p.add_argument("--out", default="fixtures/r1_dummy_gold.json")
+    p.add_argument("--out", default="fixtures/local/r1_dummy_gold.json")
     p.add_argument("--symbols", type=int, default=40)
     p.add_argument("--exact", type=int, default=30)
     p.add_argument("--scope", type=int, default=25)
