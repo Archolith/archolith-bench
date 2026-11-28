@@ -386,7 +386,7 @@ class ScalarTaskReader:
             # allow-list only covered the call sites someone had grepped for.
             # An injected driver is the caller's own (tests, or a driver already
             # built behind ScalarBoltReader, which guards separately).
-            from archolith_bench.harness.scalar_bolt import assert_not_prod
+            from archolith_bench.core.targets import assert_not_prod
             assert_not_prod(neo4j_uri)
             try:
                 from neo4j import GraphDatabase

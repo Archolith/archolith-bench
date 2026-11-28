@@ -37,7 +37,7 @@ import sys
 from pathlib import Path
 from time import perf_counter
 
-from archolith_bench.harness.scalar_bolt import assert_not_prod
+from archolith_bench.core.targets import assert_not_prod
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 MENHIR_FRONTIER_SRC = Path(r"C:\Users\thron\IdeaProjects\projects\archolith\menhir-frontier") / "src"

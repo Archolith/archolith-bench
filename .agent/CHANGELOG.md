@@ -1,5 +1,14 @@
 # archolith-bench Changelog
 
+## 2026-11-28 - Production-target guard moves to `core/targets.py` (reorg step 2a)
+
+`harness/targets.py`, `harness.scalar_bolt.assert_not_prod` (with `ProdBoltRefused`,
+`PROD_BOLT_PORT`) and `harness.memory_ab.assert_not_production` now live verbatim in
+`archolith_bench/core/targets.py`; every caller in the package, scripts and tests
+imports from there and `harness` no longer re-exports them. Behavior is unchanged.
+Two import-boundary couplings went away (`scalar_viewer` and `suites/menhir.py` no
+longer import the LongMemEval harness), leaving 12.
+
 ## 2026-11-28 - Import-boundary report test for the package reorg (migration step 1)
 
 Added `tests/test_import_boundaries.py`, a report-mode guard that parses every

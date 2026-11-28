@@ -27,7 +27,7 @@ from archolith_bench.harness.menhir_scalar_state import (
     fixture_hash,
     _value_matches,
 )
-from archolith_bench.harness.scalar_bolt import ProdBoltRefused, assert_not_prod
+from archolith_bench.core.targets import ProdBoltRefused, assert_not_prod
 
 
 # ---------------------------------------------------------------------------- fixtures

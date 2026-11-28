@@ -230,7 +230,7 @@ def test_assert_not_production_guards():
     production endpoint (https://memory.ctharvey.me) contains none of them and
     was permitted. Only loopback passes now.
     """
-    from archolith_bench.harness import assert_not_production
+    from archolith_bench.core.targets import assert_not_production
     assert_not_production("http://localhost:8098")  # the throwaway menhir port
     assert_not_production("http://127.0.0.1:8098")  # ok
     for bad in (
@@ -823,7 +823,7 @@ def test_generic_memory_harness_passes_resolved_key(monkeypatch, tmp_path):
             pass
 
     monkeypatch.setattr("archolith_bench.harness.HttpMenhirClient", FakeHttpMenhirClient)
-    monkeypatch.setattr("archolith_bench.harness.assert_not_production", lambda url: None)
+    monkeypatch.setattr("archolith_bench.core.targets.assert_not_production", lambda url: None)
     monkeypatch.setattr(cli_module, "send_chat", lambda *a, **kw: ("x", 1.0, {}))
 
     class MockABResult:

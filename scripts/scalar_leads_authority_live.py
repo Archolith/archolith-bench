@@ -29,9 +29,9 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
-from archolith_bench.harness.memory_ab import assert_not_production
+from archolith_bench.core.targets import assert_not_production
 from archolith_bench.harness.menhir_client import HttpMenhirClient
-from archolith_bench.harness.scalar_bolt import assert_not_prod
+from archolith_bench.core.targets import assert_not_prod
 
 
 @dataclass(frozen=True)

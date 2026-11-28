@@ -375,7 +375,7 @@ def _cli_run(monkeypatch, tmp_path, **overrides):
         return MockABResult()
 
     monkeypatch.setattr("archolith_bench.harness.HttpMenhirClient", FakeClient)
-    monkeypatch.setattr("archolith_bench.harness.assert_not_production", lambda url: None)
+    monkeypatch.setattr("archolith_bench.core.targets.assert_not_production", lambda url: None)
     monkeypatch.setattr("archolith_bench.harness.run_memory_ab", fake_run)
     monkeypatch.setattr("archolith_bench.harness.write_harness_evidence", lambda *a, **kw: None)
     monkeypatch.setattr("archolith_bench.harness.ab_result_to_dict", lambda *a, **kw: {})

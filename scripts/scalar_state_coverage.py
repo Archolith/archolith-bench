@@ -28,7 +28,7 @@ import sys
 from neo4j import GraphDatabase
 
 from archolith_bench.harness.menhir_scalar_state import SCALAR_FIXTURE_SETS, _value_matches
-from archolith_bench.harness.scalar_bolt import assert_not_prod
+from archolith_bench.core.targets import assert_not_prod
 
 STAGES = ("assertion_emitted", "subject_bound", "view_materialized", "fold_correct")
 

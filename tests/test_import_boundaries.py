@@ -30,7 +30,6 @@ ALLOWLIST: dict[tuple[str, str], str] = {
     ("context_proxy", "facet"): _REGISTRY,
     ("context_proxy", "intent"): _REGISTRY,
     ("context_proxy", "l4"): _REGISTRY,
-    ("context_proxy", "longmemeval"): _REGISTRY,
     ("context_proxy", "oracle"): _REGISTRY,
     ("context_proxy", "r1"): _REGISTRY,
     ("context_proxy", "r3"): _REGISTRY,
@@ -39,7 +38,6 @@ ALLOWLIST: dict[tuple[str, str], str] = {
     ("engineering_evidence", "longmemeval"): "campaign.py uses staged.rundir; step 2: core/rundir.py",
     ("intent", "oracle"): "intent reuses oracle's combiner, executor and scorer; step 2 (ir_metrics) + shared ranking core",
     ("longmemeval", "context_proxy"): "harness/base.py imports the arms.py registry; step 4: classify arms.py",
-    ("structured_state", "longmemeval"): "scalar_viewer.py uses harness.scalar_bolt.assert_not_prod; step 2: core/targets.py",
 }
 
 _TOP_DIRS = {p.name for p in PKG_ROOT.iterdir() if p.is_dir()}

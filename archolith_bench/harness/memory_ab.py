@@ -36,7 +36,7 @@ from .drill_down import (
     with_drill_down_instruction,
 )
 from .menhir_client import COUNTED_AUTHORITY_MAX, VERB_FACET_MAX, HttpMenhirClient
-from .targets import PROD_NAME_MARKERS, TargetRefused, assert_allowed_target
+from ..core.targets import PROD_NAME_MARKERS
 from .value_nodes import ValueGraph
 
 # Arms: a no-memory floor vs memory-recall arms.
@@ -276,23 +276,6 @@ class MemoryQAAdapter(Protocol):
     def question(self, item: dict) -> str:  ...
     def build_messages(self, memory_context: str, question: str) -> list[dict]: ...
     def score(self, item: dict, response_text: str) -> bool: ...
-
-
-def assert_not_production(target: str) -> None:
-    """Refuse a memory-benchmark target that is not an allow-listed throwaway.
-
-    Allow-list, not deny-list. The previous marker-based check failed open: when
-    production moved to a hostname containing none of `_PROD_MARKERS`, the real
-    instance was permitted. Only loopback passes now, plus hosts explicitly
-    opted in via ARCHOLITH_BENCH_ALLOW_HOSTS.
-
-    Still raises SystemExit so CLI callers keep exiting cleanly rather than
-    surfacing a traceback.
-    """
-    try:
-        assert_allowed_target(target, what="memory benchmark target")
-    except TargetRefused as e:
-        raise SystemExit(f"REFUSING: {e}") from e
 
 
 def _run_memory_arm(

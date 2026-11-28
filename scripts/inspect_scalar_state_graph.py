@@ -29,7 +29,7 @@ from neo4j import GraphDatabase
 _BENCH_ROOT = Path(__file__).resolve().parents[1]
 if str(_BENCH_ROOT) not in sys.path:
     sys.path.insert(0, str(_BENCH_ROOT))
-from archolith_bench.harness.scalar_bolt import assert_not_prod  # noqa: E402
+from archolith_bench.core.targets import assert_not_prod  # noqa: E402
 
 
 def _parse_args() -> argparse.Namespace:

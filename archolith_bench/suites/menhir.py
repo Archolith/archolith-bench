@@ -48,7 +48,7 @@ def run_bootstrap_hygiene(
     if menhir_url is None:
         return BootstrapHygieneRunner(fixture).run()
 
-    from ..harness.memory_ab import assert_not_production
+    from ..core.targets import assert_not_production
     from ..harness.menhir_client import HttpMenhirClient
 
     # Live probe against a real instance would read the operator's memories.
