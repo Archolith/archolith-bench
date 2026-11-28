@@ -71,7 +71,7 @@ trap cleanup EXIT
 # ---- FRESH ephemeral Neo4j (no named volume -> clean store every run; activation is fresh-only) ----
 docker rm -f "${SS_NEO4J_NAME}" >/dev/null 2>&1 || true
 log "creating FRESH throwaway Neo4j ${SS_NEO4J_NAME} (bolt ${SS_BOLT})..."
-docker run -d --name "${SS_NEO4J_NAME}" -p ${SS_BOLT}:7687 -p ${SS_HTTP}:7474 \
+docker run -d --name "${SS_NEO4J_NAME}" -p "127.0.0.1:${SS_BOLT}:7687" -p "127.0.0.1:${SS_HTTP}:7474" \
   -e NEO4J_AUTH=neo4j/${SS_NEO4J_PW} -e NEO4J_server_memory_heap_max__size=2G \
   ${SS_NEO4J_IMAGE} >/dev/null
 log "waiting for Neo4j HTTP (${SS_HTTP})..."
